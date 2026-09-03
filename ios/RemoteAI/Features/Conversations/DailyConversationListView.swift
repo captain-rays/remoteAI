@@ -12,6 +12,12 @@ public struct DailyConversationListView: View {
     public var body: some View {
         NavigationStack {
             List {
+                if let error = model.lastErrorMessage {
+                    Text(error)
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                        .accessibilityIdentifier("conversation-start-error")
+                }
                 if model.dailyConversations.isEmpty {
                     Text("No \(model.selectedProvider.displayName) chats yet.")
                         .foregroundStyle(.secondary)

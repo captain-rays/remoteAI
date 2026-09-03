@@ -158,30 +158,55 @@ public final class AppModel {
     // MARK: - Session creation
 
     public func startDailyConversation() async throws -> ConversationSummary {
-        try requireOnline()
-        let created = try await client.startConversation(
-            provider: selectedProvider, kind: .daily, cwd: nil
-        )
-        dailyConversations.insert(created, at: 0)
-        return created
+        do {
+            try requireOnline()
+            let created = try await client.startConversation(
+                provider: selectedProvider, kind: .daily, cwd: nil
+            )
+            dailyConversations.insert(created, at: 0)
+            return created
+        } catch {
+            lastErrorMessage = Self.userMessage(for: error)
+            throw error
+        }
     }
 
     public func startProjectConversation(
         in project: ProjectSummary
     ) async throws -> ConversationSummary {
-        try requireOnline()
-        guard project.provider == selectedProvider else { throw AgentClientError.providerMismatch }
-        let created = try await client.startConversation(
-            provider: selectedProvider, kind: .project, cwd: project.canonicalPath
-        )
-        if selectedProject?.id == project.id {
-            projectConversations.insert(created, at: 0)
+        do {
+            try requireOnline()
+            guard project.provider == selectedProvider else {
+                throw AgentClientError.providerMismatch
+            }
+            let created = try await client.startConversation(
+                provider: selectedProvider, kind: .project, cwd: project.canonicalPath
+            )
+            if selectedProject?.id == project.id {
+                projectConversations.insert(created, at: 0)
+            }
+            return created
+        } catch {
+            lastErrorMessage = Self.userMessage(for: error)
+            throw error
         }
-        return created
     }
 
     private func requireOnline() throws {
         guard isOnline else { throw AgentClientError.offline }
+    }
+
+    public static func userMessage(for error: Error) -> String {
+        switch error as? AgentClientError {
+        case .offline: return "Mac is offline."
+        case .notPaired: return "Pair with your Mac before starting a conversation."
+        case .providerMismatch: return "That conversation belongs to another provider."
+        case .notFound: return "The requested conversation was not found."
+        case .rejected: return "The Mac rejected this request."
+        case .invalidRequest: return "The request could not be sent."
+        case .transport: return "The Mac could not be reached."
+        case nil: return "The request failed."
+        }
     }
 
     // MARK: - Events
