@@ -1,8 +1,8 @@
 import XCTest
 
-/// NOT RUN on this Mac: XCUITest needs a simulator, which requires full Xcode.
-/// These are written against the mock agent's fixed fixtures so they are ready
-/// for the integration lane.
+/// Written against the mock agent's fixed fixtures, so they need no Rust agent.
+/// Run by `scripts/ios-check.sh` whenever full Xcode and a simulator are
+/// available.
 final class ProviderSeparationUITests: XCTestCase {
 
     private func launchApp() -> XCUIApplication {
