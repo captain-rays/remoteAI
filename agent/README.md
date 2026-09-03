@@ -12,3 +12,9 @@ Cloudflare account or domain and never stores tunnel credentials.
 
 File transfers are explicit user actions only. There are no file watchers,
 scheduled jobs, lifecycle-triggered transfers, or automatic synchronization.
+
+For a local simulator handoff, set `REMOTEAI_PAIRING_FILE` to a path inside an
+owner-only directory before starting the real Agent. The Agent writes the QR
+payload there with mode `0600` (and requires the parent directory to be private)
+and does not print the bearer pairing secret. Read it once to provision the
+simulator, then remove the file.

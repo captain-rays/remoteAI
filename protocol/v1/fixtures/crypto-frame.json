@@ -1,0 +1,10 @@
+{
+  "salt": "RemoteAI protocol v1",
+  "macToIosInfo": "mac->ios|mac-1|phone-1",
+  "iosToMacInfo": "ios->mac|mac-1|phone-1",
+  "noncePrefix": "494f533e",
+  "counter": 7,
+  "routingAad": "{\"deviceId\":\"phone-1\",\"conversationId\":\"codex-daily-1\"}",
+  "plaintext": "remoteai-frame-vector",
+  "ciphertextAndTag": "f17e8912f4aeba82438dddd54e2ca8978e52ec2fb534958fac45b4729db2d1af0c5196bd9b"
+}

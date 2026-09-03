@@ -122,6 +122,22 @@ impl PairingRegistry {
         }
     }
 
+    pub fn mac_id(&self) -> &str {
+        &self.mac_id
+    }
+
+    pub fn mac_public_key(&self) -> Vec<u8> {
+        self.mac_public_key.clone()
+    }
+
+    pub fn device_public_key(&self, device_id: &str) -> Result<Vec<u8>, PairingError> {
+        self.authenticate(device_id)?;
+        self.devices
+            .get(device_id)
+            .map(|device| device.public_key.clone())
+            .ok_or(PairingError::DeviceUnknown)
+    }
+
     pub fn revoke(&mut self, device_id: &str, now: DateTime<Utc>) -> Result<(), PairingError> {
         let device = self
             .devices

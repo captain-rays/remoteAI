@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Json, Path as AxumPath, Query, State};
-use axum::http::{Request, StatusCode};
+use axum::http::{HeaderMap, Request, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -13,21 +13,25 @@ use base64::Engine;
 use chrono::Utc;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use thiserror::Error;
 use tokio::sync::RwLock;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 use crate::adapters::ProviderAdapter;
 use crate::audit::AuditLog;
 use crate::catalog::build_catalog;
-use crate::crypto::{CryptoError, CryptoReceiver};
+use crate::crypto::{
+    CryptoBox, CryptoError, CryptoReceiver, derive_directional_keys, derive_shared_secret,
+};
 use crate::diagnostics::{Diagnostics, ProviderHealth};
 use crate::event_buffer::EventBuffer;
 use crate::files::FileService;
 use crate::pairing::{PairingError, PairingRegistry};
 use crate::protocol::{
-    ConversationKind, ConversationSummary, EnvelopeKind, ProviderId, RequestEnvelope,
-    validate_protocol_version,
+    ApprovalDecision, ConversationEvent, ConversationKind, ConversationSummary, EnvelopeKind,
+    ProviderId, RequestEnvelope, validate_protocol_version,
 };
 use crate::transfers::{ConflictPolicy, TransferError, TransferManager};
 
@@ -45,6 +49,23 @@ pub struct GatewayState {
     pub provider_adapters: Arc<RwLock<Vec<Arc<dyn ProviderAdapter>>>>,
     pub audit: AuditLog,
     pub diagnostics: Arc<Diagnostics>,
+    mac_private_key: Arc<RwLock<Option<Zeroizing<[u8; 32]>>>>,
+}
+
+#[derive(Clone)]
+pub struct GatewaySessionKeys {
+    pub inbound: CryptoBox,
+    pub outbound: CryptoBox,
+}
+
+#[derive(Debug, Error)]
+pub enum SessionKeyError {
+    #[error("mac private key is not configured")]
+    MissingPrivateKey,
+    #[error("device pairing is invalid: {0}")]
+    Pairing(#[from] PairingError),
+    #[error("session key derivation failed: {0}")]
+    Crypto(#[from] CryptoError),
 }
 
 impl GatewayState {
@@ -61,6 +82,7 @@ impl GatewayState {
                 crate::agent_name(),
                 Vec::<ProviderHealth>::new(),
             )),
+            mac_private_key: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -71,6 +93,30 @@ impl GatewayState {
     pub async fn set_file_root(&self, root: impl AsRef<std::path::Path>) {
         *self.file_root.write().await = Some(FileService::new(root.as_ref()));
         *self.transfers.write().await = Some(TransferManager::new(root));
+    }
+
+    pub async fn set_mac_private_key(&self, private_key: [u8; 32]) {
+        *self.mac_private_key.write().await = Some(Zeroizing::new(private_key));
+    }
+
+    pub async fn session_keys(
+        &self,
+        device_id: &str,
+    ) -> Result<GatewaySessionKeys, SessionKeyError> {
+        let private_key = self
+            .mac_private_key
+            .read()
+            .await
+            .clone()
+            .ok_or(SessionKeyError::MissingPrivateKey)?;
+        let pairing = self.pairing.read().await;
+        let peer_public_key = pairing.device_public_key(device_id)?;
+        let shared = derive_shared_secret(&private_key[..], &peer_public_key)?;
+        let directional = derive_directional_keys(&shared, pairing.mac_id(), device_id)?;
+        Ok(GatewaySessionKeys {
+            inbound: CryptoBox::new(*directional.ios_to_mac, *b"IOS>"),
+            outbound: CryptoBox::new(*directional.mac_to_ios, *b"MAC>"),
+        })
     }
 }
 
@@ -542,11 +588,33 @@ async fn ws_auth(
     next.run(request).await
 }
 
-async fn websocket(upgrade: WebSocketUpgrade) -> Response {
-    upgrade.on_upgrade(websocket_loop).into_response()
+async fn websocket(
+    State(state): State<GatewayState>,
+    headers: HeaderMap,
+    upgrade: WebSocketUpgrade,
+) -> Response {
+    let Some(device_id) = headers
+        .get("x-remoteai-device")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+    else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let keys = match state.session_keys(&device_id).await {
+        Ok(keys) => keys,
+        Err(SessionKeyError::MissingPrivateKey) => {
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+        Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
+    };
+    let session =
+        GatewaySession::new(state, device_id, keys.inbound.receiver(), keys.outbound).await;
+    upgrade
+        .on_upgrade(move |socket| websocket_loop(socket, session))
+        .into_response()
 }
 
-async fn websocket_loop(mut socket: WebSocket) {
+async fn websocket_loop(mut socket: WebSocket, mut session: GatewaySession) {
     while let Some(Ok(message)) = socket.next().await {
         match message {
             Message::Ping(payload) => {
@@ -563,8 +631,26 @@ async fn websocket_loop(mut socket: WebSocket) {
                     .await;
                 break;
             }
+            Message::Binary(bytes) => match session.handle_frame(&bytes).await {
+                Ok(outputs) => {
+                    for output in outputs {
+                        if socket.send(Message::Binary(output.into())).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+                Err(_) => {
+                    let _ = socket
+                        .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                            code: 1008,
+                            reason: "encrypted business frame rejected".into(),
+                        })))
+                        .await;
+                    break;
+                }
+            },
             Message::Close(_) => break,
-            Message::Binary(_) | Message::Pong(_) => {}
+            Message::Pong(_) => {}
         }
     }
 }
@@ -601,6 +687,307 @@ pub enum FrameError {
 pub struct FrameProcessor {
     receiver: CryptoReceiver,
     seen_request_ids: HashSet<Uuid>,
+}
+
+#[derive(Debug, Error)]
+pub enum GatewayBusinessError {
+    #[error("encrypted frame rejected: {0}")]
+    Frame(#[from] FrameError),
+    #[error("frame routing does not match authenticated device")]
+    WrongDevice,
+    #[error("request payload is invalid")]
+    InvalidPayload,
+    #[error("provider is not registered")]
+    ProviderUnavailable,
+    #[error("provider operation failed: {0}")]
+    Provider(String),
+}
+
+/// Authenticated business dispatcher for one device WebSocket session.
+/// It keeps adapter handles alive, decrypts requests, and encrypts all replies.
+pub struct GatewaySession {
+    state: GatewayState,
+    device_id: String,
+    processor: FrameProcessor,
+    outbound: CryptoBox,
+    outbound_counter: u64,
+    event_receivers: HashMap<ProviderId, tokio::sync::broadcast::Receiver<ConversationEvent>>,
+}
+
+impl GatewaySession {
+    pub async fn new(
+        state: GatewayState,
+        device_id: impl Into<String>,
+        inbound: CryptoReceiver,
+        outbound: CryptoBox,
+    ) -> Self {
+        let adapters = state.provider_adapters.read().await.clone();
+        let mut receivers = HashMap::new();
+        for adapter in adapters {
+            let provider = adapter.status().await.provider;
+            let receiver = adapter.subscribe();
+            receivers.insert(provider, receiver);
+        }
+        Self {
+            state,
+            device_id: device_id.into(),
+            processor: FrameProcessor::new(inbound),
+            outbound,
+            outbound_counter: 0,
+            event_receivers: receivers,
+        }
+    }
+
+    pub async fn handle_frame(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<Vec<Vec<u8>>, GatewayBusinessError> {
+        let frame: EncryptedFrame =
+            serde_json::from_slice(bytes).map_err(|_| FrameError::PlaintextBusinessFrame)?;
+        if frame.routing.device_id != self.device_id {
+            return Err(GatewayBusinessError::WrongDevice);
+        }
+        let request = self.processor.process(bytes)?;
+        let request_id = request
+            .request_id
+            .ok_or(GatewayBusinessError::InvalidPayload)?;
+        let provider = request
+            .payload
+            .get("provider")
+            .and_then(Value::as_str)
+            .and_then(parse_provider)
+            .ok_or(GatewayBusinessError::InvalidPayload)?;
+        let adapters = self.state.provider_adapters.read().await.clone();
+        let mut adapter = None;
+        for candidate in adapters {
+            if candidate.status().await.provider == provider {
+                adapter = Some(candidate);
+                break;
+            }
+        }
+        let adapter = adapter.ok_or(GatewayBusinessError::ProviderUnavailable)?;
+
+        let (response_type, payload) = match request.message_type.as_str() {
+            "conversation.start" => {
+                let kind = parse_kind(&request.payload)?;
+                let cwd = request
+                    .payload
+                    .get("cwd")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from);
+                let id = adapter
+                    .start(kind, cwd)
+                    .await
+                    .map_err(|error| GatewayBusinessError::Provider(error.to_string()))?;
+                (
+                    "conversation.start.result",
+                    serde_json::json!({"conversationId": id, "provider": provider}),
+                )
+            }
+            "conversation.resume" => {
+                let id = payload_string(&request.payload, "conversationId")?;
+                adapter
+                    .resume(&id)
+                    .await
+                    .map_err(|error| GatewayBusinessError::Provider(error.to_string()))?;
+                (
+                    "conversation.resume.result",
+                    serde_json::json!({"conversationId": id, "provider": provider}),
+                )
+            }
+            "conversation.send" => {
+                let id = payload_string(&request.payload, "conversationId")?;
+                let text = payload_string(&request.payload, "text")?;
+                adapter
+                    .send(&id, text, Vec::new())
+                    .await
+                    .map_err(|error| GatewayBusinessError::Provider(error.to_string()))?;
+                (
+                    "conversation.send.result",
+                    serde_json::json!({"conversationId": id, "provider": provider}),
+                )
+            }
+            "conversation.interrupt" => {
+                let id = payload_string(&request.payload, "conversationId")?;
+                adapter
+                    .interrupt(&id)
+                    .await
+                    .map_err(|error| GatewayBusinessError::Provider(error.to_string()))?;
+                (
+                    "conversation.interrupt.result",
+                    serde_json::json!({"conversationId": id, "provider": provider}),
+                )
+            }
+            "approval.decide" => {
+                let id = payload_string(&request.payload, "requestId")?;
+                let decision = request
+                    .payload
+                    .get("decision")
+                    .cloned()
+                    .ok_or(GatewayBusinessError::InvalidPayload)
+                    .and_then(|value| {
+                        serde_json::from_value::<ApprovalDecision>(value)
+                            .map_err(|_| GatewayBusinessError::InvalidPayload)
+                    })?;
+                adapter
+                    .decide_approval(&id, decision)
+                    .await
+                    .map_err(|error| GatewayBusinessError::Provider(error.to_string()))?;
+                (
+                    "approval.decide.result",
+                    serde_json::json!({"requestId": id, "provider": provider}),
+                )
+            }
+            "provider.status" => (
+                "provider.status.result",
+                serde_json::to_value(adapter.status().await)
+                    .map_err(|_| GatewayBusinessError::InvalidPayload)?,
+            ),
+            _ => return Err(GatewayBusinessError::InvalidPayload),
+        };
+
+        let routing = RoutingMetadata {
+            device_id: self.device_id.clone(),
+            conversation_id: request
+                .payload
+                .get("conversationId")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        };
+        let mut outputs = vec![self.encrypt_json(
+            &routing,
+            &serde_json::json!({
+                "protocolVersion": crate::protocol::PROTOCOL_VERSION,
+                "messageId": Uuid::new_v4(),
+                "kind": "response",
+                "requestId": request_id,
+                "type": response_type,
+                "payload": payload,
+            }),
+        )?];
+        outputs.extend(self.drain_events(provider, &routing).await?);
+        Ok(outputs)
+    }
+
+    fn encrypt_json(
+        &mut self,
+        routing: &RoutingMetadata,
+        value: &Value,
+    ) -> Result<Vec<u8>, GatewayBusinessError> {
+        self.outbound_counter = self.outbound_counter.saturating_add(1);
+        let aad = serde_json::to_vec(routing).map_err(|_| GatewayBusinessError::InvalidPayload)?;
+        let plaintext =
+            serde_json::to_vec(value).map_err(|_| GatewayBusinessError::InvalidPayload)?;
+        let ciphertext = self
+            .outbound
+            .encrypt(self.outbound_counter, &aad, &plaintext)
+            .map_err(|_| GatewayBusinessError::InvalidPayload)?;
+        serde_json::to_vec(&EncryptedFrame {
+            counter: self.outbound_counter,
+            routing: routing.clone(),
+            ciphertext: base64::engine::general_purpose::STANDARD.encode(ciphertext),
+        })
+        .map_err(|_| GatewayBusinessError::InvalidPayload)
+    }
+
+    async fn drain_events(
+        &mut self,
+        provider: ProviderId,
+        routing: &RoutingMetadata,
+    ) -> Result<Vec<Vec<u8>>, GatewayBusinessError> {
+        let events = {
+            let Some(receiver) = self.event_receivers.get_mut(&provider) else {
+                return Ok(Vec::new());
+            };
+            let mut events = Vec::new();
+            while let Ok(event) = receiver.try_recv() {
+                events.push(event);
+            }
+            events
+        };
+        let mut outputs = Vec::new();
+        for event in events {
+            let (message_type, payload) = event_parts(event);
+            let conversation_id = payload
+                .get("conversationId")
+                .and_then(Value::as_str)
+                .or(routing.conversation_id.as_deref())
+                .unwrap_or("unknown")
+                .to_owned();
+            let buffered = self
+                .state
+                .event_buffer
+                .lock()
+                .map_err(|_| GatewayBusinessError::InvalidPayload)?
+                .push(
+                    &conversation_id,
+                    serde_json::json!({"type": message_type, "payload": payload}),
+                );
+            let event_routing = RoutingMetadata {
+                device_id: routing.device_id.clone(),
+                conversation_id: Some(conversation_id.clone()),
+            };
+            outputs.push(self.encrypt_json(
+                &event_routing,
+                &serde_json::json!({
+                    "protocolVersion": crate::protocol::PROTOCOL_VERSION,
+                    "messageId": Uuid::new_v4(),
+                    "kind": "event",
+                    "requestId": Value::Null,
+                    "sequence": buffered.sequence,
+                    "conversationId": conversation_id,
+                    "type": message_type,
+                    "payload": buffered.payload["payload"].clone(),
+                }),
+            )?);
+        }
+        Ok(outputs)
+    }
+}
+
+fn payload_string(payload: &Value, key: &str) -> Result<String, GatewayBusinessError> {
+    payload
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or(GatewayBusinessError::InvalidPayload)
+}
+
+fn parse_kind(payload: &Value) -> Result<ConversationKind, GatewayBusinessError> {
+    payload
+        .get("kind")
+        .cloned()
+        .ok_or(GatewayBusinessError::InvalidPayload)
+        .and_then(|value| {
+            serde_json::from_value(value).map_err(|_| GatewayBusinessError::InvalidPayload)
+        })
+}
+
+fn event_parts(event: ConversationEvent) -> (String, Value) {
+    match event {
+        ConversationEvent::Delta { text } => (
+            "conversation.delta".into(),
+            serde_json::json!({"text": text}),
+        ),
+        ConversationEvent::Started(payload) => ("conversation.started".into(), payload),
+        ConversationEvent::UserMessage(payload) => ("conversation.user_message".into(), payload),
+        ConversationEvent::MessageCompleted(payload) => {
+            ("conversation.message_completed".into(), payload)
+        }
+        ConversationEvent::ToolStarted(payload) => ("tool.started".into(), payload),
+        ConversationEvent::ToolUpdated(payload) => ("tool.updated".into(), payload),
+        ConversationEvent::ToolCompleted(payload) => ("tool.completed".into(), payload),
+        ConversationEvent::ApprovalRequested(payload) => ("approval.requested".into(), payload),
+        ConversationEvent::ApprovalResolved(payload) => ("approval.resolved".into(), payload),
+        ConversationEvent::TurnCompleted(payload) => ("turn.completed".into(), payload),
+        ConversationEvent::TurnFailed(payload) => ("turn.failed".into(), payload),
+        ConversationEvent::TurnInterrupted(payload) => ("turn.interrupted".into(), payload),
+        ConversationEvent::ProviderStatusChanged(payload) => {
+            ("provider.status_changed".into(), payload)
+        }
+        ConversationEvent::Unsupported { raw_type, payload } => (raw_type, payload),
+    }
 }
 
 impl FrameProcessor {

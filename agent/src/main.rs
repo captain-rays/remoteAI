@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -181,8 +184,14 @@ async fn main() -> anyhow::Result<()> {
     let mut pairing = PairingRegistry::new("mac-local", &config.public_origin, public_key);
     let payload = pairing.issue(&Uuid::new_v4().to_string(), Utc::now());
     println!("pairing issued: {}", pairing_log_line(&payload)?);
-
+    if let Some(path) = std::env::var_os("REMOTEAI_PAIRING_FILE") {
+        write_pairing_file(Path::new(&path), &payload)?;
+        eprintln!("pairing payload written to REMOTEAI_PAIRING_FILE");
+    } else {
+        eprintln!("pairing payload not persisted; set REMOTEAI_PAIRING_FILE for local handoff");
+    }
     let state = GatewayState::new(Arc::new(tokio::sync::RwLock::new(pairing)), 256);
+    state.set_mac_private_key(key.to_bytes().into()).await;
     let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from);
     state
         .set_provider_adapters(discover_runtime_adapters(home).await)
@@ -194,6 +203,27 @@ async fn main() -> anyhow::Result<()> {
         config.bind
     );
     axum::serve(listener, router(state)).await?;
+    Ok(())
+}
+
+fn write_pairing_file(path: &Path, payload: &PairingPayload) -> anyhow::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    if !parent.exists() {
+        fs::create_dir_all(parent)?;
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+    } else if fs::metadata(parent)?.permissions().mode() & 0o077 != 0 {
+        anyhow::bail!("pairing file parent must not be accessible by group/other");
+    }
+    let bytes = serde_json::to_vec(payload)?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
     Ok(())
 }
 
@@ -250,5 +280,33 @@ mod tests {
         assert!(!line.contains("macPublicKey"));
         assert!(line.contains("https://mac.example"));
         assert!(line.contains("mac-1"));
+    }
+
+    #[test]
+    fn pairing_file_is_owner_only_and_contains_payload_without_logging() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("secure").join("pairing.json");
+        let payload = PairingPayload {
+            origin: "http://127.0.0.1:8787".into(),
+            mac_id: "mac-1".into(),
+            mac_public_key: vec![4, 1],
+            pairing_secret: "one-time".into(),
+            expires_at: Utc::now(),
+        };
+        write_pairing_file(&path, &payload).unwrap();
+        assert_eq!(
+            fs::metadata(path.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let decoded: PairingPayload = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(decoded, payload);
     }
 }
