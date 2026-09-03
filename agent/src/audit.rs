@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::protocol::ProviderId;
 
@@ -15,7 +15,7 @@ pub struct AuditRecord {
     pub result: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuditRow {
     pub timestamp: DateTime<Utc>,

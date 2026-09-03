@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use remote_ai_agent::adapters::codex::{CodexAdapter, CodexMapper};
 use remote_ai_agent::protocol::{ConversationEvent, ConversationKind, ProviderId};
+use serde_json::json;
 
 #[test]
 fn maps_sanitized_codex_v2_transcript_without_losing_unknown_events() {
@@ -47,6 +48,12 @@ fn command_spec_uses_app_server_and_never_bypasses_approvals() {
         adapter.approval_response(false),
         serde_json::json!({"decision": "decline"})
     );
+}
+
+#[test]
+fn json_rpc_response_ids_are_normalized_without_string_quotes() {
+    assert_eq!(CodexAdapter::rpc_id_key(&json!("7")), "7");
+    assert_eq!(CodexAdapter::rpc_id_key(&json!(8)), "8");
 }
 
 #[tokio::test]

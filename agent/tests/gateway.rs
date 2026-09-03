@@ -6,6 +6,7 @@ use axum::body::to_bytes;
 use base64::Engine;
 use chrono::Utc;
 use http::{Request, StatusCode};
+use remote_ai_agent::audit::{AuditRecord, AuditRow};
 use remote_ai_agent::crypto::CryptoBox;
 use remote_ai_agent::event_buffer::EventBuffer;
 use remote_ai_agent::gateway::{
@@ -109,6 +110,40 @@ async fn authenticated_catalog_route_exposes_only_requested_provider_daily_sessi
 }
 
 #[tokio::test]
+async fn project_conversations_route_filters_by_provider_and_project_id() {
+    let state = paired_state();
+    state
+        .set_sessions(
+            ProviderId::Codex,
+            vec![ConversationSummary {
+                id: "project-session".into(),
+                provider: ProviderId::Codex,
+                kind: ConversationKind::Project,
+                title: "Project session".into(),
+                project_id: Some("codex:project-1".into()),
+                project_path: Some("/tmp/project".into()),
+                updated_at: Utc::now(),
+                status: "idle".into(),
+            }],
+        )
+        .await;
+    let response = router(state)
+        .oneshot(
+            Request::get("/v1/projects/codex:project-1/conversations?provider=codex")
+                .header("x-remoteai-device", "phone-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let values: Vec<ConversationSummary> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(values.len(), 1);
+    assert_eq!(values[0].kind, ConversationKind::Project);
+}
+
+#[tokio::test]
 async fn authenticated_files_route_lists_only_explicitly_visible_entries() {
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join("readme.txt"), "fixture").unwrap();
@@ -129,6 +164,72 @@ async fn authenticated_files_route_lists_only_explicitly_visible_entries() {
     let entries: Vec<FileEntry> = serde_json::from_slice(&body).unwrap();
     assert!(entries.iter().any(|entry| entry.name == "readme.txt"));
     assert!(!entries.iter().any(|entry| entry.name == ".hidden"));
+}
+
+#[tokio::test]
+async fn authenticated_audit_and_diagnostics_routes_are_redacted() {
+    let state = paired_state();
+    state.audit.record(AuditRecord {
+        device_id: "phone-1".into(),
+        provider: Some(ProviderId::Codex),
+        conversation_id: None,
+        action: "files.list".into(),
+        target_path: Some("/tmp".into()),
+        result: "ok token=secret".into(),
+    });
+    let app = router(state);
+    let audit = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/audit")
+                .header("x-remoteai-device", "phone-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(audit.status(), StatusCode::OK);
+    let audit_body = to_bytes(audit.into_body(), usize::MAX).await.unwrap();
+    let rows: Vec<AuditRow> = serde_json::from_slice(&audit_body).unwrap();
+    assert_eq!(rows[0].result, "redacted");
+
+    let diagnostics = app
+        .oneshot(
+            Request::get("/v1/diagnostics")
+                .header("x-remoteai-device", "phone-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(diagnostics.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn device_revoke_invalidates_future_authenticated_requests() {
+    let app = router(paired_state());
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/device/revoke")
+                .header("x-remoteai-device", "phone-1")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"deviceId":"phone-1"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let denied = app
+        .oneshot(
+            Request::get("/v1/audit")
+                .header("x-remoteai-device", "phone-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[test]

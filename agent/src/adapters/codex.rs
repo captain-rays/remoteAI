@@ -161,6 +161,10 @@ impl CodexAdapter {
         json!({"decision": if allow { "accept" } else { "decline" }})
     }
 
+    pub fn rpc_id_key(id: &Value) -> String {
+        id.as_str().map_or_else(|| id.to_string(), str::to_owned)
+    }
+
     async fn client(&self) -> anyhow::Result<Arc<RpcClient>> {
         let mut slot = self.rpc.lock().await;
         if let Some(client) = slot.as_ref() {
@@ -353,7 +357,10 @@ impl RpcClient {
                 };
                 if value.get("method").is_none()
                     && let Some(id) = value.get("id")
-                    && let Some(sender) = reader_pending.lock().await.remove(&id.to_string())
+                    && let Some(sender) = reader_pending
+                        .lock()
+                        .await
+                        .remove(&CodexAdapter::rpc_id_key(id))
                 {
                     let result = if let Some(error) = value.get("error") {
                         Err(anyhow::anyhow!("Codex RPC error: {error}"))

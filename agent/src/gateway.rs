@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Json, Query, State};
+use axum::extract::{Json, Path as AxumPath, Query, State};
 use axum::http::{Request, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -17,8 +17,10 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use crate::audit::AuditLog;
 use crate::catalog::build_catalog;
 use crate::crypto::{CryptoError, CryptoReceiver};
+use crate::diagnostics::{Diagnostics, ProviderHealth};
 use crate::event_buffer::EventBuffer;
 use crate::files::FileService;
 use crate::pairing::{PairingError, PairingRegistry};
@@ -33,6 +35,8 @@ pub struct GatewayState {
     pub event_buffer: Arc<Mutex<EventBuffer>>,
     pub sessions: Arc<RwLock<HashMap<ProviderId, Vec<ConversationSummary>>>>,
     pub file_root: Arc<RwLock<Option<FileService>>>,
+    pub audit: AuditLog,
+    pub diagnostics: Arc<Diagnostics>,
 }
 
 impl GatewayState {
@@ -42,6 +46,11 @@ impl GatewayState {
             event_buffer: Arc::new(Mutex::new(EventBuffer::new(event_capacity))),
             sessions: Arc::new(RwLock::new(HashMap::new())),
             file_root: Arc::new(RwLock::new(None)),
+            audit: AuditLog::new(),
+            diagnostics: Arc::new(Diagnostics::new(
+                crate::agent_name(),
+                Vec::<ProviderHealth>::new(),
+            )),
         }
     }
 
@@ -72,12 +81,33 @@ pub fn router(state: GatewayState) -> Router {
             get(projects).route_layer(middleware::from_fn_with_state(state.clone(), ws_auth)),
         )
         .route(
+            "/v1/projects/{project_id}/conversations",
+            get(project_conversations)
+                .route_layer(middleware::from_fn_with_state(state.clone(), ws_auth)),
+        )
+        .route(
             "/v1/files/list",
             get(files_list).route_layer(middleware::from_fn_with_state(state.clone(), ws_auth)),
         )
         .route(
             "/v1/files/metadata",
             get(files_metadata).route_layer(middleware::from_fn_with_state(state.clone(), ws_auth)),
+        )
+        .route(
+            "/v1/files/preview",
+            get(files_preview).route_layer(middleware::from_fn_with_state(state.clone(), ws_auth)),
+        )
+        .route(
+            "/v1/audit",
+            get(audit).route_layer(middleware::from_fn_with_state(state.clone(), ws_auth)),
+        )
+        .route(
+            "/v1/diagnostics",
+            get(diagnostics).route_layer(middleware::from_fn_with_state(state.clone(), ws_auth)),
+        )
+        .route(
+            "/v1/device/revoke",
+            post(revoke).route_layer(middleware::from_fn_with_state(state.clone(), ws_auth)),
         )
         .with_state(state)
 }
@@ -167,6 +197,35 @@ async fn projects(
     }
 }
 
+async fn project_conversations(
+    State(state): State<GatewayState>,
+    AxumPath(project_id): AxumPath<String>,
+    Query(query): Query<ProviderQuery>,
+) -> Response {
+    let Some(provider) = parse_provider(&query.provider) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let sessions = state
+        .sessions
+        .read()
+        .await
+        .get(&provider)
+        .cloned()
+        .unwrap_or_default();
+    match build_catalog(provider, ".", sessions) {
+        Ok(catalog) => Json(
+            catalog
+                .conversations
+                .into_iter()
+                .filter(|item| item.kind == ConversationKind::Project)
+                .filter(|item| item.project_id.as_deref() == Some(project_id.as_str()))
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
 fn parse_provider(raw: &str) -> Option<ProviderId> {
     match raw {
         "codex" => Some(ProviderId::Codex),
@@ -213,6 +272,66 @@ async fn files_metadata(
         Ok(Some(entry)) => Json(entry).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(crate::files::FilesError::PathOutsideRoot) => StatusCode::FORBIDDEN.into_response(),
+        Err(_) => StatusCode::BAD_REQUEST.into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct PreviewQuery {
+    path: String,
+    #[serde(default = "default_preview_bytes")]
+    max_bytes: usize,
+}
+
+async fn files_preview(
+    State(state): State<GatewayState>,
+    Query(query): Query<PreviewQuery>,
+) -> Response {
+    let Some(service) = state.file_root.read().await.clone() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    match service.preview(&PathBuf::from(query.path), query.max_bytes) {
+        Ok(bytes) => axum::body::Body::from(bytes).into_response(),
+        Err(crate::files::FilesError::PathOutsideRoot) => StatusCode::FORBIDDEN.into_response(),
+        Err(crate::files::FilesError::NotFound) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => StatusCode::BAD_REQUEST.into_response(),
+    }
+}
+
+fn default_preview_bytes() -> usize {
+    65_536
+}
+
+async fn audit(State(state): State<GatewayState>) -> Json<Vec<crate::audit::AuditRow>> {
+    Json(state.audit.list())
+}
+
+async fn diagnostics(
+    State(state): State<GatewayState>,
+) -> Json<crate::diagnostics::DiagnosticsReport> {
+    Json(
+        state
+            .diagnostics
+            .report(crate::tunnel::TunnelManager::new())
+            .await,
+    )
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RevokeRequest {
+    device_id: String,
+}
+
+async fn revoke(State(state): State<GatewayState>, Json(request): Json<RevokeRequest>) -> Response {
+    match state
+        .pairing
+        .write()
+        .await
+        .revoke(&request.device_id, Utc::now())
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(PairingError::DeviceUnknown) => StatusCode::NOT_FOUND.into_response(),
         Err(_) => StatusCode::BAD_REQUEST.into_response(),
     }
 }
