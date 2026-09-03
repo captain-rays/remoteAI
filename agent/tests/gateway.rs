@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::body::Body;
+use axum::body::to_bytes;
 use base64::Engine;
 use chrono::Utc;
 use http::{Request, StatusCode};
@@ -10,6 +11,7 @@ use remote_ai_agent::gateway::{
     EncryptedFrame, FrameError, FrameProcessor, GatewayState, RoutingMetadata, router,
 };
 use remote_ai_agent::pairing::PairingRegistry;
+use remote_ai_agent::protocol::{ConversationKind, ConversationSummary, ProviderId};
 use serde_json::json;
 use tokio::sync::RwLock;
 use tower::ServiceExt;
@@ -68,6 +70,41 @@ async fn pair_endpoint_consumes_a_secret_once() {
         app.oneshot(request()).await.unwrap().status(),
         StatusCode::CONFLICT
     );
+}
+
+#[tokio::test]
+async fn authenticated_catalog_route_exposes_only_requested_provider_daily_sessions() {
+    let state = paired_state();
+    state
+        .set_sessions(
+            ProviderId::Codex,
+            vec![ConversationSummary {
+                id: "daily-codex".into(),
+                provider: ProviderId::Codex,
+                kind: ConversationKind::Daily,
+                title: "Codex only".into(),
+                project_id: None,
+                project_path: None,
+                updated_at: Utc::now(),
+                status: "idle".into(),
+            }],
+        )
+        .await;
+    let response = router(state)
+        .oneshot(
+            Request::get("/v1/conversations/daily?provider=codex")
+                .header("x-remoteai-device", "phone-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let values: Vec<ConversationSummary> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(values.len(), 1);
+    assert_eq!(values[0].provider, ProviderId::Codex);
+    assert_eq!(values[0].kind, ConversationKind::Daily);
 }
 
 #[test]

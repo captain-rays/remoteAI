@@ -1,9 +1,9 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Json, State};
+use axum::extract::{Json, Query, State};
 use axum::http::{Request, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -16,15 +16,20 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use crate::catalog::build_catalog;
 use crate::crypto::{CryptoError, CryptoReceiver};
 use crate::event_buffer::EventBuffer;
 use crate::pairing::{PairingError, PairingRegistry};
-use crate::protocol::{EnvelopeKind, RequestEnvelope, validate_protocol_version};
+use crate::protocol::{
+    ConversationKind, ConversationSummary, EnvelopeKind, ProviderId, RequestEnvelope,
+    validate_protocol_version,
+};
 
 #[derive(Clone)]
 pub struct GatewayState {
     pub pairing: Arc<RwLock<PairingRegistry>>,
     pub event_buffer: Arc<Mutex<EventBuffer>>,
+    pub sessions: Arc<RwLock<HashMap<ProviderId, Vec<ConversationSummary>>>>,
 }
 
 impl GatewayState {
@@ -32,7 +37,12 @@ impl GatewayState {
         Self {
             pairing,
             event_buffer: Arc::new(Mutex::new(EventBuffer::new(event_capacity))),
+            sessions: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    pub async fn set_sessions(&self, provider: ProviderId, sessions: Vec<ConversationSummary>) {
+        self.sessions.write().await.insert(provider, sessions);
     }
 }
 
@@ -43,6 +53,15 @@ pub fn router(state: GatewayState) -> Router {
         .route(
             "/v1/ws",
             get(websocket).route_layer(middleware::from_fn_with_state(state.clone(), ws_auth)),
+        )
+        .route(
+            "/v1/conversations/daily",
+            get(daily_conversations)
+                .route_layer(middleware::from_fn_with_state(state.clone(), ws_auth)),
+        )
+        .route(
+            "/v1/projects",
+            get(projects).route_layer(middleware::from_fn_with_state(state.clone(), ws_auth)),
         )
         .with_state(state)
 }
@@ -77,6 +96,66 @@ async fn pair(State(state): State<GatewayState>, Json(request): Json<PairRequest
         Err(PairingError::SecretAlreadyUsed) => StatusCode::CONFLICT.into_response(),
         Err(PairingError::SecretExpired) => StatusCode::GONE.into_response(),
         Err(_) => StatusCode::UNAUTHORIZED.into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ProviderQuery {
+    provider: String,
+}
+
+async fn daily_conversations(
+    State(state): State<GatewayState>,
+    Query(query): Query<ProviderQuery>,
+) -> Response {
+    let Some(provider) = parse_provider(&query.provider) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let sessions = state
+        .sessions
+        .read()
+        .await
+        .get(&provider)
+        .cloned()
+        .unwrap_or_default();
+    match build_catalog(provider, ".", sessions) {
+        Ok(catalog) => Json(
+            catalog
+                .conversations
+                .into_iter()
+                .filter(|item| item.kind == ConversationKind::Daily)
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+async fn projects(
+    State(state): State<GatewayState>,
+    Query(query): Query<ProviderQuery>,
+) -> Response {
+    let Some(provider) = parse_provider(&query.provider) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let sessions = state
+        .sessions
+        .read()
+        .await
+        .get(&provider)
+        .cloned()
+        .unwrap_or_default();
+    match build_catalog(provider, ".", sessions) {
+        Ok(catalog) => Json(catalog.projects).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+fn parse_provider(raw: &str) -> Option<ProviderId> {
+    match raw {
+        "codex" => Some(ProviderId::Codex),
+        "claude" => Some(ProviderId::Claude),
+        _ => None,
     }
 }
 
