@@ -7,5 +7,6 @@ public enum AllSuites {
         ProtocolFixtureSuite.suite,
         MockAgentClientSuite.suite,
         ConnectionSuite.suite,
+        CryptoSuite.suite,
     ]
 }
