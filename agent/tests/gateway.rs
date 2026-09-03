@@ -1,3 +1,4 @@
+use std::fs;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -11,7 +12,7 @@ use remote_ai_agent::gateway::{
     EncryptedFrame, FrameError, FrameProcessor, GatewayState, RoutingMetadata, router,
 };
 use remote_ai_agent::pairing::PairingRegistry;
-use remote_ai_agent::protocol::{ConversationKind, ConversationSummary, ProviderId};
+use remote_ai_agent::protocol::{ConversationKind, ConversationSummary, FileEntry, ProviderId};
 use serde_json::json;
 use tokio::sync::RwLock;
 use tower::ServiceExt;
@@ -105,6 +106,29 @@ async fn authenticated_catalog_route_exposes_only_requested_provider_daily_sessi
     assert_eq!(values.len(), 1);
     assert_eq!(values[0].provider, ProviderId::Codex);
     assert_eq!(values[0].kind, ConversationKind::Daily);
+}
+
+#[tokio::test]
+async fn authenticated_files_route_lists_only_explicitly_visible_entries() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("readme.txt"), "fixture").unwrap();
+    fs::write(root.path().join(".hidden"), "secret").unwrap();
+    let state = paired_state();
+    state.set_file_root(root.path()).await;
+    let response = router(state)
+        .oneshot(
+            Request::get("/v1/files/list?path=.&includeSensitive=false")
+                .header("x-remoteai-device", "phone-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let entries: Vec<FileEntry> = serde_json::from_slice(&body).unwrap();
+    assert!(entries.iter().any(|entry| entry.name == "readme.txt"));
+    assert!(!entries.iter().any(|entry| entry.name == ".hidden"));
 }
 
 #[test]

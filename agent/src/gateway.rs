@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use axum::Router;
@@ -19,6 +20,7 @@ use uuid::Uuid;
 use crate::catalog::build_catalog;
 use crate::crypto::{CryptoError, CryptoReceiver};
 use crate::event_buffer::EventBuffer;
+use crate::files::FileService;
 use crate::pairing::{PairingError, PairingRegistry};
 use crate::protocol::{
     ConversationKind, ConversationSummary, EnvelopeKind, ProviderId, RequestEnvelope,
@@ -30,6 +32,7 @@ pub struct GatewayState {
     pub pairing: Arc<RwLock<PairingRegistry>>,
     pub event_buffer: Arc<Mutex<EventBuffer>>,
     pub sessions: Arc<RwLock<HashMap<ProviderId, Vec<ConversationSummary>>>>,
+    pub file_root: Arc<RwLock<Option<FileService>>>,
 }
 
 impl GatewayState {
@@ -38,11 +41,16 @@ impl GatewayState {
             pairing,
             event_buffer: Arc::new(Mutex::new(EventBuffer::new(event_capacity))),
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            file_root: Arc::new(RwLock::new(None)),
         }
     }
 
     pub async fn set_sessions(&self, provider: ProviderId, sessions: Vec<ConversationSummary>) {
         self.sessions.write().await.insert(provider, sessions);
+    }
+
+    pub async fn set_file_root(&self, root: impl AsRef<std::path::Path>) {
+        *self.file_root.write().await = Some(FileService::new(root));
     }
 }
 
@@ -62,6 +70,14 @@ pub fn router(state: GatewayState) -> Router {
         .route(
             "/v1/projects",
             get(projects).route_layer(middleware::from_fn_with_state(state.clone(), ws_auth)),
+        )
+        .route(
+            "/v1/files/list",
+            get(files_list).route_layer(middleware::from_fn_with_state(state.clone(), ws_auth)),
+        )
+        .route(
+            "/v1/files/metadata",
+            get(files_metadata).route_layer(middleware::from_fn_with_state(state.clone(), ws_auth)),
         )
         .with_state(state)
 }
@@ -156,6 +172,48 @@ fn parse_provider(raw: &str) -> Option<ProviderId> {
         "codex" => Some(ProviderId::Codex),
         "claude" => Some(ProviderId::Claude),
         _ => None,
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct FileListQuery {
+    path: String,
+    #[serde(rename = "includeSensitive", default)]
+    include_sensitive: bool,
+}
+
+async fn files_list(
+    State(state): State<GatewayState>,
+    Query(query): Query<FileListQuery>,
+) -> Response {
+    let Some(service) = state.file_root.read().await.clone() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    match service.list(&PathBuf::from(query.path), query.include_sensitive) {
+        Ok(entries) => Json(entries).into_response(),
+        Err(crate::files::FilesError::PathOutsideRoot) => StatusCode::FORBIDDEN.into_response(),
+        Err(crate::files::FilesError::NotFound) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => StatusCode::BAD_REQUEST.into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct FilePathQuery {
+    path: String,
+}
+
+async fn files_metadata(
+    State(state): State<GatewayState>,
+    Query(query): Query<FilePathQuery>,
+) -> Response {
+    let Some(service) = state.file_root.read().await.clone() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    match service.metadata(&PathBuf::from(query.path)) {
+        Ok(Some(entry)) => Json(entry).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(crate::files::FilesError::PathOutsideRoot) => StatusCode::FORBIDDEN.into_response(),
+        Err(_) => StatusCode::BAD_REQUEST.into_response(),
     }
 }
 
