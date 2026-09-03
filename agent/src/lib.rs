@@ -1,7 +1,9 @@
 pub mod adapters;
+pub mod audit;
 pub mod catalog;
 pub mod config;
 pub mod crypto;
+pub mod diagnostics;
 pub mod discovery;
 pub mod event_buffer;
 pub mod files;
@@ -10,6 +12,7 @@ pub mod pairing;
 pub mod protocol;
 pub mod store;
 pub mod transfers;
+pub mod tunnel;
 
 pub const fn agent_name() -> &'static str {
     "RemoteAI Agent"

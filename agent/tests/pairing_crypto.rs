@@ -1,5 +1,10 @@
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+
 use chrono::{Duration, TimeZone, Utc};
-use remote_ai_agent::crypto::{CryptoBox, derive_directional_keys, derive_shared_secret};
+use remote_ai_agent::crypto::{
+    CryptoBox, derive_directional_keys, derive_shared_secret, load_or_create_private_key,
+};
 use remote_ai_agent::pairing::{PairingError, PairingRegistry};
 use serde::Deserialize;
 
@@ -97,5 +102,21 @@ fn pairing_secret_is_five_minute_single_use_and_revocable() {
             now + Duration::minutes(6),
         ),
         Err(PairingError::SecretExpired)
+    );
+}
+
+#[test]
+fn mac_private_key_is_persistent_and_owner_only() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("agent-private-key.bin");
+    let first = load_or_create_private_key(&path).unwrap();
+    let second = load_or_create_private_key(&path).unwrap();
+    assert_eq!(
+        first.public_key().to_sec1_bytes(),
+        second.public_key().to_sec1_bytes()
+    );
+    assert_eq!(
+        fs::metadata(path).unwrap().permissions().mode() & 0o777,
+        0o600
     );
 }

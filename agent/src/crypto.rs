@@ -2,8 +2,13 @@ use aes_gcm::aead::{Aead, Payload};
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use hkdf::Hkdf;
 use p256::ecdh::diffie_hellman;
+use p256::elliptic_curve::rand_core::OsRng;
 use p256::{PublicKey, SecretKey};
 use sha2::Sha256;
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Write};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::path::Path;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
@@ -17,8 +22,42 @@ pub enum CryptoError {
     KeyDerivation,
     #[error("authenticated encryption failed")]
     Encryption,
+    #[error("private key storage failed: {0}")]
+    Storage(String),
     #[error("counter {received} was already accepted; last counter is {last}")]
     Replay { received: u64, last: u64 },
+}
+
+pub fn load_or_create_private_key(path: &Path) -> Result<SecretKey, CryptoError> {
+    if path.exists()
+        && path
+            .metadata()
+            .map_err(|error| CryptoError::Storage(error.to_string()))?
+            .len()
+            > 0
+    {
+        let mut bytes = Vec::new();
+        fs::File::open(path)
+            .and_then(|mut file| file.read_to_end(&mut bytes))
+            .map_err(|error| CryptoError::Storage(error.to_string()))?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .map_err(|error| CryptoError::Storage(error.to_string()))?;
+        return SecretKey::from_slice(&bytes).map_err(|_| CryptoError::InvalidPrivateKey);
+    }
+    let secret = SecretKey::random(&mut OsRng);
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|error| CryptoError::Storage(error.to_string()))?;
+    file.write_all(&secret.to_bytes())
+        .and_then(|_| file.sync_all())
+        .map_err(|error| CryptoError::Storage(error.to_string()))?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .map_err(|error| CryptoError::Storage(error.to_string()))?;
+    Ok(secret)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

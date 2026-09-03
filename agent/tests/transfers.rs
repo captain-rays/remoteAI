@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
 
+use remote_ai_agent::crypto::CryptoBox;
 use remote_ai_agent::transfers::{ConflictPolicy, TransferError, TransferManager};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
@@ -68,5 +69,28 @@ async fn conflicts_cancel_resume_and_range_download_are_explicit() {
             .await
             .unwrap(),
         b"2345"
+    );
+}
+
+#[tokio::test]
+async fn encrypted_chunks_are_authenticated_before_writing() {
+    let root = tempdir().unwrap();
+    let manager = TransferManager::new(root.path());
+    let transfer = manager
+        .create_upload(Path::new("encrypted.txt"), None, None)
+        .await
+        .unwrap();
+    let crypto = CryptoBox::new([3; 32], *b"CHNK");
+    let mut receiver = crypto.receiver();
+    let aad = b"transfer-1";
+    let ciphertext = crypto.encrypt(1, aad, b"secret chunk").unwrap();
+    manager
+        .write_encrypted_chunk(&transfer.id, 0, 1, aad, &ciphertext, &mut receiver)
+        .await
+        .unwrap();
+    manager.finish(&transfer.id).await.unwrap();
+    assert_eq!(
+        fs::read(root.path().join("encrypted.txt")).unwrap(),
+        b"secret chunk"
     );
 }

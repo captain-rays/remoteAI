@@ -9,6 +9,8 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use crate::crypto::CryptoReceiver;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConflictPolicy {
     KeepBoth,
@@ -25,6 +27,8 @@ pub enum TransferError {
     InvalidOffset,
     #[error("sha-256 does not match expected digest")]
     HashMismatch,
+    #[error("encrypted chunk authentication failed")]
+    Authentication,
     #[error("path is outside transfer root")]
     PathOutsideRoot,
     #[error("filesystem error: {0}")]
@@ -121,6 +125,21 @@ impl TransferManager {
         file.seek(SeekFrom::Start(offset)).map_err(io_error)?;
         file.write_all(bytes).map_err(io_error)?;
         file.flush().map_err(io_error)
+    }
+
+    pub async fn write_encrypted_chunk(
+        &self,
+        id: &str,
+        offset: u64,
+        counter: u64,
+        associated_data: &[u8],
+        ciphertext: &[u8],
+        receiver: &mut CryptoReceiver,
+    ) -> Result<(), TransferError> {
+        let plaintext = receiver
+            .decrypt(counter, associated_data, ciphertext)
+            .map_err(|_| TransferError::Authentication)?;
+        self.write_chunk(id, offset, &plaintext).await
     }
 
     pub async fn finish(&self, id: &str) -> Result<(), TransferError> {
