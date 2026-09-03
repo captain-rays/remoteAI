@@ -54,6 +54,13 @@ public enum AppDependenciesSuite {
                 for _ in 0..<50 { await Task.yield() }
                 try expectEqual(await client.transferRequestCount, 0)
             },
+
+            TestCase("live dependencies are constructed on the main actor") {
+                let dependencies = await MainActor.run {
+                    AppDependencies.live(arguments: ["RemoteAI"])
+                }
+                try expectTrue(await dependencies.appModel.isOnline == false)
+            },
         ]
     )
 }

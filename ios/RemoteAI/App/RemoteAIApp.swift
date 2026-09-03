@@ -6,6 +6,7 @@ import SwiftUI
 /// Owned by the Xcode application target only; SwiftPM excludes this file
 /// because `@main` cannot appear in a library target.
 @main
+@MainActor
 struct RemoteAIApp: App {
     @State private var dependencies = AppDependencies.live()
 
