@@ -11,7 +11,7 @@ use remote_ai_agent::config::AgentConfig;
 use remote_ai_agent::crypto::load_or_create_private_key;
 use remote_ai_agent::discovery::discover_provider;
 use remote_ai_agent::gateway::{GatewayState, router};
-use remote_ai_agent::pairing::PairingRegistry;
+use remote_ai_agent::pairing::{PairingPayload, PairingRegistry};
 use remote_ai_agent::protocol::{
     ApprovalDecision, ConversationEvent, ConversationKind, ProviderId, ProviderStatus,
 };
@@ -144,6 +144,26 @@ fn adapters_from_statuses(
         .collect()
 }
 
+/// Serialize only safe pairing metadata for startup diagnostics.
+///
+/// The QR payload itself is a bearer credential: logging it would expose the
+/// one-time secret and Mac public key to anyone with access to agent stdout.
+fn pairing_log_line(payload: &PairingPayload) -> Result<String, serde_json::Error> {
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PairingMetadata<'a> {
+        origin: &'a str,
+        mac_id: &'a str,
+        expires_at: chrono::DateTime<Utc>,
+    }
+
+    serde_json::to_string(&PairingMetadata {
+        origin: &payload.origin,
+        mac_id: &payload.mac_id,
+        expires_at: payload.expires_at,
+    })
+}
+
 async fn discover_runtime_adapters(home: PathBuf) -> Vec<Arc<dyn ProviderAdapter>> {
     let mut statuses = Vec::with_capacity(2);
     for provider in [ProviderId::Codex, ProviderId::Claude] {
@@ -161,7 +181,7 @@ async fn main() -> anyhow::Result<()> {
     let mut pairing =
         PairingRegistry::new("mac-local", &format!("http://{}", config.bind), public_key);
     let payload = pairing.issue(&Uuid::new_v4().to_string(), Utc::now());
-    println!("{}", serde_json::to_string(&payload)?);
+    println!("pairing issued: {}", pairing_log_line(&payload)?);
 
     let state = GatewayState::new(Arc::new(tokio::sync::RwLock::new(pairing)), 256);
     let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from);
@@ -212,5 +232,24 @@ mod tests {
             .await;
         assert!(reported.available);
         assert_eq!(reported.version.as_deref(), Some("codex-cli 0.144.4"));
+    }
+
+    #[test]
+    fn pairing_log_line_redacts_secret_and_private_material() {
+        let payload = PairingPayload {
+            origin: "https://mac.example".into(),
+            mac_id: "mac-1".into(),
+            mac_public_key: vec![1, 2, 3],
+            pairing_secret: "never-log-this-secret".into(),
+            expires_at: Utc::now(),
+        };
+
+        let line = pairing_log_line(&payload).expect("metadata should serialize");
+
+        assert!(!line.contains("pairingSecret"));
+        assert!(!line.contains("never-log-this-secret"));
+        assert!(!line.contains("macPublicKey"));
+        assert!(line.contains("https://mac.example"));
+        assert!(line.contains("mac-1"));
     }
 }
