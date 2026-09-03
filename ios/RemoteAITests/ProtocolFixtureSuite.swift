@@ -78,7 +78,9 @@ public enum ProtocolFixtureSuite {
           "projectId": "codex:/Users/dev/work/api",
           "projectPath": "/Users/dev/work/api",
           "updatedAt": "2026-09-03T09:30:00Z",
-          "status": "running"
+          "status": "running",
+          "writeState": "busy",
+          "writeBlockCode": "session_busy"
         },
         {
           "id": "claude-daily-1",
@@ -195,6 +197,23 @@ public enum ProtocolFixtureSuite {
                 try expectEqual(claude.status, .unknown)
             },
 
+            TestCase("decodes optional conversation write occupancy") {
+                let catalog = try ProtocolCoding.decoder.decode(
+                    CatalogPayload.self, from: data(catalogJSON)
+                )
+                let busy = try expectNotNil(
+                    catalog.conversations.first { $0.id == "codex-project-1" }
+                )
+                try expectEqual(busy.writeState, .busy)
+                try expectEqual(busy.writeBlockCode, "session_busy")
+
+                let available = try expectNotNil(
+                    catalog.conversations.first { $0.id == "codex-daily-1" }
+                )
+                try expectNil(available.writeState)
+                try expectNil(available.writeBlockCode)
+            },
+
             TestCase("decodes a delta event") {
                 let json = eventJSON(
                     sequence: 7,
@@ -211,6 +230,46 @@ public enum ProtocolFixtureSuite {
                 }
                 try expectEqual(delta.messageId, "m1")
                 try expectEqual(delta.text, "hel")
+            },
+
+            TestCase("decodes reasoning delta and completed events") {
+                let deltaEnvelope = try ProtocolCoding.decodeEvent(
+                    from: data(
+                        eventJSON(
+                            sequence: 11,
+                            type: "conversation.reasoning_delta",
+                            payload: #"{"reasoningId":"reason-1","text":"checking"}"#
+                        )
+                    )
+                )
+                guard case let .reasoningDelta(delta) = deltaEnvelope.event else {
+                    throw ExpectationFailure(
+                        message: "expected .reasoningDelta, got \(deltaEnvelope.event)",
+                        file: #filePath,
+                        line: #line
+                    )
+                }
+                try expectEqual(delta.reasoningId, "reason-1")
+                try expectEqual(delta.text, "checking")
+
+                let completedEnvelope = try ProtocolCoding.decodeEvent(
+                    from: data(
+                        eventJSON(
+                            sequence: 12,
+                            type: "conversation.reasoning_completed",
+                            payload: #"{"reasoningId":"reason-1","text":"checked"}"#
+                        )
+                    )
+                )
+                guard case let .reasoningCompleted(completed) = completedEnvelope.event else {
+                    throw ExpectationFailure(
+                        message: "expected .reasoningCompleted, got \(completedEnvelope.event)",
+                        file: #filePath,
+                        line: #line
+                    )
+                }
+                try expectEqual(completed.reasoningId, "reason-1")
+                try expectEqual(completed.text, "checked")
             },
 
             TestCase("decodes an approval requested event") {

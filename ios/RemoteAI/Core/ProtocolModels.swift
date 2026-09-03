@@ -58,6 +58,18 @@ public enum ConversationStatus: String, Codable, Sendable, Hashable {
     }
 }
 
+public enum ConversationWriteState: String, Codable, Sendable, Hashable {
+    case available
+    case busy
+    case unavailable
+    case unknown
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = ConversationWriteState(rawValue: raw) ?? .unknown
+    }
+}
+
 public enum ApprovalCategory: String, Codable, Sendable, Hashable {
     case command
     case fileRead = "file_read"
@@ -175,6 +187,8 @@ public struct ConversationSummary: Codable, Sendable, Hashable, Identifiable {
     public let projectPath: String?
     public let updatedAt: Date
     public let status: ConversationStatus
+    public let writeState: ConversationWriteState?
+    public let writeBlockCode: String?
 
     public init(
         id: String,
@@ -184,7 +198,9 @@ public struct ConversationSummary: Codable, Sendable, Hashable, Identifiable {
         projectId: String? = nil,
         projectPath: String? = nil,
         updatedAt: Date,
-        status: ConversationStatus
+        status: ConversationStatus,
+        writeState: ConversationWriteState? = nil,
+        writeBlockCode: String? = nil
     ) {
         self.id = id
         self.provider = provider
@@ -194,6 +210,8 @@ public struct ConversationSummary: Codable, Sendable, Hashable, Identifiable {
         self.projectPath = projectPath
         self.updatedAt = updatedAt
         self.status = status
+        self.writeState = writeState
+        self.writeBlockCode = writeBlockCode
     }
 }
 
@@ -350,6 +368,16 @@ public struct MessagePayload: Codable, Sendable, Hashable {
     }
 }
 
+public struct ReasoningPayload: Codable, Sendable, Hashable {
+    public let reasoningId: String
+    public let text: String
+
+    public init(reasoningId: String, text: String) {
+        self.reasoningId = reasoningId
+        self.text = text
+    }
+}
+
 public struct ToolPayload: Codable, Sendable, Hashable {
     public let toolCallId: String
     public let name: String
@@ -432,6 +460,8 @@ public enum ConversationEvent: Sendable, Hashable {
     case userMessage(MessagePayload)
     case delta(MessagePayload)
     case messageCompleted(MessagePayload)
+    case reasoningDelta(ReasoningPayload)
+    case reasoningCompleted(ReasoningPayload)
     case toolStarted(ToolPayload)
     case toolUpdated(ToolPayload)
     case toolCompleted(ToolPayload)
@@ -691,6 +721,12 @@ public enum ProtocolCoding {
                 ?? .unsupported(rawType: rawType)
         case "conversation.message_completed":
             return decode(MessagePayload.self).map(ConversationEvent.messageCompleted)
+                ?? .unsupported(rawType: rawType)
+        case "conversation.reasoning_delta":
+            return decode(ReasoningPayload.self).map(ConversationEvent.reasoningDelta)
+                ?? .unsupported(rawType: rawType)
+        case "conversation.reasoning_completed":
+            return decode(ReasoningPayload.self).map(ConversationEvent.reasoningCompleted)
                 ?? .unsupported(rawType: rawType)
         case "tool.started":
             return decode(ToolPayload.self).map(ConversationEvent.toolStarted)

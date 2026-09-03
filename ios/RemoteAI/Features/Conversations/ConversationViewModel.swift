@@ -226,7 +226,7 @@ public final class ConversationViewModel {
             finishStreaming()
             appendError(code: failure.code, message: failure.message)
 
-        case .started, .providerStatusChanged, .unsupported:
+        case .started, .reasoningDelta, .reasoningCompleted, .providerStatusChanged, .unsupported:
             // Nothing to show in this transcript.
             break
         }
