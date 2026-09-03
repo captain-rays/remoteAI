@@ -56,6 +56,9 @@ public final class ConversationViewModel {
     private let client: AgentClient
     private var sequencer = EventSequencer()
     private var historyCursor: String?
+    /// Deltas from the Rust agent carry no message id, so one turn's fragments
+    /// are coalesced under a synthetic id that is cleared when the turn ends.
+    private var currentStreamId: String?
 
     public init(conversation: ConversationSummary, client: AgentClient) {
         self.conversation = conversation
@@ -232,7 +235,10 @@ public final class ConversationViewModel {
     // MARK: - Timeline mutation
 
     private func appendDelta(_ payload: MessagePayload) {
-        if let index = indexOfMessage(payload.messageId) {
+        let messageId = payload.messageId ?? currentStreamId ?? "stream-\(items.count)"
+        currentStreamId = messageId
+
+        if let index = indexOfMessage(messageId) {
             guard case var .message(item) = items[index] else { return }
             item.text += payload.text
             item.isStreaming = true
@@ -241,7 +247,7 @@ public final class ConversationViewModel {
             items.append(
                 .message(
                     MessageItem(
-                        id: payload.messageId, role: payload.role,
+                        id: messageId, role: payload.role,
                         text: payload.text, isStreaming: true
                     )
                 )
@@ -252,7 +258,12 @@ public final class ConversationViewModel {
     private func upsertMessage(
         _ payload: MessagePayload, streaming: Bool, replaceText: Bool = false
     ) {
-        if let index = indexOfMessage(payload.messageId) {
+        let messageId =
+            payload.messageId
+            ?? (payload.role == .user ? "user-\(items.count)" : currentStreamId)
+            ?? "message-\(items.count)"
+
+        if let index = indexOfMessage(messageId) {
             guard case var .message(item) = items[index] else { return }
             if replaceText { item.text = payload.text }
             item.isStreaming = streaming
@@ -261,7 +272,7 @@ public final class ConversationViewModel {
             items.append(
                 .message(
                     MessageItem(
-                        id: payload.messageId, role: payload.role,
+                        id: messageId, role: payload.role,
                         text: payload.text, isStreaming: streaming
                     )
                 )
@@ -292,6 +303,8 @@ public final class ConversationViewModel {
     }
 
     private func finishStreaming() {
+        // The next turn's unlabelled deltas must start a new message.
+        currentStreamId = nil
         for index in items.indices {
             guard case var .message(item) = items[index], item.isStreaming else { continue }
             item.isStreaming = false

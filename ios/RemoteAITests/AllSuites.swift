@@ -5,6 +5,7 @@ public enum AllSuites {
     public static let suites: [TestSuite] = [
         BootstrapSuite.suite,
         ProtocolFixtureSuite.suite,
+        AgentContractSuite.suite,
         MockAgentClientSuite.suite,
         ConnectionSuite.suite,
         CryptoSuite.suite,

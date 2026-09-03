@@ -220,11 +220,15 @@ public final class AppModel {
         switch envelope.event {
         case let .providerStatusChanged(status):
             providerStatuses[status.provider] = status
-        case let .started(started) where started.conversation.provider == selectedProvider:
-            if started.conversation.kind == .daily {
-                if !dailyConversations.contains(where: { $0.id == started.conversation.id }) {
-                    dailyConversations.insert(started.conversation, at: 0)
-                }
+        case let .started(started):
+            // The Rust agent reports only provider-native session facts, with
+            // no summary to insert; the mock sends a full summary.
+            if let conversation = started.conversation,
+                conversation.provider == selectedProvider,
+                conversation.kind == .daily,
+                !dailyConversations.contains(where: { $0.id == conversation.id })
+            {
+                dailyConversations.insert(conversation, at: 0)
             }
         case .unsupported:
             // A schema addition must never disturb the app.

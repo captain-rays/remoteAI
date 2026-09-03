@@ -286,11 +286,28 @@ public struct FileEntry: Codable, Sendable, Hashable, Identifiable {
 
 // MARK: - Conversation events
 
+/// `conversation.started` arrives in two shapes: the mock agent sends a full
+/// summary, while the Rust agent sends the provider-native session facts it
+/// learns from the CLI's `system/init`. Both must decode.
 public struct ConversationStarted: Codable, Sendable, Hashable {
-    public let conversation: ConversationSummary
+    public let conversation: ConversationSummary?
+    public let provider: ProviderId?
+    public let sessionId: String?
+    public let cwd: String?
+    public let model: String?
 
-    public init(conversation: ConversationSummary) {
+    public init(
+        conversation: ConversationSummary? = nil,
+        provider: ProviderId? = nil,
+        sessionId: String? = nil,
+        cwd: String? = nil,
+        model: String? = nil
+    ) {
         self.conversation = conversation
+        self.provider = provider ?? conversation?.provider
+        self.sessionId = sessionId ?? conversation?.id
+        self.cwd = cwd ?? conversation?.projectPath
+        self.model = model
     }
 }
 
@@ -306,15 +323,30 @@ public enum MessageRole: String, Codable, Sendable, Hashable {
     }
 }
 
+/// A streamed fragment or a whole message.
+///
+/// The Rust agent's `conversation.delta` carries only `{"text": …}` — the CLI
+/// does not label each fragment — so `messageId` and `role` must be optional
+/// or every delta decodes to `.unsupported` and the reply is silently dropped.
 public struct MessagePayload: Codable, Sendable, Hashable {
-    public let messageId: String
+    public let messageId: String?
     public let role: MessageRole
     public let text: String
 
-    public init(messageId: String, role: MessageRole, text: String) {
+    public init(messageId: String? = nil, role: MessageRole = .assistant, text: String) {
         self.messageId = messageId
         self.role = role
         self.text = text
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        messageId = try container.decodeIfPresent(String.self, forKey: .messageId)
+        role = try container.decodeIfPresent(MessageRole.self, forKey: .role) ?? .assistant
+        // `text` stays required: a payload without it carries no message at
+        // all and must degrade to .unsupported rather than render an empty
+        // bubble.
+        text = try container.decode(String.self, forKey: .text)
     }
 }
 
@@ -332,23 +364,66 @@ public struct ToolPayload: Codable, Sendable, Hashable {
     }
 }
 
+/// The Rust agent forwards the CLI's own result object here, which has no
+/// `turnId`, so the field is optional rather than required.
 public struct TurnPayload: Codable, Sendable, Hashable {
-    public let turnId: String
+    public let turnId: String?
 
-    public init(turnId: String) {
+    public init(turnId: String? = nil) {
         self.turnId = turnId
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        turnId = try container.decodeIfPresent(String.self, forKey: .turnId)
     }
 }
 
 public struct TurnFailure: Codable, Sendable, Hashable {
-    public let turnId: String
+    public let turnId: String?
     public let code: String
     public let message: String
 
-    public init(turnId: String, code: String, message: String) {
+    public init(turnId: String? = nil, code: String, message: String) {
         self.turnId = turnId
         self.code = code
         self.message = message
+    }
+
+    private enum Keys: String, CodingKey {
+        case turnId, code, message
+        // The CLI result object's own field names.
+        case result
+        case apiErrorStatus = "api_error_status"
+        case subtype
+    }
+
+    /// Accepts either the client-shaped failure or the CLI result object the
+    /// agent forwards, so the user always sees *why* a turn failed.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: Keys.self)
+        turnId = try container.decodeIfPresent(String.self, forKey: .turnId)
+
+        if let code = try container.decodeIfPresent(String.self, forKey: .code) {
+            self.code = code
+        } else if let status = try container.decodeIfPresent(Int.self, forKey: .apiErrorStatus) {
+            self.code = "http_\(status)"
+        } else {
+            self.code = try container.decodeIfPresent(String.self, forKey: .subtype) ?? "turn_failed"
+        }
+
+        if let message = try container.decodeIfPresent(String.self, forKey: .message) {
+            self.message = message
+        } else {
+            self.message = try container.decodeIfPresent(String.self, forKey: .result) ?? ""
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: Keys.self)
+        try container.encodeIfPresent(turnId, forKey: .turnId)
+        try container.encode(code, forKey: .code)
+        try container.encode(message, forKey: .message)
     }
 }
 
