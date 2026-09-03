@@ -4,6 +4,7 @@ import SwiftUI
 /// project's folder in the Files tab.
 @MainActor
 public struct ProjectDetailView: View {
+    @State private var hasLoadedOnce = false
     @Bindable private var model: AppModel
     private let project: ProjectSummary
     private let files: FileBrowserViewModel
@@ -60,5 +61,16 @@ public struct ProjectDetailView: View {
             .accessibilityIdentifier("new-project-session")
         }
         .task { await model.selectProject(project) }
+        // Coming back from a session must re-read the project: the view stays
+        // alive in the navigation stack, so `.task` does not run again and the
+        // list would keep showing the placeholder row for a session the agent
+        // has since indexed for real.
+        .onAppear {
+            guard hasLoadedOnce else {
+                hasLoadedOnce = true
+                return
+            }
+            Task { await model.refreshSelectedProject() }
+        }
     }
 }
