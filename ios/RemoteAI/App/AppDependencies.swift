@@ -106,6 +106,9 @@ public final class AppDependencies {
     /// logged or copied to app storage.
     public func bootstrapPairingIfRequested(arguments: [String] = CommandLine.arguments) async {
         guard !didAttemptLaunchPairing else { return }
+        let didRequestPairing =
+            arguments.contains("-RemoteAIPairingPayload")
+            || arguments.contains("-RemoteAIPairingFile")
         let payload: String?
         if arguments.contains("-RemoteAIPairingPayload") {
             // An explicitly supplied (but malformed/oversized) inline value
@@ -119,7 +122,9 @@ public final class AppDependencies {
             payload = nil
         }
         guard let payload, !payload.isEmpty, payload.utf8.count <= 64 * 1024 else {
-            launchPairingStatus = .failed
+            // A launch that never asked to pair has not failed at anything;
+            // only an explicit request with an unusable payload is a failure.
+            launchPairingStatus = didRequestPairing ? .failed : .idle
             return
         }
         didAttemptLaunchPairing = true

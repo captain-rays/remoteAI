@@ -64,6 +64,33 @@ public enum AppDependenciesSuite {
                 try expectEqual(await client.transferRequestCount, 0)
             },
 
+            TestCase("a launch that never asked to pair reports no pairing failure") {
+                let dependencies = await makeDependencies()
+                await dependencies.bootstrapPairingIfRequested(
+                    arguments: ["RemoteAI", "-UseMockAgent"]
+                )
+                try expectEqual(
+                    await dependencies.launchPairingStatus, .idle,
+                    "nothing was requested, so nothing failed"
+                )
+            },
+
+            TestCase("a requested but unusable payload is still reported as failed") {
+                let dependencies = await makeDependencies()
+                await dependencies.bootstrapPairingIfRequested(
+                    arguments: ["RemoteAI", "-RemoteAIPairingPayload", "-UseMockAgent"]
+                )
+                try expectEqual(await dependencies.launchPairingStatus, .failed)
+            },
+
+            TestCase("a requested but unreadable pairing file is reported as failed") {
+                let dependencies = await makeDependencies()
+                await dependencies.bootstrapPairingIfRequested(
+                    arguments: ["RemoteAI", "-RemoteAIPairingFile", "/definitely/not/a/file.json"]
+                )
+                try expectEqual(await dependencies.launchPairingStatus, .failed)
+            },
+
             TestCase("live dependencies are constructed on the main actor") {
                 let dependencies = await MainActor.run {
                     AppDependencies.live(arguments: ["RemoteAI"])
