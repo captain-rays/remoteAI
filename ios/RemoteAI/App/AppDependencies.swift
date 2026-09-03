@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Observation
 
@@ -31,6 +32,7 @@ public final class AppDependencies {
     public let usesEphemeralPairingStore: Bool
     public private(set) var launchPairingStatus: LaunchPairingStatus = .idle
     private var didAttemptLaunchPairing = false
+    private static var launchPairingTasks: [String: Task<Bool, Never>] = [:]
 
     public init(
         client: AgentClient,
@@ -103,11 +105,7 @@ public final class AppDependencies {
     /// is opt-in, bounded, and consumed only in memory; its contents are never
     /// logged or copied to app storage.
     public func bootstrapPairingIfRequested(arguments: [String] = CommandLine.arguments) async {
-        guard !didAttemptLaunchPairing else {
-            return
-        }
-        didAttemptLaunchPairing = true
-        launchPairingStatus = .requested
+        guard !didAttemptLaunchPairing else { return }
         let payload: String?
         if arguments.contains("-RemoteAIPairingPayload") {
             // An explicitly supplied (but malformed/oversized) inline value
@@ -124,8 +122,28 @@ public final class AppDependencies {
             launchPairingStatus = .failed
             return
         }
-        await pairing.pair(scannedText: payload)
-        if pairing.state == .paired {
+        didAttemptLaunchPairing = true
+        launchPairingStatus = .requested
+
+        // SwiftUI may instantiate more than one root dependency object while
+        // mounting the app. Share one in-flight result by payload digest so a
+        // second instance cannot replay a one-time secret and overwrite a
+        // successful state with HTTP 409.
+        let digest = SHA256.hash(data: Data(payload.utf8))
+        let key = digest.map { String(format: "%02x", $0) }.joined()
+        let task: Task<Bool, Never>
+        if let existing = Self.launchPairingTasks[key] {
+            task = existing
+        } else {
+            let created = Task { @MainActor [weak self] in
+                guard let self else { return false }
+                await self.pairing.pair(scannedText: payload)
+                return self.pairing.state == .paired
+            }
+            Self.launchPairingTasks[key] = created
+            task = created
+        }
+        if await task.value {
             // Keep the launch path observable even if a view has not yet
             // subscribed to PairingViewModel's callback.
             setConnectionState(.online)

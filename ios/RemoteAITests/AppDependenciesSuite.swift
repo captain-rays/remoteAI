@@ -130,7 +130,8 @@ public enum AppDependenciesSuite {
                 let service = RecordingPairingService()
                 let path = FileManager.default.temporaryDirectory
                     .appendingPathComponent("remoteai-pairing-\(UUID().uuidString).json")
-                try Data(PairingViewModelSuite.qr().utf8).write(to: path, options: .completeFileProtection)
+                try Data(PairingViewModelSuite.qr(secret: "file-bootstrap-secret").utf8)
+                    .write(to: path, options: .completeFileProtection)
                 defer { try? FileManager.default.removeItem(at: path) }
                 let dependencies = await MainActor.run {
                     AppDependencies(
@@ -167,13 +168,43 @@ public enum AppDependenciesSuite {
                 }
                 await dependencies.bootstrapPairingIfRequested(
                     arguments: [
-                        "RemoteAI", "-RemoteAIPairingPayload", PairingViewModelSuite.qr(),
+                        "RemoteAI", "-RemoteAIPairingPayload",
+                        PairingViewModelSuite.qr(secret: "inline-bootstrap-secret"),
                         "-RemoteAIPairingFile", "/definitely/not/read"
                     ]
                 )
                 try expectEqual(service.callCount, 1)
                 try expectTrue(await dependencies.appModel.isOnline)
                 try expectEqual(await dependencies.launchPairingStatus, .paired)
+            },
+
+            TestCase("duplicate dependency instances share one pairing attempt") {
+                let firstService = RecordingPairingService()
+                let secondService = RecordingPairingService()
+                let payload = PairingViewModelSuite.qr(secret: "shared-bootstrap-secret")
+                let first = await MainActor.run {
+                    AppDependencies(
+                        client: MockAgentClient(), preferences: InMemoryPreferencesStore(),
+                        cache: InMemoryCatalogCache(), store: InMemorySecretStore(),
+                        pairingService: firstService
+                    )
+                }
+                let second = await MainActor.run {
+                    AppDependencies(
+                        client: MockAgentClient(), preferences: InMemoryPreferencesStore(),
+                        cache: InMemoryCatalogCache(), store: InMemorySecretStore(),
+                        pairingService: secondService
+                    )
+                }
+                await first.bootstrapPairingIfRequested(
+                    arguments: ["RemoteAI", "-RemoteAIPairingPayload", payload]
+                )
+                await second.bootstrapPairingIfRequested(
+                    arguments: ["RemoteAI", "-RemoteAIPairingPayload", payload]
+                )
+                try expectEqual(firstService.callCount, 1)
+                try expectEqual(secondService.callCount, 0)
+                try expectEqual(await second.connectionState, .online)
             },
 
             TestCase("mock live dependencies start with the in-process agent online") {
