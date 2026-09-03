@@ -12,6 +12,9 @@ let package = Package(
     platforms: [.iOS(.v17), .macOS(.v14)],
     products: [
         .library(name: "RemoteAIKit", targets: ["RemoteAIKit"]),
+        // Exposed so the Xcode XCTest bundle can run the very same suites.
+        .library(name: "RemoteAITestKit", targets: ["RemoteAITestKit"]),
+        .library(name: "RemoteAISuites", targets: ["RemoteAISuites"]),
         .executable(name: "remoteai-tests", targets: ["RemoteAITestRunner"]),
     ],
     targets: [

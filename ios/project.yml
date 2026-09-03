@@ -1,0 +1,87 @@
+name: RemoteAI
+
+options:
+  bundleIdPrefix: live.jaco
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  minimumXcodeGenVersion: "2.38.0"
+
+packages:
+  RemoteAI:
+    path: .
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+
+targets:
+  # The application target contributes only the @main entry point; every other
+  # source file lives in the RemoteAIKit package so it can be built and tested
+  # without a simulator.
+  RemoteAI:
+    type: application
+    platform: iOS
+    sources:
+      - path: RemoteAI/App/RemoteAIApp.swift
+    dependencies:
+      - package: RemoteAI
+        product: RemoteAIKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: live.jaco.remoteai
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_CFBundleDisplayName: RemoteAI
+        INFOPLIST_KEY_NSCameraUsageDescription: >-
+          RemoteAI uses the camera once, to scan the pairing code shown on your Mac.
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: >-
+          UIInterfaceOrientationPortrait
+          UIInterfaceOrientationLandscapeLeft
+          UIInterfaceOrientationLandscapeRight
+
+  # Bridges the SwiftPM suites into XCTest. The suite bodies are shared, not
+  # duplicated: this bundle contains one file that runs RemoteAISuites.
+  RemoteAITests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: RemoteAIXCTests
+    dependencies:
+      - target: RemoteAI
+      - package: RemoteAI
+        product: RemoteAISuites
+      - package: RemoteAI
+        product: RemoteAITestKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: live.jaco.remoteai.tests
+        GENERATE_INFOPLIST_FILE: YES
+
+  RemoteAIUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: RemoteAIUITests
+    dependencies:
+      - target: RemoteAI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: live.jaco.remoteai.uitests
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  RemoteAI:
+    build:
+      targets:
+        RemoteAI: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - RemoteAITests
+        - RemoteAIUITests
