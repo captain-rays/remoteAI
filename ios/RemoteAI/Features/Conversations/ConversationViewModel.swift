@@ -159,6 +159,11 @@ public final class ConversationViewModel {
 
     // MARK: - Events
 
+    /// The realtime feed this screen consumes.
+    public func eventStream() async -> AsyncStream<EventEnvelope> {
+        await client.events
+    }
+
     @discardableResult
     public func handle(_ envelope: EventEnvelope) -> Bool {
         guard envelope.conversationId == conversation.id else { return false }

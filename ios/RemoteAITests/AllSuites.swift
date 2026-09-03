@@ -14,5 +14,6 @@ public enum AllSuites {
         TransferSuite.suite,
         PairingViewModelSuite.suite,
         SettingsViewModelSuite.suite,
+        AppDependenciesSuite.suite,
     ]
 }

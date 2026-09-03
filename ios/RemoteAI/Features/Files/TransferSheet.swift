@@ -1,0 +1,104 @@
+import SwiftUI
+
+/// Blocks a same-name upload until the user chooses. There is no default and
+/// no "remember this" — the destination is untouched while this sheet is open.
+@MainActor
+public struct TransferConflictSheet: View {
+    private let pending: PendingConflict
+    private let onResolve: (ConflictPolicy) -> Void
+    private let onCancel: () -> Void
+
+    public init(
+        pending: PendingConflict,
+        onResolve: @escaping (ConflictPolicy) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.pending = pending
+        self.onResolve = onResolve
+        self.onCancel = onCancel
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("A file with this name already exists")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(pending.conflict.existingPath)
+                    .font(.system(.footnote, design: .monospaced))
+                if let size = pending.conflict.existingSize {
+                    Text("\(size) bytes on the Mac")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Button("Keep both") { onResolve(.keepBoth) }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("conflict-keep-both")
+
+            Button("Overwrite", role: .destructive) { onResolve(.overwrite) }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("conflict-overwrite")
+
+            Button("Cancel this upload", role: .cancel) { onCancel() }
+                .accessibilityIdentifier("conflict-cancel")
+
+            Spacer()
+        }
+        .padding()
+        .accessibilityIdentifier("conflict-sheet")
+    }
+}
+
+@MainActor
+struct TransferRow: View {
+    let transfer: TransferState
+    let onCancel: () -> Void
+    let onRetry: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(
+                    systemName: transfer.direction == .upload
+                        ? "square.and.arrow.up" : "square.and.arrow.down"
+                )
+                Text(transfer.name)
+                Spacer()
+                Text(statusText).font(.caption).foregroundStyle(.secondary)
+            }
+            Text(transfer.destinationPath)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.head)
+
+            if transfer.status == .running {
+                ProgressView(value: transfer.progress.fraction)
+                Button("Cancel", action: onCancel)
+                    .accessibilityIdentifier("transfer-cancel")
+            }
+            if case .failed = transfer.status {
+                Button("Retry", action: onRetry)
+                    .accessibilityIdentifier("transfer-retry")
+            }
+            if let sha = transfer.sha256, transfer.status == .completed {
+                Text("sha256 \(String(sha.prefix(16)))…")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityIdentifier("transfer-\(transfer.id)")
+    }
+
+    private var statusText: String {
+        switch transfer.status {
+        case .awaitingDecision: return "needs a decision"
+        case .running: return "\(Int(transfer.progress.fraction * 100))%"
+        case .completed: return "done"
+        case .cancelled: return "cancelled"
+        case let .failed(reason): return "failed — \(reason)"
+        }
+    }
+}

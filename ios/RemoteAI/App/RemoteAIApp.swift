@@ -2,13 +2,15 @@ import SwiftUI
 
 /// Application entry point.
 ///
-/// This file is owned by the Xcode application target only; SwiftPM excludes it
+/// Owned by the Xcode application target only; SwiftPM excludes this file
 /// because `@main` cannot appear in a library target.
 @main
 struct RemoteAIApp: App {
+    @State private var dependencies = AppDependencies.live()
+
     var body: some Scene {
         WindowGroup {
-            Text(AppMetadata.name)
+            RootView(dependencies: dependencies)
         }
     }
 }
