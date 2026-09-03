@@ -274,6 +274,30 @@ async fn paired_device_keys_drive_gateway_session_crypto() {
     );
 }
 
+#[tokio::test]
+async fn provider_events_can_be_polled_without_another_request_frame() {
+    let state = state();
+    let claude = Arc::new(MockAdapter::new(ProviderId::Claude));
+    state.set_provider_adapters(vec![claude.clone()]).await;
+    let inbound = CryptoBox::new([9; 32], *b"IOS>");
+    let outbound = CryptoBox::new([9; 32], *b"MAC>");
+    let mut session =
+        GatewaySession::new(state, "phone-1", inbound.receiver(), outbound.clone()).await;
+    let conversation_id = claude
+        .start(ConversationKind::Daily, None)
+        .await
+        .unwrap();
+    claude
+        .send(&conversation_id, "async reply".into(), Vec::new())
+        .await
+        .unwrap();
+
+    let frames = session.poll_event_frames().await.unwrap();
+    assert!(!frames.is_empty());
+    let events = decode_frames(frames, &outbound);
+    assert!(events.iter().any(|value| value["kind"] == "event"));
+}
+
 #[test]
 fn business_router_does_not_add_plaintext_http_business_endpoint() {
     assert_eq!(StatusCode::UNAUTHORIZED, StatusCode::UNAUTHORIZED);
