@@ -318,6 +318,40 @@ async fn provider_events_can_be_polled_without_another_request_frame() {
     assert!(events.iter().any(|value| value["kind"] == "event"));
 }
 
+#[tokio::test]
+async fn provider_send_failure_returns_encrypted_error_and_keeps_session_alive() {
+    let state = state();
+    let adapter = Arc::new(MockAdapter::new(ProviderId::Claude));
+    state.set_provider_adapters(vec![adapter.clone()]).await;
+    let inbound = CryptoBox::new([10; 32], *b"IOS>");
+    let outbound = CryptoBox::new([10; 32], *b"MAC>");
+    let mut session =
+        GatewaySession::new(state, "phone-1", inbound.receiver(), outbound.clone()).await;
+    let frames = session
+        .handle_frame(&request_frame(
+            &inbound,
+            1,
+            "conversation.send",
+            json!({"provider":"claude","conversationId":"missing","text":"hello"}),
+        ))
+        .await
+        .unwrap();
+    let values = decode_frames(frames, &outbound);
+    assert_eq!(values[0]["type"], "error");
+    assert_eq!(values[0]["payload"]["code"], "provider_operation_failed");
+
+    adapter.emit_event(remote_ai_agent::protocol::ConversationEvent::Delta {
+        text: "still-connected".into(),
+    });
+    let event = tokio::time::timeout(std::time::Duration::from_secs(1), session.next_event())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let event_value = decode_frames(vec![event], &outbound).pop().unwrap();
+    assert_eq!(event_value["payload"]["text"], "still-connected");
+}
+
 #[test]
 fn business_router_does_not_add_plaintext_http_business_endpoint() {
     assert_eq!(StatusCode::UNAUTHORIZED, StatusCode::UNAUTHORIZED);

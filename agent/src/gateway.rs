@@ -675,7 +675,11 @@ async fn process_socket_message(
                 }
                 true
             }
-            Err(_) => {
+            Err(error) => {
+                eprintln!(
+                    "gateway websocket closing after frame rejection: {}",
+                    gateway_error_code(&error)
+                );
                 let _ = socket
                     .send(Message::Close(Some(axum::extract::ws::CloseFrame {
                         code: 1008,
@@ -687,6 +691,17 @@ async fn process_socket_message(
         },
         Message::Close(_) => false,
         Message::Pong(_) => true,
+    }
+}
+
+fn gateway_error_code(error: &GatewayBusinessError) -> &'static str {
+    match error {
+        GatewayBusinessError::Frame(_) => "frame_validation",
+        GatewayBusinessError::WrongDevice => "wrong_device",
+        GatewayBusinessError::InvalidPayload => "invalid_payload",
+        GatewayBusinessError::UnsupportedRequest => "unsupported_request",
+        GatewayBusinessError::ProviderUnavailable => "provider_unavailable",
+        GatewayBusinessError::Provider(_) => "provider_operation",
     }
 }
 
@@ -732,6 +747,8 @@ pub enum GatewayBusinessError {
     WrongDevice,
     #[error("request payload is invalid")]
     InvalidPayload,
+    #[error("request type is unsupported")]
+    UnsupportedRequest,
     #[error("provider is not registered")]
     ProviderUnavailable,
     #[error("provider operation failed: {0}")]
@@ -825,94 +842,96 @@ impl GatewaySession {
             .and_then(Value::as_str)
             .and_then(parse_provider)
             .ok_or(GatewayBusinessError::InvalidPayload)?;
-        let adapters = self.state.provider_adapters.read().await.clone();
-        let mut adapter = None;
-        for candidate in adapters {
-            if candidate.status().await.provider == provider {
-                adapter = Some(candidate);
-                break;
+        let operation: Result<(&str, Value), GatewayBusinessError> = async {
+            let adapters = self.state.provider_adapters.read().await.clone();
+            let mut adapter = None;
+            for candidate in adapters {
+                if candidate.status().await.provider == provider {
+                    adapter = Some(candidate);
+                    break;
+                }
             }
+            let adapter = adapter.ok_or(GatewayBusinessError::ProviderUnavailable)?;
+            Ok(match request.message_type.as_str() {
+                "conversation.start" => {
+                    let kind = parse_kind(&request.payload)?;
+                    let cwd = request
+                        .payload
+                        .get("cwd")
+                        .and_then(Value::as_str)
+                        .map(PathBuf::from);
+                    let id = adapter
+                        .start(kind, cwd)
+                        .await
+                        .map_err(|error| GatewayBusinessError::Provider(error.to_string()))?;
+                    (
+                        "conversation.start.result",
+                        serde_json::json!({"conversationId": id, "provider": provider}),
+                    )
+                }
+                "conversation.resume" => {
+                    let id = payload_string(&request.payload, "conversationId")?;
+                    adapter
+                        .resume(&id)
+                        .await
+                        .map_err(|error| GatewayBusinessError::Provider(error.to_string()))?;
+                    (
+                        "conversation.resume.result",
+                        serde_json::json!({"conversationId": id, "provider": provider}),
+                    )
+                }
+                "conversation.send" => {
+                    let id = payload_string(&request.payload, "conversationId")?;
+                    let text = payload_string(&request.payload, "text")?;
+                    adapter
+                        .send(&id, text, Vec::new())
+                        .await
+                        .map_err(|error| GatewayBusinessError::Provider(error.to_string()))?;
+                    (
+                        "conversation.send.result",
+                        serde_json::json!({"conversationId": id, "provider": provider}),
+                    )
+                }
+                "conversation.interrupt" => {
+                    let id = payload_string(&request.payload, "conversationId")?;
+                    adapter
+                        .interrupt(&id)
+                        .await
+                        .map_err(|error| GatewayBusinessError::Provider(error.to_string()))?;
+                    (
+                        "conversation.interrupt.result",
+                        serde_json::json!({"conversationId": id, "provider": provider}),
+                    )
+                }
+                "approval.decide" => {
+                    let id = payload_string(&request.payload, "requestId")?;
+                    let decision = request
+                        .payload
+                        .get("decision")
+                        .cloned()
+                        .ok_or(GatewayBusinessError::InvalidPayload)
+                        .and_then(|value| {
+                            serde_json::from_value::<ApprovalDecision>(value)
+                                .map_err(|_| GatewayBusinessError::InvalidPayload)
+                        })?;
+                    adapter
+                        .decide_approval(&id, decision)
+                        .await
+                        .map_err(|error| GatewayBusinessError::Provider(error.to_string()))?;
+                    (
+                        "approval.decide.result",
+                        serde_json::json!({"requestId": id, "provider": provider}),
+                    )
+                }
+                "provider.status" => (
+                    "provider.status.result",
+                    serde_json::to_value(adapter.status().await)
+                        .map_err(|_| GatewayBusinessError::InvalidPayload)?,
+                ),
+                _ => return Err(GatewayBusinessError::UnsupportedRequest),
+            })
         }
-        let adapter = adapter.ok_or(GatewayBusinessError::ProviderUnavailable)?;
-
-        let (response_type, payload) = match request.message_type.as_str() {
-            "conversation.start" => {
-                let kind = parse_kind(&request.payload)?;
-                let cwd = request
-                    .payload
-                    .get("cwd")
-                    .and_then(Value::as_str)
-                    .map(PathBuf::from);
-                let id = adapter
-                    .start(kind, cwd)
-                    .await
-                    .map_err(|error| GatewayBusinessError::Provider(error.to_string()))?;
-                (
-                    "conversation.start.result",
-                    serde_json::json!({"conversationId": id, "provider": provider}),
-                )
-            }
-            "conversation.resume" => {
-                let id = payload_string(&request.payload, "conversationId")?;
-                adapter
-                    .resume(&id)
-                    .await
-                    .map_err(|error| GatewayBusinessError::Provider(error.to_string()))?;
-                (
-                    "conversation.resume.result",
-                    serde_json::json!({"conversationId": id, "provider": provider}),
-                )
-            }
-            "conversation.send" => {
-                let id = payload_string(&request.payload, "conversationId")?;
-                let text = payload_string(&request.payload, "text")?;
-                adapter
-                    .send(&id, text, Vec::new())
-                    .await
-                    .map_err(|error| GatewayBusinessError::Provider(error.to_string()))?;
-                (
-                    "conversation.send.result",
-                    serde_json::json!({"conversationId": id, "provider": provider}),
-                )
-            }
-            "conversation.interrupt" => {
-                let id = payload_string(&request.payload, "conversationId")?;
-                adapter
-                    .interrupt(&id)
-                    .await
-                    .map_err(|error| GatewayBusinessError::Provider(error.to_string()))?;
-                (
-                    "conversation.interrupt.result",
-                    serde_json::json!({"conversationId": id, "provider": provider}),
-                )
-            }
-            "approval.decide" => {
-                let id = payload_string(&request.payload, "requestId")?;
-                let decision = request
-                    .payload
-                    .get("decision")
-                    .cloned()
-                    .ok_or(GatewayBusinessError::InvalidPayload)
-                    .and_then(|value| {
-                        serde_json::from_value::<ApprovalDecision>(value)
-                            .map_err(|_| GatewayBusinessError::InvalidPayload)
-                    })?;
-                adapter
-                    .decide_approval(&id, decision)
-                    .await
-                    .map_err(|error| GatewayBusinessError::Provider(error.to_string()))?;
-                (
-                    "approval.decide.result",
-                    serde_json::json!({"requestId": id, "provider": provider}),
-                )
-            }
-            "provider.status" => (
-                "provider.status.result",
-                serde_json::to_value(adapter.status().await)
-                    .map_err(|_| GatewayBusinessError::InvalidPayload)?,
-            ),
-            _ => return Err(GatewayBusinessError::InvalidPayload),
-        };
+        .await;
 
         let routing = RoutingMetadata {
             device_id: self.device_id.clone(),
@@ -921,6 +940,30 @@ impl GatewaySession {
                 .get("conversationId")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
+        };
+        let (response_type, payload) = match operation {
+            Ok(result) => result,
+            Err(error) => {
+                if matches!(error, GatewayBusinessError::UnsupportedRequest) {
+                    return Err(error);
+                }
+                let error_kind = match error {
+                    GatewayBusinessError::Provider(_) => "provider_operation_failed",
+                    GatewayBusinessError::ProviderUnavailable => "provider_unavailable",
+                    _ => "invalid_request",
+                };
+                return Ok(vec![self.encrypt_json(
+                    &routing,
+                    &serde_json::json!({
+                        "protocolVersion": crate::protocol::PROTOCOL_VERSION,
+                        "messageId": Uuid::new_v4(),
+                        "kind": "response",
+                        "requestId": request_id,
+                        "type": "error",
+                        "payload": {"code": error_kind},
+                    }),
+                )?]);
+            }
         };
         let mut outputs = vec![self.encrypt_json(
             &routing,
