@@ -22,6 +22,10 @@ public final class AppDependencies {
     public let pairing: PairingViewModel
     public let uploadFixture: UploadFixture?
     public let publicOrigin: String
+    /// Explicit pairing bootstrap is a simulator/development flow. Its
+    /// identity stays in-process so an unavailable simulator keychain cannot
+    /// prevent the one-shot smoke from reaching the paired state.
+    public let usesEphemeralPairingStore: Bool
     public private(set) var launchPairingStatus: LaunchPairingStatus = .idle
     private var didAttemptLaunchPairing = false
 
@@ -32,7 +36,8 @@ public final class AppDependencies {
         store: SecretStore,
         pairingService: PairingService,
         uploadFixture: UploadFixture? = nil,
-        publicOrigin: String = AppDependencies.defaultPublicOrigin
+        publicOrigin: String = AppDependencies.defaultPublicOrigin,
+        usesEphemeralPairingStore: Bool = false
     ) {
         self.appModel = AppModel(client: client, preferences: preferences, cache: cache)
         self.transfers = TransferCoordinator(client: client)
@@ -43,6 +48,7 @@ public final class AppDependencies {
         )
         self.uploadFixture = uploadFixture
         self.publicOrigin = publicOrigin
+        self.usesEphemeralPairingStore = usesEphemeralPairingStore
     }
 
     public static func live(arguments: [String] = CommandLine.arguments) -> AppDependencies {
@@ -51,7 +57,11 @@ public final class AppDependencies {
         let preferences: PreferencesStore =
             useMock ? InMemoryPreferencesStore() : UserDefaultsPreferencesStore()
         let cache: CatalogCache = useMock ? InMemoryCatalogCache() : FileCatalogCache()
-        let store: SecretStore = useMock ? InMemorySecretStore() : KeychainSecretStore()
+        let explicitPairing = arguments.contains("-RemoteAIPairingPayload")
+            || arguments.contains("-RemoteAIPairingFile")
+        let store: SecretStore = useMock || explicitPairing
+            ? InMemorySecretStore()
+            : KeychainSecretStore()
         let uploadFixture = arguments.contains("-UITestMockDocumentPicker")
             ? UploadFixture(name: "README.md", data: Data("# UI test fixture\n".utf8))
             : nil
@@ -72,7 +82,8 @@ public final class AppDependencies {
             store: store,
             pairingService: pairingService,
             uploadFixture: uploadFixture,
-            publicOrigin: publicOrigin
+            publicOrigin: publicOrigin,
+            usesEphemeralPairingStore: explicitPairing
         )
         dependencies.pairing.onPaired = { [weak dependencies] in
             dependencies?.setConnectionState(.online)

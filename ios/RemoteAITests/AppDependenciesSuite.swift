@@ -84,6 +84,17 @@ public enum AppDependenciesSuite {
                 )
             },
 
+            TestCase("explicit pairing bootstrap uses an ephemeral simulator store") {
+                let dependencies = await MainActor.run {
+                    AppDependencies.live(
+                        arguments: ["RemoteAI", "-RemoteAIPairingPayload", "{}"]
+                    )
+                }
+                try expectTrue(await dependencies.usesEphemeralPairingStore)
+                let production = await MainActor.run { AppDependencies.live(arguments: ["RemoteAI"]) }
+                try expectFalse(await production.usesEphemeralPairingStore)
+            },
+
             TestCase("pairing file launch argument is opt-in and parsed once") {
                 let url = URL(fileURLWithPath: "/tmp/remoteai-pairing.json")
                 try expectEqual(
