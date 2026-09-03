@@ -34,4 +34,13 @@ curl -fsS -X POST "$base/v1/pair" \
   -d '{"pairingSecret":"mock-secret","deviceId":"simulator","deviceLabel":"Simulator","devicePublicKey":[4,2]}' >/dev/null
 curl -fsS "$base/v1/conversations/daily?provider=codex" \
   -H 'x-remoteai-device: simulator' >/dev/null
+transfer_count=$(curl -fsS "$base/v1/mock/transfer-count")
+case "$transfer_count" in
+  *'"transferRequests":0'*) ;;
+  *)
+    printf '%s\n' 'mock Agent reported unexpected transfer requests while idle:' >&2
+    printf '%s\n' "$transfer_count" >&2
+    exit 1
+    ;;
+esac
 printf '%s\n' 'mock Agent e2e simulator passed (localhost-only; no automatic sync)'
