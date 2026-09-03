@@ -83,16 +83,19 @@ final class RealAgentConversationUITests: XCTestCase {
         let composer = app.textViews["composer"]
         XCTAssertTrue(composer.waitForExistence(timeout: 15))
         composer.tap()
-        composer.typeText("Reply with exactly: PONG")
+        composer.typeText("What is 2+2? Answer with one word.")
         app.buttons["send"].tap()
 
+        // Assert on an assistant bubble, not on text: the prompt itself would
+        // match any token we asked the model to echo.
+        let reply = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "assistant-message-"))
+            .firstMatch
         // A real turn goes out to the provider, so allow a generous window.
-        let reply = app.staticTexts.containing(
-            NSPredicate(format: "label CONTAINS[c] %@", "PONG")
-        ).firstMatch
         XCTAssertTrue(
             reply.waitForExistence(timeout: 120),
             "no assistant reply arrived from Claude"
         )
+        print("ASSISTANT_REPLY \(reply.debugDescription)")
     }
 }
