@@ -13,10 +13,16 @@ public struct FileBrowserView: View {
     @State private var isImporting = false
     @State private var isConfirmingReveal = false
     @State private var previewEntry: FileEntry?
+    private let uploadFixture: UploadFixture?
 
-    public init(model: FileBrowserViewModel, transfers: TransferCoordinator) {
+    public init(
+        model: FileBrowserViewModel,
+        transfers: TransferCoordinator,
+        uploadFixture: UploadFixture? = nil
+    ) {
         self.model = model
         self.transfers = transfers
+        self.uploadFixture = uploadFixture
     }
 
     public var body: some View {
@@ -61,6 +67,10 @@ public struct FileBrowserView: View {
                                 Task { await transfers.cancel(transfer.id) }
                             } onRetry: {
                                 Task { await transfers.retry(transfer.id) }
+                            } onResolveConflict: { policy in
+                                Task { await transfers.resolvePendingConflict(policy) }
+                            } onDiscardConflict: {
+                                Task { await transfers.discardPendingConflict() }
                             }
                         }
                     }
@@ -93,15 +103,6 @@ public struct FileBrowserView: View {
             .sheet(item: $previewEntry) { entry in
                 FilePreviewView(model: model, entry: entry)
             }
-            .sheet(isPresented: conflictBinding) {
-                if let conflict = transfers.pendingConflict {
-                    TransferConflictSheet(pending: conflict) { policy in
-                        Task { await transfers.resolvePendingConflict(policy) }
-                    } onCancel: {
-                        Task { await transfers.discardPendingConflict() }
-                    }
-                }
-            }
             .task { await model.loadInitialDirectory() }
         }
     }
@@ -128,7 +129,15 @@ public struct FileBrowserView: View {
             .accessibilityIdentifier("toggle-hidden")
 
             Button {
-                isImporting = true
+                if let uploadFixture, let directory = model.currentPath {
+                    // Tests still need an explicit tap, but do not depend on
+                    // SpringBoard's external document-picker process.
+                    beginUpload(
+                        name: uploadFixture.name, data: uploadFixture.data, to: directory
+                    )
+                } else {
+                    isImporting = true
+                }
             } label: {
                 Label("Upload a file…", systemImage: "square.and.arrow.up")
             }
@@ -167,15 +176,6 @@ public struct FileBrowserView: View {
         }
     }
 
-    private var conflictBinding: Binding<Bool> {
-        Binding(
-            get: { transfers.pendingConflict != nil },
-            set: { shown in
-                if !shown { Task { await transfers.discardPendingConflict() } }
-            }
-        )
-    }
-
     /// Called only from the `fileImporter` completion — i.e. after the user
     /// confirmed a file in the picker.
     private func handlePickedFile(_ result: Result<[URL], Error>) {
@@ -188,10 +188,12 @@ public struct FileBrowserView: View {
         defer { if needsScope { url.stopAccessingSecurityScopedResource() } }
         guard let data = try? Data(contentsOf: url) else { return }
 
+        beginUpload(name: url.lastPathComponent, data: data, to: directory)
+    }
+
+    private func beginUpload(name: String, data: Data, to directory: String) {
         Task {
-            await transfers.startUpload(
-                name: url.lastPathComponent, data: data, to: directory
-            )
+            await transfers.startUpload(name: name, data: data, to: directory)
         }
     }
 

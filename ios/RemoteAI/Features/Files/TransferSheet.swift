@@ -56,6 +56,22 @@ struct TransferRow: View {
     let transfer: TransferState
     let onCancel: () -> Void
     let onRetry: () -> Void
+    let onResolveConflict: (ConflictPolicy) -> Void
+    let onDiscardConflict: () -> Void
+
+    init(
+        transfer: TransferState,
+        onCancel: @escaping () -> Void,
+        onRetry: @escaping () -> Void,
+        onResolveConflict: @escaping (ConflictPolicy) -> Void,
+        onDiscardConflict: @escaping () -> Void
+    ) {
+        self.transfer = transfer
+        self.onCancel = onCancel
+        self.onRetry = onRetry
+        self.onResolveConflict = onResolveConflict
+        self.onDiscardConflict = onDiscardConflict
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -78,6 +94,24 @@ struct TransferRow: View {
                 ProgressView(value: transfer.progress.fraction)
                 Button("Cancel", action: onCancel)
                     .accessibilityIdentifier("transfer-cancel")
+            }
+            if transfer.status == .awaitingDecision {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("A file with this name already exists")
+                        .font(.caption)
+                    HStack {
+                        Button("Keep both") { onResolveConflict(.keepBoth) }
+                            .accessibilityIdentifier("conflict-keep-both")
+                        Button("Overwrite", role: .destructive) {
+                            onResolveConflict(.overwrite)
+                        }
+                        .accessibilityIdentifier("conflict-overwrite")
+                        Button("Cancel", role: .cancel, action: onDiscardConflict)
+                            .accessibilityIdentifier("conflict-cancel")
+                    }
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("conflict-sheet")
             }
             if case .failed = transfer.status {
                 Button("Retry", action: onRetry)

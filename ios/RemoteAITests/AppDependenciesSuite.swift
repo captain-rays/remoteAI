@@ -61,6 +61,15 @@ public enum AppDependenciesSuite {
                 }
                 try expectTrue(await dependencies.appModel.isOnline == false)
             },
+
+            TestCase("mock document picker can inject an explicit fixture") {
+                let dependencies = await MainActor.run {
+                    AppDependencies.live(
+                        arguments: ["RemoteAI", "-UseMockAgent", "-UITestMockDocumentPicker"]
+                    )
+                }
+                try expectEqual(await dependencies.uploadFixture?.name, "README.md")
+            },
         ]
     )
 }

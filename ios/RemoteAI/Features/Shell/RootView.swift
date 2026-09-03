@@ -30,7 +30,11 @@ public struct RootView: View {
                     .tabItem { Label("Projects", systemImage: "folder.badge.gearshape") }
                     .tag(Tab.projects)
 
-                FileBrowserView(model: dependencies.files, transfers: dependencies.transfers)
+                FileBrowserView(
+                    model: dependencies.files,
+                    transfers: dependencies.transfers,
+                    uploadFixture: dependencies.uploadFixture
+                )
                     .tabItem { Label("Files", systemImage: "externaldrive") }
                     .tag(Tab.files)
 

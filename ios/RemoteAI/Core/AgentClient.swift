@@ -52,6 +52,18 @@ public enum ConflictPolicy: String, Codable, Sendable, Hashable, CaseIterable {
     case overwrite
 }
 
+/// A deterministic upload selection used by UI tests. Production callers leave
+/// this nil so uploads continue through the system document picker.
+public struct UploadFixture: Sendable, Hashable {
+    public let name: String
+    public let data: Data
+
+    public init(name: String, data: Data) {
+        self.name = name
+        self.data = data
+    }
+}
+
 public struct TransferRequest: Sendable, Hashable {
     public let direction: TransferDirection
     public let name: String

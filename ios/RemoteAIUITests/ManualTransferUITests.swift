@@ -3,9 +3,12 @@ import XCTest
 /// NOT RUN on this Mac: XCUITest needs a simulator, which requires full Xcode.
 final class ManualTransferUITests: XCTestCase {
 
-    private func launchApp() -> XCUIApplication {
+    private func launchApp(useFixture: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-UseMockAgent"]
+        if useFixture {
+            app.launchArguments.append("-UITestMockDocumentPicker")
+        }
         app.launch()
         return app
     }
@@ -37,23 +40,27 @@ final class ManualTransferUITests: XCTestCase {
         app.buttons["open-work"].tap()
         app.buttons["open-api"].tap()
 
-        XCTAssertFalse(app.otherElements["transfer-local-1"].exists)
+        let transfer = app.descendants(matching: .any).matching(identifier: "transfer-local-1").firstMatch
+        XCTAssertFalse(transfer.exists)
         app.buttons["download-README.md"].tap()
-        XCTAssertTrue(app.otherElements["transfer-local-1"].waitForExistence(timeout: 5))
+        XCTAssertTrue(transfer.waitForExistence(timeout: 5))
     }
 
     func testSameNameUploadBlocksUntilAPolicyIsChosen() {
-        let app = launchApp()
+        let app = launchApp(useFixture: true)
         app.tabBars.buttons["Files"].tap()
         app.buttons["open-work"].tap()
         app.buttons["open-api"].tap()
         app.buttons["upload-button"].tap()
+        let uploadTransfer = app.descendants(matching: .any)
+            .matching(identifier: "transfer-local-1").firstMatch
+        XCTAssertTrue(uploadTransfer.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["needs a decision"].waitForExistence(timeout: 5))
 
-        // The document picker is driven by the springboard; the integration lane
-        // selects a fixture named README.md so the conflict path is taken.
-        let sheet = app.otherElements["conflict-sheet"]
-        XCTAssertTrue(sheet.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["conflict-keep-both"].exists)
+        // The injected fixture keeps this test deterministic while preserving
+        // the explicit upload-button tap required in production.
+        XCTAssertTrue(app.staticTexts["A file with this name already exists"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["conflict-keep-both"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["conflict-overwrite"].exists)
         XCTAssertTrue(
             app.buttons["conflict-cancel"].exists,
