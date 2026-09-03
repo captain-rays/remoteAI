@@ -8,5 +8,6 @@ public enum AllSuites {
         MockAgentClientSuite.suite,
         ConnectionSuite.suite,
         CryptoSuite.suite,
+        AppModelSuite.suite,
     ]
 }
