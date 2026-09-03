@@ -250,8 +250,24 @@ public struct PairingPayload: Codable, Sendable, Hashable {
         }
     }
 
+    /// `https` anywhere, or `http` only to the loopback interface.
+    ///
+    /// The agent binds 127.0.0.1 and is published over the tunnel as https, so
+    /// a loopback origin never puts a frame on a network. The host is compared
+    /// after parsing — never by prefix — so `http://127.0.0.1.evil.example.com`
+    /// is not mistaken for loopback.
+    static func isOriginAcceptable(_ origin: String) -> Bool {
+        guard let url = URL(string: origin), let scheme = url.scheme?.lowercased() else {
+            return false
+        }
+        if scheme == "https" { return true }
+        guard scheme == "http", var host = url.host?.lowercased() else { return false }
+        if host.hasPrefix("["), host.hasSuffix("]") { host = String(host.dropFirst().dropLast()) }
+        return host == "127.0.0.1" || host == "localhost" || host == "::1"
+    }
+
     public func validate(now: Date) throws {
-        guard origin.hasPrefix("https://") else { throw CryptoError.insecureOrigin }
+        guard PairingPayload.isOriginAcceptable(origin) else { throw CryptoError.insecureOrigin }
         guard now <= expiresAt else { throw CryptoError.pairingExpired }
         guard !macPublicKey.isEmpty, !pairingSecret.isEmpty else {
             throw CryptoError.malformedPairingPayload

@@ -277,6 +277,42 @@ public enum CryptoSuite {
                 try expectEqual(error as? CryptoError, .insecureOrigin)
             },
 
+            TestCase("a loopback http origin is accepted for local development") {
+                // The Mac agent binds 127.0.0.1 and is published over the
+                // tunnel as https. Talking to the loopback address directly
+                // never puts a frame on a network, so http is safe there —
+                // and it is the only way to pair against a local agent.
+                let now = ISO8601DateFormatter().date(from: "2026-09-03T10:00:00Z")!
+                for origin in [
+                    "http://127.0.0.1:8787", "http://localhost:8787", "http://[::1]:8787",
+                ] {
+                    let json = pairingJSON(expiresAt: "2026-09-03T10:05:00Z")
+                        .replacingOccurrences(of: "https://remoteai.example.com", with: origin)
+                    let payload = try PairingPayload.decode(json)
+                    try payload.validate(now: now)
+                }
+            },
+
+            TestCase("a non-loopback http origin is still rejected") {
+                let now = ISO8601DateFormatter().date(from: "2026-09-03T10:00:00Z")!
+                for origin in [
+                    "http://10.0.0.5:8787",
+                    "http://remoteai.example.com",
+                    // Must not be fooled by a hostname that merely starts with
+                    // a loopback-looking prefix.
+                    "http://127.0.0.1.evil.example.com",
+                    "http://localhost.evil.example.com",
+                ] {
+                    let json = pairingJSON(expiresAt: "2026-09-03T10:05:00Z")
+                        .replacingOccurrences(of: "https://remoteai.example.com", with: origin)
+                    let payload = try PairingPayload.decode(json)
+                    let error = try await expectThrows("\(origin) must be refused") {
+                        try payload.validate(now: now)
+                    }
+                    try expectEqual(error as? CryptoError, .insecureOrigin, origin)
+                }
+            },
+
             TestCase("malformed QR text is rejected without crashing") {
                 let error = try await expectThrows {
                     _ = try PairingPayload.decode("not json at all")
