@@ -1,0 +1,4 @@
+.build/
+.swiftpm/
+RemoteAI.xcodeproj/
+DerivedData/
