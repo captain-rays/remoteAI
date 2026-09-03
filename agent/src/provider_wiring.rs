@@ -8,6 +8,7 @@ impl GatewayState {
     /// Adapter instances remain owned by the caller; this method never persists
     /// credentials or conversation content.
     pub async fn set_provider_adapters(&self, adapters: Vec<Arc<dyn ProviderAdapter>>) {
+        *self.provider_adapters.write().await = adapters.clone();
         self.diagnostics.refresh_from_adapters(&adapters).await;
     }
 }

@@ -17,6 +17,7 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use crate::adapters::ProviderAdapter;
 use crate::audit::AuditLog;
 use crate::catalog::build_catalog;
 use crate::crypto::{CryptoError, CryptoReceiver};
@@ -41,6 +42,7 @@ pub struct GatewayState {
     pub sessions: Arc<RwLock<HashMap<ProviderId, Vec<ConversationSummary>>>>,
     pub file_root: Arc<RwLock<Option<FileService>>>,
     pub transfers: Arc<RwLock<Option<TransferManager>>>,
+    pub provider_adapters: Arc<RwLock<Vec<Arc<dyn ProviderAdapter>>>>,
     pub audit: AuditLog,
     pub diagnostics: Arc<Diagnostics>,
 }
@@ -53,6 +55,7 @@ impl GatewayState {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             file_root: Arc::new(RwLock::new(None)),
             transfers: Arc::new(RwLock::new(None)),
+            provider_adapters: Arc::new(RwLock::new(Vec::new())),
             audit: AuditLog::new(),
             diagnostics: Arc::new(Diagnostics::new(
                 crate::agent_name(),
