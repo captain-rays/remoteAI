@@ -373,6 +373,13 @@ impl ProviderAdapter for ClaudeAdapter {
     }
 
     async fn resume(&self, id: &str) -> anyhow::Result<()> {
+        // Only a session this agent knows may be resumed: an id from the phone
+        // must never turn into a CLI spawned for an arbitrary string.
+        anyhow::ensure!(
+            self.session_paths.read().await.contains_key(id)
+                || self.sessions.read().await.contains_key(id),
+            "session is not indexed"
+        );
         // Resume in the session's own project, so the resumed turns are stored
         // where the rest of that session lives.
         let cwd = self
@@ -390,13 +397,23 @@ impl ProviderAdapter for ClaudeAdapter {
     }
 
     async fn send(&self, id: &str, text: String, attachments: Vec<PathBuf>) -> anyhow::Result<()> {
-        let session = self
-            .sessions
-            .read()
-            .await
-            .get(id)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("session is not active"))?;
+        let existing = self.sessions.read().await.get(id).cloned();
+        let session = match existing {
+            Some(session) => session,
+            None => {
+                // The phone is writing to a conversation that already existed
+                // on the Mac. Resuming it here is what the user asked for by
+                // pressing send; the gateway has already checked that no other
+                // writer holds it.
+                self.resume(id).await?;
+                self.sessions
+                    .read()
+                    .await
+                    .get(id)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("session is not active"))?
+            }
+        };
         let mut content = text;
         if !attachments.is_empty() {
             content.push_str("\nExplicit attachments:\n");

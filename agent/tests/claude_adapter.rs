@@ -229,6 +229,51 @@ async fn a_started_project_session_runs_in_that_project_and_adopts_its_real_id()
 }
 
 #[tokio::test]
+async fn sending_to_an_indexed_session_resumes_it_instead_of_failing() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project-beta");
+    std::fs::create_dir_all(&project).unwrap();
+    let sessions = temp.path().join(".claude/projects/project-beta");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(
+        sessions.join("session-beta.jsonl"),
+        format!(
+            r#"{{"type":"user","sessionId":"session-beta","uuid":"u-1","cwd":"{}","message":{{"content":[{{"type":"text","text":"earlier"}}]}}}}"#,
+            project.display()
+        ),
+    )
+    .unwrap();
+
+    let stub = temp.path().join("fake-claude.sh");
+    std::fs::write(&stub, "#!/bin/sh\ncat > /dev/null\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    let adapter = ClaudeAdapter::new(&stub, temp.path());
+    adapter.list_conversations().await.unwrap();
+
+    // Nothing started this session in this agent run: the phone is picking up
+    // a conversation that already existed on the Mac.
+    adapter
+        .send("session-beta", "hello".into(), Vec::new())
+        .await
+        .expect("an indexed session must accept a message");
+
+    assert!(
+        adapter
+            .send("never-indexed", "hello".into(), Vec::new())
+            .await
+            .is_err(),
+        "an unknown conversation is still an error"
+    );
+}
+
+#[tokio::test]
 async fn a_started_project_session_rejects_a_directory_that_is_not_there() {
     use remote_ai_agent::adapters::ProviderAdapter;
     use remote_ai_agent::protocol::ConversationKind;
