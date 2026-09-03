@@ -130,7 +130,9 @@ public enum AppDependenciesSuite {
                 let service = RecordingPairingService()
                 let path = FileManager.default.temporaryDirectory
                     .appendingPathComponent("remoteai-pairing-\(UUID().uuidString).json")
-                try Data(PairingViewModelSuite.qr(secret: "file-bootstrap-secret").utf8)
+                try Data(PairingViewModelSuite.qr(
+                    expiresAt: "2099-09-03T10:05:00Z", secret: "file-bootstrap-secret"
+                ).utf8)
                     .write(to: path, options: .completeFileProtection)
                 defer { try? FileManager.default.removeItem(at: path) }
                 let dependencies = await MainActor.run {
@@ -169,7 +171,9 @@ public enum AppDependenciesSuite {
                 await dependencies.bootstrapPairingIfRequested(
                     arguments: [
                         "RemoteAI", "-RemoteAIPairingPayload",
-                        PairingViewModelSuite.qr(secret: "inline-bootstrap-secret"),
+                        PairingViewModelSuite.qr(
+                            expiresAt: "2099-09-03T10:05:00Z", secret: "inline-bootstrap-secret"
+                        ),
                         "-RemoteAIPairingFile", "/definitely/not/read"
                     ]
                 )
@@ -181,7 +185,9 @@ public enum AppDependenciesSuite {
             TestCase("duplicate dependency instances share one pairing attempt") {
                 let firstService = RecordingPairingService()
                 let secondService = RecordingPairingService()
-                let payload = PairingViewModelSuite.qr(secret: "shared-bootstrap-secret")
+                let payload = PairingViewModelSuite.qr(
+                    expiresAt: "2099-09-03T10:05:00Z", secret: "shared-bootstrap-secret"
+                )
                 let first = await MainActor.run {
                     AppDependencies(
                         client: MockAgentClient(), preferences: InMemoryPreferencesStore(),

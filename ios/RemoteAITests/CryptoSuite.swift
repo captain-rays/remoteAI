@@ -144,6 +144,19 @@ public enum CryptoSuite {
                 try expectFalse(RemoteAgentClient.shouldKeepSocket(after: completed))
             },
 
+            TestCase("response counters reset for each websocket connection") {
+                try expectTrue(
+                    RemoteAgentClient.responseCountersAreScopedToConnections(
+                        [[1, 2], [1]]
+                    )
+                )
+                try expectFalse(
+                    RemoteAgentClient.responseCountersAreScopedToConnections(
+                        [[1, 1], [1]]
+                    )
+                )
+            },
+
             TestCase("remote wire maps start DTO and authenticates frame routing") {
                 let response = RemoteAgentClient.StartResponse(
                     conversationId: "conv-1", provider: .codex

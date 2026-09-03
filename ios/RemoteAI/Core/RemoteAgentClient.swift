@@ -12,7 +12,6 @@ public actor RemoteAgentClient: AgentClient {
     private var socket: URLSessionWebSocketTask?
     private var keys: SessionKeys?
     private var sendCounter: UInt64 = 0
-    private var receiveGuard = ReplayGuard()
     private let continuation: AsyncStream<EventEnvelope>.Continuation
 
     public init(store: SecretStore, session: URLSession = .shared) {
@@ -35,6 +34,17 @@ public actor RemoteAgentClient: AgentClient {
     /// without making a network connection.
     public static func shouldKeepSocket(after event: EventEnvelope) -> Bool {
         event.rawType != "turn.completed" && event.rawType != "turn.failed"
+    }
+
+    /// Validates counters independently for each websocket connection. The
+    /// gateway starts outbound counters at one for every new connection.
+    public static func responseCountersAreScopedToConnections(
+        _ connections: [[UInt64]]
+    ) -> Bool {
+        connections.allSatisfy { counters in
+            var guardState = ReplayGuard()
+            return counters.allSatisfy { guardState.accept(counter: $0) }
+        }
     }
 
     public static func makeEncryptedFrame(
@@ -202,6 +212,7 @@ public actor RemoteAgentClient: AgentClient {
         waitForTurnCompletion: Bool = false
     ) async throws -> Response {
         let (identity, deviceId, phoneBox, macBox) = try connect()
+        var receiveGuard = ReplayGuard()
         guard let origin = URL(string: identity.origin), var components = URLComponents(url: origin, resolvingAgainstBaseURL: false) else {
             throw AgentClientError.invalidRequest("invalid paired origin")
         }
