@@ -34,6 +34,10 @@ impl MockAdapter {
     fn emit(&self, event: ConversationEvent) {
         let _ = self.events.send(event);
     }
+
+    pub fn emit_event(&self, event: ConversationEvent) {
+        self.emit(event);
+    }
 }
 
 #[async_trait]

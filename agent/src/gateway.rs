@@ -15,7 +15,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, mpsc};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -615,43 +615,78 @@ async fn websocket(
 }
 
 async fn websocket_loop(mut socket: WebSocket, mut session: GatewaySession) {
-    while let Some(Ok(message)) = socket.next().await {
-        match message {
-            Message::Ping(payload) => {
-                if socket.send(Message::Pong(payload)).await.is_err() {
-                    break;
+    let mut events_open = true;
+    loop {
+        let keep_running = if events_open {
+            tokio::select! {
+                maybe_message = socket.next() => {
+                    match maybe_message {
+                        Some(Ok(message)) => process_socket_message(&mut socket, &mut session, message).await,
+                        _ => false,
+                    }
+                }
+                next_event = session.next_event() => {
+                    match next_event {
+                        Ok(Some(output)) => socket.send(Message::Binary(output.into())).await.is_ok(),
+                        Ok(None) => {
+                            events_open = false;
+                            true
+                        }
+                        Err(_) => false,
+                    }
                 }
             }
-            Message::Text(_) => {
+        } else {
+            match socket.next().await {
+                Some(Ok(message)) => {
+                    process_socket_message(&mut socket, &mut session, message).await
+                }
+                _ => false,
+            }
+        };
+        if !keep_running {
+            break;
+        }
+    }
+}
+
+async fn process_socket_message(
+    socket: &mut WebSocket,
+    session: &mut GatewaySession,
+    message: Message,
+) -> bool {
+    match message {
+        Message::Ping(payload) => socket.send(Message::Pong(payload)).await.is_ok(),
+        Message::Text(_) => {
+            let _ = socket
+                .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                    code: 1008,
+                    reason: "plaintext business frames are forbidden".into(),
+                })))
+                .await;
+            false
+        }
+        Message::Binary(bytes) => match session.handle_frame(&bytes).await {
+            Ok(outputs) => {
+                for output in outputs {
+                    if socket.send(Message::Binary(output.into())).await.is_err() {
+                        return false;
+                    }
+                }
+                true
+            }
+            Err(_) => {
                 let _ = socket
                     .send(Message::Close(Some(axum::extract::ws::CloseFrame {
                         code: 1008,
-                        reason: "plaintext business frames are forbidden".into(),
+                        reason: "encrypted business frame rejected".into(),
                     })))
                     .await;
-                break;
+                false
             }
-            Message::Binary(bytes) => match session.handle_frame(&bytes).await {
-                Ok(outputs) => {
-                    for output in outputs {
-                        if socket.send(Message::Binary(output.into())).await.is_err() {
-                            return;
-                        }
-                    }
-                }
-                Err(_) => {
-                    let _ = socket
-                        .send(Message::Close(Some(axum::extract::ws::CloseFrame {
-                            code: 1008,
-                            reason: "encrypted business frame rejected".into(),
-                        })))
-                        .await;
-                    break;
-                }
-            },
-            Message::Close(_) => break,
-            Message::Pong(_) => {}
-        }
+        },
+        Message::Close(_) => false,
+        Message::Pong(_) => true,
     }
 }
 
@@ -711,7 +746,7 @@ pub struct GatewaySession {
     processor: FrameProcessor,
     outbound: CryptoBox,
     outbound_counter: u64,
-    event_receivers: HashMap<ProviderId, tokio::sync::broadcast::Receiver<ConversationEvent>>,
+    event_rx: mpsc::Receiver<(ProviderId, ConversationEvent)>,
 }
 
 impl GatewaySession {
@@ -722,20 +757,53 @@ impl GatewaySession {
         outbound: CryptoBox,
     ) -> Self {
         let adapters = state.provider_adapters.read().await.clone();
-        let mut receivers = HashMap::new();
+        let (event_tx, event_rx) = mpsc::channel(64);
         for adapter in adapters {
             let provider = adapter.status().await.provider;
-            let receiver = adapter.subscribe();
-            receivers.insert(provider, receiver);
+            let mut receiver = adapter.subscribe();
+            let sender = event_tx.clone();
+            tokio::spawn(async move {
+                loop {
+                    match receiver.recv().await {
+                        Ok(event) => {
+                            if sender.send((provider, event)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
         }
+        drop(event_tx);
         Self {
             state,
             device_id: device_id.into(),
             processor: FrameProcessor::new(inbound),
             outbound,
             outbound_counter: 0,
-            event_receivers: receivers,
+            event_rx,
         }
+    }
+
+    pub async fn next_event(&mut self) -> Result<Option<Vec<u8>>, GatewayBusinessError> {
+        let Some((_provider, event)) = self.event_rx.recv().await else {
+            return Ok(None);
+        };
+        let routing = RoutingMetadata {
+            device_id: self.device_id.clone(),
+            conversation_id: None,
+        };
+        self.encode_event(event, &routing).map(Some)
+    }
+
+    pub async fn poll_event_frames(&mut self) -> Result<Vec<Vec<u8>>, GatewayBusinessError> {
+        let routing = RoutingMetadata {
+            device_id: self.device_id.clone(),
+            conversation_id: None,
+        };
+        self.drain_pending_events(&routing).await
     }
 
     pub async fn handle_frame(
@@ -865,7 +933,7 @@ impl GatewaySession {
                 "payload": payload,
             }),
         )?];
-        outputs.extend(self.drain_events(provider, &routing).await?);
+        outputs.extend(self.drain_pending_events(&routing).await?);
         Ok(outputs)
     }
 
@@ -890,58 +958,56 @@ impl GatewaySession {
         .map_err(|_| GatewayBusinessError::InvalidPayload)
     }
 
-    async fn drain_events(
+    async fn drain_pending_events(
         &mut self,
-        provider: ProviderId,
         routing: &RoutingMetadata,
     ) -> Result<Vec<Vec<u8>>, GatewayBusinessError> {
-        let events = {
-            let Some(receiver) = self.event_receivers.get_mut(&provider) else {
-                return Ok(Vec::new());
-            };
-            let mut events = Vec::new();
-            while let Ok(event) = receiver.try_recv() {
-                events.push(event);
-            }
-            events
-        };
+        tokio::task::yield_now().await;
         let mut outputs = Vec::new();
-        for event in events {
-            let (message_type, payload) = event_parts(event);
-            let conversation_id = payload
-                .get("conversationId")
-                .and_then(Value::as_str)
-                .or(routing.conversation_id.as_deref())
-                .unwrap_or("unknown")
-                .to_owned();
-            let buffered = self
-                .state
-                .event_buffer
-                .lock()
-                .map_err(|_| GatewayBusinessError::InvalidPayload)?
-                .push(
-                    &conversation_id,
-                    serde_json::json!({"type": message_type, "payload": payload}),
-                );
-            let event_routing = RoutingMetadata {
-                device_id: routing.device_id.clone(),
-                conversation_id: Some(conversation_id.clone()),
-            };
-            outputs.push(self.encrypt_json(
-                &event_routing,
-                &serde_json::json!({
-                    "protocolVersion": crate::protocol::PROTOCOL_VERSION,
-                    "messageId": Uuid::new_v4(),
-                    "kind": "event",
-                    "requestId": Value::Null,
-                    "sequence": buffered.sequence,
-                    "conversationId": conversation_id,
-                    "type": message_type,
-                    "payload": buffered.payload["payload"].clone(),
-                }),
-            )?);
+        while let Ok((_provider, event)) = self.event_rx.try_recv() {
+            outputs.push(self.encode_event(event, routing)?);
         }
         Ok(outputs)
+    }
+
+    fn encode_event(
+        &mut self,
+        event: ConversationEvent,
+        routing: &RoutingMetadata,
+    ) -> Result<Vec<u8>, GatewayBusinessError> {
+        let (message_type, payload) = event_parts(event);
+        let conversation_id = payload
+            .get("conversationId")
+            .and_then(Value::as_str)
+            .or(routing.conversation_id.as_deref())
+            .unwrap_or("unknown")
+            .to_owned();
+        let buffered = self
+            .state
+            .event_buffer
+            .lock()
+            .map_err(|_| GatewayBusinessError::InvalidPayload)?
+            .push(
+                &conversation_id,
+                serde_json::json!({"type": message_type, "payload": payload}),
+            );
+        let event_routing = RoutingMetadata {
+            device_id: routing.device_id.clone(),
+            conversation_id: Some(conversation_id.clone()),
+        };
+        self.encrypt_json(
+            &event_routing,
+            &serde_json::json!({
+                "protocolVersion": crate::protocol::PROTOCOL_VERSION,
+                "messageId": Uuid::new_v4(),
+                "kind": "event",
+                "requestId": Value::Null,
+                "sequence": buffered.sequence,
+                "conversationId": conversation_id,
+                "type": message_type,
+                "payload": buffered.payload["payload"].clone(),
+            }),
+        )
     }
 }
 
