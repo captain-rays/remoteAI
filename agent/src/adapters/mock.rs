@@ -1,22 +1,24 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use chrono::Utc;
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::sync::{RwLock, broadcast};
 
 use super::{ConversationPage, ProviderAdapter};
 use crate::protocol::{
     ApprovalDecision, ConversationEvent, ConversationKind, ConversationSummary, ProviderId,
-    ProviderStatus,
+    ProviderStatus, WriteState,
 };
 
 pub struct MockAdapter {
     provider: ProviderId,
     next_id: AtomicU64,
     conversations: RwLock<HashMap<String, ConversationSummary>>,
+    histories: RwLock<HashMap<String, Vec<Value>>>,
+    busy: RwLock<HashSet<String>>,
     events: broadcast::Sender<ConversationEvent>,
 }
 
@@ -27,6 +29,8 @@ impl MockAdapter {
             provider,
             next_id: AtomicU64::new(1),
             conversations: RwLock::new(HashMap::new()),
+            histories: RwLock::new(HashMap::new()),
+            busy: RwLock::new(HashSet::new()),
             events,
         }
     }
@@ -37,6 +41,27 @@ impl MockAdapter {
 
     pub fn emit_event(&self, event: ConversationEvent) {
         self.emit(event);
+    }
+
+    pub async fn set_busy(&self, id: &str, busy: bool) {
+        let mut states = self.busy.write().await;
+        if busy {
+            states.insert(id.to_owned());
+        } else {
+            states.remove(id);
+        }
+        if let Some(summary) = self.conversations.write().await.get_mut(id) {
+            summary.write_state = Some(if busy {
+                WriteState::Busy
+            } else {
+                WriteState::Available
+            });
+            summary.write_block_code = busy.then(|| "session_busy".to_owned());
+        }
+    }
+
+    pub async fn set_history(&self, id: &str, events: Vec<Value>) {
+        self.histories.write().await.insert(id.to_owned(), events);
     }
 }
 
@@ -59,16 +84,30 @@ impl ProviderAdapter for MockAdapter {
     async fn load_conversation(
         &self,
         id: &str,
-        _cursor: Option<String>,
+        cursor: Option<String>,
     ) -> anyhow::Result<ConversationPage> {
         anyhow::ensure!(
             self.conversations.read().await.contains_key(id),
             "unknown conversation"
         );
+        let start = cursor
+            .as_deref()
+            .map(str::parse::<usize>)
+            .transpose()?
+            .unwrap_or(0);
+        let history = self
+            .histories
+            .read()
+            .await
+            .get(id)
+            .cloned()
+            .unwrap_or_default();
+        anyhow::ensure!(start <= history.len(), "history cursor out of range");
+        let end = (start + 1).min(history.len());
         Ok(ConversationPage {
             conversation_id: id.to_owned(),
-            events: Vec::new(),
-            next_cursor: None,
+            events: history[start..end].to_vec(),
+            next_cursor: (end < history.len()).then(|| end.to_string()),
         })
     }
 
@@ -151,6 +190,18 @@ impl ProviderAdapter for MockAdapter {
             json!({"conversationId": id}),
         ));
         Ok(())
+    }
+
+    async fn write_availability(&self, id: &str) -> anyhow::Result<WriteState> {
+        anyhow::ensure!(
+            self.conversations.read().await.contains_key(id),
+            "unknown conversation"
+        );
+        Ok(if self.busy.read().await.contains(id) {
+            WriteState::Busy
+        } else {
+            WriteState::Available
+        })
     }
 
     fn subscribe(&self) -> broadcast::Receiver<ConversationEvent> {

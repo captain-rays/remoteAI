@@ -56,6 +56,41 @@ fn json_rpc_response_ids_are_normalized_without_string_quotes() {
     assert_eq!(CodexAdapter::rpc_id_key(&json!(8)), "8");
 }
 
+#[test]
+fn maps_codex_thread_read_to_bounded_shared_history_events() {
+    let mapper = CodexMapper::new(PathBuf::from("/Users/test"));
+    let page = mapper
+        .map_thread_read(
+            include_str!("fixtures/codex/thread-read.jsonl"),
+            "project-1",
+            None,
+        )
+        .unwrap();
+    assert_eq!(page.conversation_id, "project-1");
+    assert!(page.next_cursor.is_some());
+    assert!(page.events.iter().any(|event| {
+        event["type"] == "conversation.user_message" && event["payload"]["text"] == "hello"
+    }));
+    assert!(page.events.iter().any(|event| {
+        event["type"] == "conversation.message_completed" && event["payload"]["text"] == "world"
+    }));
+    assert!(page.events.iter().any(|event| {
+        event["type"] == "conversation.reasoning_completed"
+            && event["payload"]["reasoningId"].is_string()
+    }));
+    assert!(
+        page.events
+            .iter()
+            .any(|event| event["type"] == "tool.started")
+    );
+    assert!(
+        !page
+            .events
+            .iter()
+            .any(|event| event.to_string().contains("apiKey"))
+    );
+}
+
 #[tokio::test]
 #[ignore = "read-only smoke test requires a locally authenticated Codex CLI"]
 async fn lists_real_codex_threads_without_modifying_them() {

@@ -6,6 +6,7 @@ use tokio::sync::broadcast;
 
 use crate::protocol::{
     ApprovalDecision, ConversationEvent, ConversationKind, ConversationSummary, ProviderStatus,
+    WriteState,
 };
 
 pub mod claude;
@@ -38,5 +39,20 @@ pub trait ProviderAdapter: Send + Sync {
         decision: ApprovalDecision,
     ) -> anyhow::Result<()>;
     async fn interrupt(&self, id: &str) -> anyhow::Result<()>;
+    /// Return the current write lease state for a conversation. Providers may
+    /// conservatively report `Busy` when external activity cannot be proven
+    /// absent. Read-only list/history calls remain available in all states.
+    async fn write_availability(&self, id: &str) -> anyhow::Result<WriteState> {
+        if !self.status().await.available {
+            return Ok(WriteState::Unavailable);
+        }
+        Ok(self
+            .list_conversations()
+            .await?
+            .into_iter()
+            .find(|summary| summary.id == id)
+            .and_then(|summary| summary.write_state)
+            .unwrap_or(WriteState::Available))
+    }
     fn subscribe(&self) -> broadcast::Receiver<ConversationEvent>;
 }

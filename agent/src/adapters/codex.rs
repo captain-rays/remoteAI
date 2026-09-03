@@ -15,7 +15,7 @@ use tokio::sync::{Mutex, RwLock, broadcast, oneshot};
 use super::{ConversationPage, ProviderAdapter};
 use crate::protocol::{
     ApprovalDecision, ConversationEvent, ConversationKind, ConversationSummary, ProviderId,
-    ProviderStatus,
+    ProviderStatus, WriteState,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +37,65 @@ impl CodexMapper {
     pub fn map_thread_list(&self, line: &str) -> anyhow::Result<Vec<ConversationSummary>> {
         let value: Value = serde_json::from_str(line)?;
         self.map_thread_list_value(value.get("result").unwrap_or(&value))
+    }
+
+    /// Normalize a Codex `thread/read` response into the provider-neutral
+    /// history representation.  The cursor is an opaque item offset; only
+    /// bounded, allow-listed fields are copied into the response.
+    pub fn map_thread_read(
+        &self,
+        line: &str,
+        conversation_id: &str,
+        cursor: Option<String>,
+    ) -> anyhow::Result<ConversationPage> {
+        let value: Value = serde_json::from_str(line)?;
+        self.map_thread_read_value(&value, conversation_id, cursor)
+    }
+
+    fn map_thread_read_value(
+        &self,
+        value: &Value,
+        conversation_id: &str,
+        cursor: Option<String>,
+    ) -> anyhow::Result<ConversationPage> {
+        let thread = value
+            .pointer("/result/thread")
+            .or_else(|| value.pointer("/thread"))
+            .ok_or_else(|| anyhow::anyhow!("thread/read response has no thread"))?;
+        let actual_id = thread.get("id").and_then(Value::as_str).unwrap_or_default();
+        anyhow::ensure!(
+            actual_id.is_empty() || actual_id == conversation_id,
+            "thread ID mismatch"
+        );
+        let mut normalized = Vec::new();
+        if let Some(turns) = thread.get("turns").and_then(Value::as_array) {
+            for (turn_index, turn) in turns.iter().enumerate() {
+                if let Some(items) = turn.get("items").and_then(Value::as_array) {
+                    for (item_index, item) in items.iter().enumerate() {
+                        normalized.extend(normalize_codex_item(
+                            conversation_id,
+                            turn_index,
+                            item_index,
+                            item,
+                        ));
+                    }
+                }
+            }
+        }
+        let start = cursor
+            .as_deref()
+            .map(|raw| raw.parse::<usize>())
+            .transpose()
+            .map_err(|_| anyhow::anyhow!("invalid history cursor"))?
+            .unwrap_or(0);
+        anyhow::ensure!(start <= normalized.len(), "history cursor out of range");
+        const PAGE_SIZE: usize = 6;
+        let end = (start + PAGE_SIZE).min(normalized.len());
+        Ok(ConversationPage {
+            conversation_id: conversation_id.to_owned(),
+            events: normalized[start..end].to_vec(),
+            next_cursor: (end < normalized.len()).then(|| end.to_string()),
+        })
     }
 
     fn map_thread_list_value(&self, result: &Value) -> anyhow::Result<Vec<ConversationSummary>> {
@@ -218,16 +277,7 @@ impl ProviderAdapter for CodexAdapter {
             .await?
             .call("thread/read", json!({"threadId": id, "includeTurns": true}))
             .await?;
-        let events = result
-            .pointer("/thread/turns")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        Ok(ConversationPage {
-            conversation_id: id.to_owned(),
-            events,
-            next_cursor: None,
-        })
+        self.mapper.map_thread_read_value(&result, id, _cursor)
     }
 
     async fn start(&self, _kind: ConversationKind, cwd: Option<PathBuf>) -> anyhow::Result<String> {
@@ -266,11 +316,27 @@ impl ProviderAdapter for CodexAdapter {
         input.extend(attachments.into_iter().map(
             |path| json!({"type":"text","text":format!("Explicit attachment: {}", path.display())}),
         ));
-        let result = self
-            .client()
-            .await?
+        self.active_turns
+            .write()
+            .await
+            .insert(id.to_owned(), "pending".into());
+        let client = match self.client().await {
+            Ok(client) => client,
+            Err(error) => {
+                self.active_turns.write().await.remove(id);
+                return Err(error);
+            }
+        };
+        let result = match client
             .call("turn/start", json!({"threadId": id, "input": input}))
-            .await?;
+            .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                self.active_turns.write().await.remove(id);
+                return Err(error);
+            }
+        };
         if let Some(turn_id) = result.pointer("/turn/id").and_then(Value::as_str) {
             self.active_turns
                 .write()
@@ -307,6 +373,14 @@ impl ProviderAdapter for CodexAdapter {
             .call("turn/interrupt", json!({"threadId": id, "turnId": turn_id}))
             .await?;
         Ok(())
+    }
+
+    async fn write_availability(&self, id: &str) -> anyhow::Result<WriteState> {
+        if self.active_turns.read().await.contains_key(id) {
+            Ok(WriteState::Busy)
+        } else {
+            Ok(WriteState::Available)
+        }
     }
 
     fn subscribe(&self) -> broadcast::Receiver<ConversationEvent> {
@@ -433,6 +507,83 @@ async fn track_turns(value: &Value, active: &RwLock<HashMap<String, String>>) {
             active.write().await.remove(thread_id);
         }
         _ => {}
+    }
+}
+
+fn normalize_codex_item(
+    conversation_id: &str,
+    turn_index: usize,
+    item_index: usize,
+    item: &Value,
+) -> Vec<Value> {
+    let stable_id = item
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("{conversation_id}:turn:{turn_index}:item:{item_index}"));
+    let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
+    let text = item
+        .get("text")
+        .and_then(Value::as_str)
+        .or_else(|| item.pointer("/content/0/text").and_then(Value::as_str));
+    match item_type {
+        "userMessage" | "user_message" | "user" => text
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| {
+                vec![json!({
+                    "type": "conversation.user_message",
+                    "payload": {"messageId": stable_id, "role": "user", "text": value}
+                })]
+            })
+            .unwrap_or_default(),
+        "agentMessage" | "agent_message" | "assistant" => text
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| {
+                vec![json!({
+                    "type": "conversation.message_completed",
+                    "payload": {"messageId": stable_id, "role": "assistant", "text": value}
+                })]
+            })
+            .unwrap_or_default(),
+        "reasoning" | "reasoningMessage" => text
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| {
+                vec![
+                    json!({
+                        "type": "conversation.reasoning_delta",
+                        "payload": {"reasoningId": stable_id, "text": value}
+                    }),
+                    json!({
+                        "type": "conversation.reasoning_completed",
+                        "payload": {"reasoningId": stable_id, "text": value}
+                    }),
+                ]
+            })
+            .unwrap_or_default(),
+        "commandExecution" | "command_execution" | "fileChange" | "file_change" | "tool" => {
+            let name = if item_type.to_ascii_lowercase().contains("command") {
+                "command"
+            } else if item_type.to_ascii_lowercase().contains("file") {
+                "file_change"
+            } else {
+                "tool"
+            };
+            vec![json!({
+                "type": "tool.started",
+                "payload": {"toolCallId": stable_id, "name": name, "detail": item.get("command").or_else(|| item.get("path"))}
+            })]
+        }
+        "turnCompleted" | "turn_completed" | "turn" => {
+            let failed = item
+                .get("status")
+                .and_then(Value::as_str)
+                .is_some_and(|status| matches!(status, "failed" | "error"));
+            vec![json!({
+                "type": if failed { "turn.failed" } else { "turn.completed" },
+                "payload": {"conversationId": conversation_id}
+            })]
+        }
+        _ => Vec::new(),
     }
 }
 

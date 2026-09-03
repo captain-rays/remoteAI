@@ -393,6 +393,128 @@ async fn provider_send_failure_returns_encrypted_error_and_keeps_session_alive()
     assert_eq!(event_value["payload"]["text"], "still-connected");
 }
 
+#[tokio::test]
+async fn busy_provider_session_returns_session_busy_without_starting_writer() {
+    let state = state();
+    let adapter = Arc::new(MockAdapter::new(ProviderId::Claude));
+    state.set_provider_adapters(vec![adapter.clone()]).await;
+    let inbound = CryptoBox::new([12; 32], *b"IOS>");
+    let outbound = CryptoBox::new([12; 32], *b"MAC>");
+    let mut session =
+        GatewaySession::new(state, "phone-1", inbound.receiver(), outbound.clone()).await;
+    let start = session
+        .handle_frame(&request_frame(
+            &inbound,
+            1,
+            "conversation.start",
+            json!({"provider":"claude","kind":"daily"}),
+        ))
+        .await
+        .unwrap();
+    let conversation_id = decode_frames(start, &outbound)
+        .into_iter()
+        .find_map(|value| {
+            (value["kind"] == "response").then(|| {
+                value["payload"]["conversationId"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+        })
+        .unwrap();
+    adapter.set_busy(&conversation_id, true).await;
+    let listed = adapter.list_conversations().await.unwrap();
+    assert_eq!(listed[0].write_block_code.as_deref(), Some("session_busy"));
+    let response = session
+        .handle_frame(&request_frame(
+            &inbound,
+            2,
+            "conversation.send",
+            json!({"provider":"claude","conversationId":conversation_id,"text":"blocked"}),
+        ))
+        .await
+        .unwrap();
+    let values = decode_frames(response, &outbound);
+    assert_eq!(values[0]["type"], "error");
+    assert_eq!(values[0]["payload"]["code"], "session_busy");
+}
+
+#[tokio::test]
+async fn encrypted_history_is_provider_scoped_and_cursor_paged() {
+    let state = state();
+    let claude = Arc::new(MockAdapter::new(ProviderId::Claude));
+    let codex = Arc::new(MockAdapter::new(ProviderId::Codex));
+    let claude_id = claude.start(ConversationKind::Daily, None).await.unwrap();
+    let codex_id = codex.start(ConversationKind::Daily, None).await.unwrap();
+    claude
+        .set_history(
+            &claude_id,
+            vec![
+                json!({"type":"conversation.user_message","payload":{"text":"claude-1"}}),
+                json!({"type":"conversation.message_completed","payload":{"text":"claude-2"}}),
+                json!({"type":"turn.completed","payload":{"conversationId":claude_id}}),
+            ],
+        )
+        .await;
+    codex
+        .set_history(
+            &codex_id,
+            vec![json!({"type":"conversation.user_message","payload":{"text":"codex-only"}})],
+        )
+        .await;
+    state.set_provider_adapters(vec![claude, codex]).await;
+    let inbound = CryptoBox::new([13; 32], *b"IOS>");
+    let outbound = CryptoBox::new([13; 32], *b"MAC>");
+    let mut session =
+        GatewaySession::new(state, "phone-1", inbound.receiver(), outbound.clone()).await;
+
+    let first = session
+        .handle_frame(&request_frame(
+            &inbound,
+            1,
+            "conversation.history",
+            json!({"provider":"claude","conversationId":claude_id}),
+        ))
+        .await
+        .unwrap();
+    let first_value = decode_frames(first, &outbound)
+        .into_iter()
+        .find(|value| value["kind"] == "response")
+        .unwrap();
+    assert_eq!(first_value["type"], "conversation.history.result");
+    assert_eq!(first_value["payload"]["conversationId"], claude_id);
+    assert!(
+        first_value["payload"]["events"]
+            .to_string()
+            .contains("claude-1")
+    );
+    assert!(
+        !first_value["payload"]["events"]
+            .to_string()
+            .contains("codex-only")
+    );
+    let cursor = first_value["payload"]["nextCursor"].as_str().unwrap();
+
+    let second = session
+        .handle_frame(&request_frame(
+            &inbound,
+            2,
+            "conversation.history",
+            json!({"provider":"claude","conversationId":claude_id,"cursor":cursor}),
+        ))
+        .await
+        .unwrap();
+    let second_value = decode_frames(second, &outbound)
+        .into_iter()
+        .find(|value| value["kind"] == "response")
+        .unwrap();
+    assert!(
+        second_value["payload"]["events"]
+            .to_string()
+            .contains("claude-2")
+    );
+}
+
 #[test]
 fn business_router_does_not_add_plaintext_http_business_endpoint() {
     assert_eq!(StatusCode::UNAUTHORIZED, StatusCode::UNAUTHORIZED);

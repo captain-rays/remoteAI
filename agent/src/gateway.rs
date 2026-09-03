@@ -31,7 +31,7 @@ use crate::files::FileService;
 use crate::pairing::{PairingError, PairingRegistry};
 use crate::protocol::{
     ApprovalDecision, ConversationEvent, ConversationKind, ConversationSummary, EnvelopeKind,
-    ProviderId, RequestEnvelope, validate_protocol_version,
+    ProviderId, RequestEnvelope, WriteState, validate_protocol_version,
 };
 use crate::transfers::{ConflictPolicy, TransferError, TransferManager};
 
@@ -702,6 +702,7 @@ fn gateway_error_code(error: &GatewayBusinessError) -> &'static str {
         GatewayBusinessError::UnsupportedRequest => "unsupported_request",
         GatewayBusinessError::ProviderUnavailable => "provider_unavailable",
         GatewayBusinessError::Provider(_) => "provider_operation",
+        GatewayBusinessError::SessionBusy => "session_busy",
     }
 }
 
@@ -753,6 +754,8 @@ pub enum GatewayBusinessError {
     ProviderUnavailable,
     #[error("provider operation failed: {0}")]
     Provider(String),
+    #[error("session has another active writer")]
+    SessionBusy,
 }
 
 /// Authenticated business dispatcher for one device WebSocket session.
@@ -854,6 +857,23 @@ impl GatewaySession {
                 }
             }
             let adapter = adapter.ok_or(GatewayBusinessError::ProviderUnavailable)?;
+            if matches!(
+                request.message_type.as_str(),
+                "conversation.resume" | "conversation.send"
+            ) {
+                let conversation_id = payload_string(&request.payload, "conversationId")?;
+                match adapter
+                    .write_availability(&conversation_id)
+                    .await
+                    .map_err(|error| GatewayBusinessError::Provider(error.to_string()))?
+                {
+                    WriteState::Busy => return Err(GatewayBusinessError::SessionBusy),
+                    WriteState::Unavailable => {
+                        return Err(GatewayBusinessError::ProviderUnavailable);
+                    }
+                    WriteState::Available => {}
+                }
+            }
             Ok(match request.message_type.as_str() {
                 "conversation.start" => {
                     let kind = parse_kind(&request.payload)?;
@@ -892,6 +912,27 @@ impl GatewaySession {
                     (
                         "conversation.send.result",
                         serde_json::json!({"conversationId": id, "provider": provider}),
+                    )
+                }
+                "conversation.history" => {
+                    let id = payload_string(&request.payload, "conversationId")?;
+                    let cursor = request
+                        .payload
+                        .get("cursor")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned);
+                    let page = adapter
+                        .load_conversation(&id, cursor)
+                        .await
+                        .map_err(|error| GatewayBusinessError::Provider(error.to_string()))?;
+                    (
+                        "conversation.history.result",
+                        serde_json::json!({
+                            "provider": provider,
+                            "conversationId": page.conversation_id,
+                            "events": page.events,
+                            "nextCursor": page.next_cursor,
+                        }),
                     )
                 }
                 "conversation.interrupt" => {
@@ -952,6 +993,7 @@ impl GatewaySession {
                 let error_kind = match error {
                     GatewayBusinessError::Provider(_) => "provider_operation_failed",
                     GatewayBusinessError::ProviderUnavailable => "provider_unavailable",
+                    GatewayBusinessError::SessionBusy => "session_busy",
                     _ => "invalid_request",
                 };
                 return Ok(vec![self.encrypt_json(
