@@ -10,5 +10,6 @@ public enum AllSuites {
         CryptoSuite.suite,
         AppModelSuite.suite,
         ConversationViewModelSuite.suite,
+        FileBrowserViewModelSuite.suite,
     ]
 }
