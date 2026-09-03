@@ -37,6 +37,8 @@ async fn main() -> anyhow::Result<()> {
                 project_path: None,
                 updated_at: Utc::now(),
                 status: "idle".into(),
+                write_state: None,
+                write_block_code: None,
             }],
         )
         .await;

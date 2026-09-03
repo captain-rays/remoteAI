@@ -20,6 +20,7 @@
         "transfers.create", "transfers.chunk", "transfers.finish", "transfers.cancel",
         "audit.list", "diagnostics.get", "device.revoke", "conversation.started",
         "conversation.user_message", "conversation.delta", "conversation.message_completed",
+        "conversation.reasoning_delta", "conversation.reasoning_completed",
         "tool.started", "tool.updated", "tool.completed", "approval.requested",
         "approval.resolved", "turn.completed", "turn.failed", "turn.interrupted",
         "provider.status_changed"

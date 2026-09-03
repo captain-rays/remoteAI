@@ -20,6 +20,8 @@ fn conversation(
         project_path: path.map(str::to_owned),
         updated_at: Utc.timestamp_opt(seconds, 0).single().unwrap(),
         status: "idle".into(),
+        write_state: None,
+        write_block_code: None,
     }
 }
 

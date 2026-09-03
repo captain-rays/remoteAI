@@ -96,6 +96,8 @@ impl ProviderAdapter for MockAdapter {
                 project_path,
                 updated_at: Utc::now(),
                 status: "idle".into(),
+                write_state: None,
+                write_block_code: None,
             },
         );
         self.emit(ConversationEvent::Started(json!({"conversationId": id})));

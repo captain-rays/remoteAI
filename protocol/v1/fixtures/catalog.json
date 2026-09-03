@@ -19,7 +19,9 @@
       "projectId": "codex:project-a",
       "projectPath": "/tmp/project-a",
       "updatedAt": "2026-09-03T00:00:00Z",
-      "status": "idle"
+      "status": "idle",
+      "writeState": "busy",
+      "writeBlockCode": "session_busy"
     }
   ]
 }

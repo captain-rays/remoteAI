@@ -89,6 +89,8 @@ async fn authenticated_catalog_route_exposes_only_requested_provider_daily_sessi
                 project_path: None,
                 updated_at: Utc::now(),
                 status: "idle".into(),
+                write_state: None,
+                write_block_code: None,
             }],
         )
         .await;
@@ -124,6 +126,8 @@ async fn project_conversations_route_filters_by_provider_and_project_id() {
                 project_path: Some("/tmp/project".into()),
                 updated_at: Utc::now(),
                 status: "idle".into(),
+                write_state: None,
+                write_block_code: None,
             }],
         )
         .await;

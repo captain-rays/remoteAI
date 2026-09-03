@@ -1101,6 +1101,12 @@ fn event_parts(event: ConversationEvent) -> (String, Value) {
         ConversationEvent::MessageCompleted(payload) => {
             ("conversation.message_completed".into(), payload)
         }
+        ConversationEvent::ReasoningDelta(payload) => {
+            ("conversation.reasoning_delta".into(), payload)
+        }
+        ConversationEvent::ReasoningCompleted(payload) => {
+            ("conversation.reasoning_completed".into(), payload)
+        }
         ConversationEvent::ToolStarted(payload) => ("tool.started".into(), payload),
         ConversationEvent::ToolUpdated(payload) => ("tool.updated".into(), payload),
         ConversationEvent::ToolCompleted(payload) => ("tool.completed".into(), payload),

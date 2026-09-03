@@ -1,6 +1,6 @@
 use remote_ai_agent::protocol::{
     ApprovalRequest, Catalog, ConversationEvent, EventEnvelope, FileEntry, ProtocolError,
-    ProviderId, ProviderStatus, validate_protocol_version,
+    ProviderId, ProviderStatus, WriteState, validate_protocol_version,
 };
 
 #[test]
@@ -16,6 +16,11 @@ fn decodes_shared_protocol_fixtures() {
         serde_json::from_str(include_str!("../../protocol/v1/fixtures/catalog.json")).unwrap();
     assert_eq!(catalog.projects.len(), 1);
     assert_eq!(catalog.conversations.len(), 1);
+    assert_eq!(catalog.conversations[0].write_state, Some(WriteState::Busy));
+    assert_eq!(
+        catalog.conversations[0].write_block_code.as_deref(),
+        Some("session_busy")
+    );
 
     let approval: ApprovalRequest = serde_json::from_str(include_str!(
         "../../protocol/v1/fixtures/approval-request.json"
@@ -41,6 +46,16 @@ fn unknown_events_are_explicitly_unsupported() {
     assert!(matches!(
         &lines[1].event,
         ConversationEvent::Unsupported { raw_type, .. } if raw_type == "future.event"
+    ));
+    assert!(matches!(
+        &lines[2].event,
+        ConversationEvent::ReasoningDelta(payload)
+            if payload["reasoningId"] == "reasoning-1" && payload["text"] == "checking"
+    ));
+    assert!(matches!(
+        &lines[3].event,
+        ConversationEvent::ReasoningCompleted(payload)
+            if payload["reasoningId"] == "reasoning-1" && payload["text"] == "checking"
     ));
 }
 

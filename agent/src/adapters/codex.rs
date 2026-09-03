@@ -81,6 +81,8 @@ impl CodexMapper {
                 .and_then(Value::as_str)
                 .unwrap_or("unknown")
                 .to_owned(),
+            write_state: None,
+            write_block_code: None,
         })
     }
 

@@ -22,6 +22,14 @@ pub enum ConversationKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum WriteState {
+    Available,
+    Busy,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ApprovalDecision {
     AllowOnce,
     Deny,
@@ -48,6 +56,10 @@ pub struct ConversationSummary {
     pub project_path: Option<String>,
     pub updated_at: DateTime<Utc>,
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write_state: Option<WriteState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write_block_code: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,6 +153,8 @@ pub enum ConversationEvent {
     Started(Value),
     UserMessage(Value),
     MessageCompleted(Value),
+    ReasoningDelta(Value),
+    ReasoningCompleted(Value),
     ToolStarted(Value),
     ToolUpdated(Value),
     ToolCompleted(Value),
@@ -196,6 +210,10 @@ impl<'de> Deserialize<'de> for EventEnvelope {
             "conversation.started" => ConversationEvent::Started(raw.payload),
             "conversation.user_message" => ConversationEvent::UserMessage(raw.payload),
             "conversation.message_completed" => ConversationEvent::MessageCompleted(raw.payload),
+            "conversation.reasoning_delta" => ConversationEvent::ReasoningDelta(raw.payload),
+            "conversation.reasoning_completed" => {
+                ConversationEvent::ReasoningCompleted(raw.payload)
+            }
             "tool.started" => ConversationEvent::ToolStarted(raw.payload),
             "tool.updated" => ConversationEvent::ToolUpdated(raw.payload),
             "tool.completed" => ConversationEvent::ToolCompleted(raw.payload),
