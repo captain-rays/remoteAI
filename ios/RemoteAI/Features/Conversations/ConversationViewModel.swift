@@ -36,6 +36,25 @@ public struct ToolItem: Identifiable, Sendable, Hashable {
     public internal(set) var status: String?
 }
 
+public struct ReasoningItem: Identifiable, Sendable, Hashable {
+    public let id: String
+    public internal(set) var text: String
+    public internal(set) var isStreaming: Bool
+    public var isExpanded: Bool
+
+    public init(
+        id: String,
+        text: String,
+        isStreaming: Bool,
+        isExpanded: Bool = false
+    ) {
+        self.id = id
+        self.text = text
+        self.isStreaming = isStreaming
+        self.isExpanded = isExpanded
+    }
+}
+
 public struct ErrorItem: Identifiable, Sendable, Hashable {
     public let id: String
     public let code: String
@@ -45,6 +64,7 @@ public struct ErrorItem: Identifiable, Sendable, Hashable {
 /// One row of the conversation transcript.
 public enum TimelineItem: Identifiable, Sendable, Hashable {
     case message(MessageItem)
+    case reasoning(ReasoningItem)
     case tool(ToolItem)
     case approval(ApprovalRequest)
     case error(ErrorItem)
@@ -52,6 +72,7 @@ public enum TimelineItem: Identifiable, Sendable, Hashable {
     public var id: String {
         switch self {
         case let .message(item): return "message:\(item.id)"
+        case let .reasoning(item): return "reasoning:\(item.id)"
         case let .tool(item): return "tool:\(item.id)"
         case let .approval(request): return "approval:\(request.id)"
         case let .error(item): return "error:\(item.id)"
@@ -95,6 +116,10 @@ public final class ConversationViewModel {
 
     public var tools: [ToolItem] {
         items.compactMap { if case let .tool(item) = $0 { return item } else { return nil } }
+    }
+
+    public var reasoning: [ReasoningItem] {
+        items.compactMap { if case let .reasoning(item) = $0 { return item } else { return nil } }
     }
 
     public var errors: [ErrorItem] {
@@ -251,6 +276,12 @@ public final class ConversationViewModel {
         case let .messageCompleted(payload):
             upsertMessage(payload, streaming: false, replaceText: true)
 
+        case let .reasoningDelta(payload):
+            upsertReasoning(payload, streaming: true, replaceText: false)
+
+        case let .reasoningCompleted(payload):
+            upsertReasoning(payload, streaming: false, replaceText: true)
+
         case let .toolStarted(payload), let .toolUpdated(payload), let .toolCompleted(payload):
             upsertTool(payload)
 
@@ -272,7 +303,7 @@ public final class ConversationViewModel {
             finishStreaming()
             appendError(code: failure.code, message: failure.message)
 
-        case .started, .reasoningDelta, .reasoningCompleted, .providerStatusChanged, .unsupported:
+        case .started, .providerStatusChanged, .unsupported:
             // Nothing to show in this transcript.
             break
         }
@@ -349,6 +380,29 @@ public final class ConversationViewModel {
         }
     }
 
+    private func upsertReasoning(
+        _ payload: ReasoningPayload,
+        streaming: Bool,
+        replaceText: Bool
+    ) {
+        if let index = items.firstIndex(where: { $0.id == "reasoning:\(payload.reasoningId)" }) {
+            guard case var .reasoning(item) = items[index] else { return }
+            item.text = replaceText ? payload.text : item.text + payload.text
+            item.isStreaming = streaming
+            items[index] = .reasoning(item)
+        } else {
+            items.append(
+                .reasoning(
+                    ReasoningItem(
+                        id: payload.reasoningId,
+                        text: payload.text,
+                        isStreaming: streaming
+                    )
+                )
+            )
+        }
+    }
+
     private func indexOfMessage(_ id: String) -> Int? {
         items.firstIndex { $0.id == "message:\(id)" }
     }
@@ -363,9 +417,16 @@ public final class ConversationViewModel {
         // The next turn's unlabelled deltas must start a new message.
         currentStreamId = nil
         for index in items.indices {
-            guard case var .message(item) = items[index], item.isStreaming else { continue }
-            item.isStreaming = false
-            items[index] = .message(item)
+            switch items[index] {
+            case var .message(item) where item.isStreaming:
+                item.isStreaming = false
+                items[index] = .message(item)
+            case var .reasoning(item) where item.isStreaming:
+                item.isStreaming = false
+                items[index] = .reasoning(item)
+            default:
+                continue
+            }
         }
     }
 

@@ -11,6 +11,7 @@ public enum AllSuites {
         CryptoSuite.suite,
         AppModelSuite.suite,
         ConversationViewModelSuite.suite,
+        TranscriptRendererSuite.suite,
         FileBrowserViewModelSuite.suite,
         TransferSuite.suite,
         PairingViewModelSuite.suite,

@@ -10,8 +10,12 @@ struct MessageBubble: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             HStack(spacing: 6) {
-                Text(item.text)
-                    .textSelection(.enabled)
+                if item.role == .assistant {
+                    TranscriptRenderer(markdown: item.text)
+                } else {
+                    Text(item.text)
+                        .textSelection(.enabled)
+                }
                 if item.isStreaming || item.deliveryState == .sending {
                     ProgressView().controlSize(.mini)
                 }
@@ -41,6 +45,36 @@ struct MessageBubble: View {
     }
     private var background: Color {
         item.role == .user ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.12)
+    }
+}
+
+@MainActor
+struct ReasoningRow: View {
+    let item: ReasoningItem
+    @State private var isExpanded: Bool
+
+    init(item: ReasoningItem) {
+        self.item = item
+        _isExpanded = State(initialValue: item.isExpanded)
+    }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            TranscriptRenderer(markdown: item.text)
+                .padding(.top, 6)
+        } label: {
+            HStack(spacing: 6) {
+                Label("Reasoning", systemImage: "brain")
+                    .font(.footnote.weight(.medium))
+                if item.isStreaming {
+                    ProgressView().controlSize(.mini)
+                }
+            }
+        }
+        .padding(8)
+        .background(Color.secondary.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .accessibilityIdentifier("reasoning-disclosure-\(item.id)")
     }
 }
 

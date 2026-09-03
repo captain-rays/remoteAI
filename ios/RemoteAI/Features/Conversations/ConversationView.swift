@@ -73,6 +73,8 @@ public struct ConversationView: View {
                     switch item {
                     case let .message(message):
                         MessageBubble(item: message)
+                    case let .reasoning(reasoning):
+                        ReasoningRow(item: reasoning)
                     case let .tool(tool):
                         ToolRow(item: tool)
                     case let .error(error):

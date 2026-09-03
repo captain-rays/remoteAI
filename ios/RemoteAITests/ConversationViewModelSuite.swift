@@ -76,6 +76,52 @@ public enum ConversationViewModelSuite {
                 try expectFalse(messages[0].isStreaming)
             },
 
+            TestCase("reasoning streams in place and is collapsed by default") {
+                let model = await makeViewModel()
+                await model.handle(
+                    event(
+                        1,
+                        "conversation.reasoning_delta",
+                        .reasoningDelta(ReasoningPayload(reasoningId: "r1", text: "First "))
+                    )
+                )
+                await model.handle(
+                    event(
+                        2,
+                        "conversation.reasoning_delta",
+                        .reasoningDelta(ReasoningPayload(reasoningId: "r1", text: "second"))
+                    )
+                )
+
+                let reasoning = try expectNotNil(await model.reasoning.first)
+                try expectEqual(reasoning.text, "First second")
+                try expectTrue(reasoning.isStreaming)
+                try expectFalse(reasoning.isExpanded)
+            },
+
+            TestCase("reasoning completion replaces text and stops streaming") {
+                let model = await makeViewModel()
+                await model.handle(
+                    event(
+                        1,
+                        "conversation.reasoning_delta",
+                        .reasoningDelta(ReasoningPayload(reasoningId: "r1", text: "partial"))
+                    )
+                )
+                await model.handle(
+                    event(
+                        2,
+                        "conversation.reasoning_completed",
+                        .reasoningCompleted(ReasoningPayload(reasoningId: "r1", text: "complete"))
+                    )
+                )
+
+                let reasoning = try expectNotNil(await model.reasoning.first)
+                try expectEqual(reasoning.text, "complete")
+                try expectFalse(reasoning.isStreaming)
+                try expectFalse(reasoning.isExpanded)
+            },
+
             TestCase("tool events appear once and update in place") {
                 let model = await makeViewModel()
                 await model.handle(
