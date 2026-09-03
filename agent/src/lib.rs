@@ -1,6 +1,8 @@
 pub mod config;
 pub mod crypto;
 pub mod discovery;
+pub mod event_buffer;
+pub mod gateway;
 pub mod pairing;
 pub mod protocol;
 pub mod store;
