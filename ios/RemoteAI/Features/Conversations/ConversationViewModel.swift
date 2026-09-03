@@ -96,16 +96,32 @@ public final class ConversationViewModel {
     public var isOnline = true
 
     private let client: AgentClient
+    private let cache: CatalogCache?
     private var sequencer = EventSequencer()
     private var historyCursor: String?
+    private var historyEvents: [EventEnvelope] = []
+    private var historyEventIds: Set<String> = []
     /// Deltas from the Rust agent carry no message id, so one turn's fragments
     /// are coalesced under a synthetic id that is cleared when the turn ends.
     private var currentStreamId: String?
     private var failedMessageId: String?
 
-    public init(conversation: ConversationSummary, client: AgentClient) {
+    public init(
+        conversation: ConversationSummary,
+        client: AgentClient,
+        cache: CatalogCache? = nil
+    ) {
         self.conversation = conversation
         self.client = client
+        self.cache = cache
+        if let cached = cache?.history(
+            provider: conversation.provider,
+            conversationId: conversation.id
+        ) {
+            mergeHistory(cached.events)
+            hasMoreHistory = cached.hasMore
+            historyCursor = cached.nextCursor
+        }
     }
 
     // MARK: - Derived views of the timeline
@@ -135,21 +151,48 @@ public final class ConversationViewModel {
     // MARK: - Commands
 
     public func loadHistory(limit: Int = 100) async {
+        await fetchHistory(cursor: nil, limit: limit)
+    }
+
+    public func loadMoreHistory(limit: Int = 100) async {
+        guard hasMoreHistory, let historyCursor else { return }
+        await fetchHistory(cursor: historyCursor, limit: limit)
+    }
+
+    public func refreshHistory(limit: Int = 100) async {
+        await fetchHistory(cursor: nil, limit: limit)
+    }
+
+    private func fetchHistory(cursor: String?, limit: Int) async {
         do {
             let page = try await client.history(
                 provider: conversation.provider,
                 conversationId: conversation.id,
-                cursor: historyCursor,
+                cursor: cursor,
                 limit: limit
             )
             hasMoreHistory = page.hasMore
             historyCursor = page.nextCursor
-            for envelope in page.events {
-                apply(envelope.event)
-                _ = sequencer.accept(envelope)
-            }
+            mergeHistory(page.events)
+            cache?.storeHistory(
+                HistorySnapshot(
+                    provider: conversation.provider,
+                    conversationId: conversation.id,
+                    events: historyEvents,
+                    hasMore: hasMoreHistory,
+                    nextCursor: historyCursor
+                )
+            )
         } catch {
             appendError(code: "history_failed", message: "\(error)")
+        }
+    }
+
+    private func mergeHistory(_ events: [EventEnvelope]) {
+        for envelope in events where envelope.conversationId == conversation.id {
+            guard historyEventIds.insert(envelope.messageId).inserted else { continue }
+            historyEvents.append(envelope)
+            apply(envelope.event)
         }
     }
 

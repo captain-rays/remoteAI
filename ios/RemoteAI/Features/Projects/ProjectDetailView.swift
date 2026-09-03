@@ -38,7 +38,8 @@ public struct ProjectDetailView: View {
                         ConversationView(
                             conversation: conversation,
                             client: model.client,
-                            isOnline: model.isOnline
+                            isOnline: model.isOnline,
+                            cache: model.transcriptCache
                         )
                     } label: {
                         ConversationRow(conversation: conversation)
@@ -48,6 +49,7 @@ public struct ProjectDetailView: View {
             }
         }
         .navigationTitle(project.title)
+        .refreshable { await model.refreshSelectedProject() }
         .toolbar {
             Button {
                 Task { _ = try? await model.startProjectConversation(in: project) }

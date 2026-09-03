@@ -13,9 +13,14 @@ public enum ConversationViewModelSuite {
     @MainActor
     static func makeViewModel(
         client: any AgentClient = MockAgentClient(),
-        online: Bool = true
+        online: Bool = true,
+        cache: CatalogCache? = nil
     ) -> ConversationViewModel {
-        let model = ConversationViewModel(conversation: conversation, client: client)
+        let model = ConversationViewModel(
+            conversation: conversation,
+            client: client,
+            cache: cache
+        )
         model.isOnline = online
         return model
     }
@@ -318,6 +323,110 @@ public enum ConversationViewModelSuite {
                 try expectFalse(await model.canStop, "a replayed completed turn is not running")
             },
 
+            TestCase("paged history merges in order and drops redelivered event ids") {
+                let duplicate = event(
+                    2,
+                    "conversation.message_completed",
+                    .messageCompleted(
+                        MessagePayload(messageId: "assistant-1", role: .assistant, text: "answer")
+                    )
+                )
+                let first = HistoryPage(
+                    events: [
+                        event(
+                            1,
+                            "conversation.user_message",
+                            .userMessage(
+                                MessagePayload(messageId: "user-1", role: .user, text: "question")
+                            )
+                        ),
+                        duplicate,
+                    ],
+                    hasMore: true,
+                    nextCursor: "page-2"
+                )
+                let second = HistoryPage(
+                    events: [
+                        duplicate,
+                        event(
+                            3,
+                            "conversation.reasoning_completed",
+                            .reasoningCompleted(
+                                ReasoningPayload(reasoningId: "reason-1", text: "checked")
+                            )
+                        ),
+                    ],
+                    hasMore: false,
+                    nextCursor: nil
+                )
+                let client = ControlledSendClient(mode: .history([first, second]))
+                let cache = InMemoryCatalogCache()
+                let model = await makeViewModel(client: client, cache: cache)
+
+                await model.loadHistory()
+                await model.loadMoreHistory()
+
+                try expectEqual(await model.messages.map(\.id), ["user-1", "assistant-1"])
+                try expectEqual(await model.reasoning.map(\.id), ["reason-1"])
+                try expectFalse(await model.hasMoreHistory)
+                let stored = try expectNotNil(
+                    cache.history(provider: .codex, conversationId: conversation.id)
+                )
+                try expectEqual(stored.events.map(\.messageId), [
+                    first.events[0].messageId,
+                    duplicate.messageId,
+                    second.events[1].messageId,
+                ])
+            },
+
+            TestCase("a conversation immediately restores cached history before refresh") {
+                let cache = InMemoryCatalogCache()
+                let cached = event(
+                    1,
+                    "conversation.user_message",
+                    .userMessage(
+                        MessagePayload(messageId: "cached-user", role: .user, text: "cached")
+                    )
+                )
+                cache.storeHistory(
+                    HistorySnapshot(
+                        provider: .codex,
+                        conversationId: conversation.id,
+                        events: [cached],
+                        hasMore: true,
+                        nextCursor: "cached-cursor"
+                    )
+                )
+
+                let model = await makeViewModel(cache: cache)
+
+                try expectEqual(await model.messages.map(\.id), ["cached-user"])
+                try expectTrue(await model.hasMoreHistory)
+            },
+
+            TestCase("opening cached history explicitly refreshes its first page") {
+                let cache = InMemoryCatalogCache()
+                cache.storeHistory(
+                    HistorySnapshot(
+                        provider: .codex,
+                        conversationId: conversation.id,
+                        events: [],
+                        hasMore: true,
+                        nextCursor: "cached-next-page"
+                    )
+                )
+                let client = ControlledSendClient(
+                    mode: .history([
+                        HistoryPage(events: [], hasMore: false, nextCursor: nil)
+                    ])
+                )
+                let model = await makeViewModel(client: client, cache: cache)
+
+                await model.loadHistory()
+
+                try expectEqual(await client.historyCursors, [nil])
+            },
+
             TestCase("opening and streaming a conversation issues no transfer request") {
                 let client = MockAgentClient()
                 let model = await makeViewModel(client: client)
@@ -334,6 +443,7 @@ private actor ControlledSendClient: AgentClient {
     enum Mode: Sendable {
         case suspended
         case failure(AgentClientError)
+        case history([HistoryPage])
     }
 
     nonisolated let events = AsyncStream<EventEnvelope> { continuation in
@@ -343,6 +453,8 @@ private actor ControlledSendClient: AgentClient {
     private let mode: Mode
     private var sendStarted = false
     private var sendContinuation: CheckedContinuation<Void, Never>?
+    private var historyIndex = 0
+    private(set) var historyCursors: [String?] = []
 
     init(mode: Mode) {
         self.mode = mode
@@ -364,6 +476,8 @@ private actor ControlledSendClient: AgentClient {
             await withCheckedContinuation { sendContinuation = $0 }
         case let .failure(error):
             throw error
+        case .history:
+            return
         }
     }
 
@@ -379,7 +493,14 @@ private actor ControlledSendClient: AgentClient {
     ) async throws -> [ConversationSummary] { throw AgentClientError.offline }
     func history(
         provider: ProviderId, conversationId: String, cursor: String?, limit: Int
-    ) async throws -> HistoryPage { throw AgentClientError.offline }
+    ) async throws -> HistoryPage {
+        guard case let .history(pages) = mode, historyIndex < pages.count else {
+            throw AgentClientError.offline
+        }
+        historyCursors.append(cursor)
+        defer { historyIndex += 1 }
+        return pages[historyIndex]
+    }
     func startConversation(
         provider: ProviderId, kind: ConversationKind, cwd: String?
     ) async throws -> ConversationSummary { throw AgentClientError.offline }

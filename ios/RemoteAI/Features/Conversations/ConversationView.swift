@@ -6,9 +6,18 @@ public struct ConversationView: View {
     @State private var draft = ""
     private let isOnline: Bool
 
-    public init(conversation: ConversationSummary, client: AgentClient, isOnline: Bool) {
+    public init(
+        conversation: ConversationSummary,
+        client: AgentClient,
+        isOnline: Bool,
+        cache: CatalogCache? = nil
+    ) {
         _model = State(
-            initialValue: ConversationViewModel(conversation: conversation, client: client)
+            initialValue: ConversationViewModel(
+                conversation: conversation,
+                client: client,
+                cache: cache
+            )
         )
         self.isOnline = isOnline
     }
@@ -69,6 +78,12 @@ public struct ConversationView: View {
     private var transcript: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
+                if model.hasMoreHistory {
+                    Button("Load more history") {
+                        Task { await model.loadMoreHistory() }
+                    }
+                    .accessibilityIdentifier("load-more-history")
+                }
                 ForEach(model.items) { item in
                     switch item {
                     case let .message(message):
@@ -87,6 +102,7 @@ public struct ConversationView: View {
             .padding()
         }
         .accessibilityIdentifier("transcript")
+        .refreshable { await model.refreshHistory() }
     }
 
     private var composer: some View {

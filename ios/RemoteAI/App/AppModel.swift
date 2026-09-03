@@ -30,7 +30,10 @@ public final class AppModel {
         self.cache = cache
         // First launch defaults to Codex; afterwards the last choice wins.
         self.selectedProvider = preferences.lastProvider ?? .codex
+        applyCachedSnapshot()
     }
+
+    public var transcriptCache: CatalogCache { cache }
 
     public var isOnline: Bool { connectionState.allowsMutation }
 
@@ -88,7 +91,9 @@ public final class AppModel {
                 CatalogSnapshot(
                     provider: provider,
                     dailyConversations: dailyConversations,
-                    projects: projects
+                    projects: projects,
+                    projectConversations:
+                        cache.snapshot(for: provider)?.projectConversations ?? [:]
                 )
             )
             lastErrorMessage = nil
@@ -115,8 +120,18 @@ public final class AppModel {
             return
         }
         selectedProject = project
-        projectConversations = []
+        projectConversations =
+            (cache.snapshot(for: selectedProvider)?.projectConversations[project.id] ?? [])
+            .filter { $0.provider == selectedProvider && $0.projectId == project.id }
 
+        guard isOnline else {
+            return
+        }
+        await refreshSelectedProject()
+    }
+
+    public func refreshSelectedProject() async {
+        guard let project = selectedProject, project.provider == selectedProvider else { return }
         guard isOnline else {
             applyCachedSnapshot()
             return
@@ -145,6 +160,7 @@ public final class AppModel {
                 projectConversations: byProject
             )
             cache.store(snapshot)
+            lastErrorMessage = nil
         } catch {
             lastErrorMessage = "\(error)"
         }

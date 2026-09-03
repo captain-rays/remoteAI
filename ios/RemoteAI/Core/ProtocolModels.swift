@@ -390,6 +390,46 @@ public struct ToolPayload: Codable, Sendable, Hashable {
         self.detail = detail
         self.status = status
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case toolCallId
+        case toolId
+        case id
+        case name
+        case detail
+        case text
+        case status
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let toolCallId = try container.decodeIfPresent(String.self, forKey: .toolCallId)
+            ?? container.decodeIfPresent(String.self, forKey: .toolId)
+            ?? container.decodeIfPresent(String.self, forKey: .id)
+        {
+            self.toolCallId = toolCallId
+        } else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.toolCallId,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "missing tool identifier"
+                )
+            )
+        }
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? "Tool"
+        detail = try container.decodeIfPresent(String.self, forKey: .detail)
+            ?? container.decodeIfPresent(String.self, forKey: .text)
+        status = try container.decodeIfPresent(String.self, forKey: .status)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(toolCallId, forKey: .toolCallId)
+        try container.encode(name, forKey: .name)
+        try container.encodeIfPresent(detail, forKey: .detail)
+        try container.encodeIfPresent(status, forKey: .status)
+    }
 }
 
 /// The Rust agent forwards the CLI's own result object here, which has no
@@ -699,6 +739,39 @@ public enum ProtocolCoding {
             rawType: rawType,
             event: decodeEventPayload(rawType: rawType, payload: payloadData)
         )
+    }
+
+    public static func encodeEvent(_ envelope: EventEnvelope) throws -> Data {
+        let payloadData: Data
+        switch envelope.event {
+        case let .started(payload): payloadData = try encoder.encode(payload)
+        case let .userMessage(payload), let .delta(payload), let .messageCompleted(payload):
+            payloadData = try encoder.encode(payload)
+        case let .reasoningDelta(payload), let .reasoningCompleted(payload):
+            payloadData = try encoder.encode(payload)
+        case let .toolStarted(payload), let .toolUpdated(payload), let .toolCompleted(payload):
+            payloadData = try encoder.encode(payload)
+        case let .approvalRequested(payload): payloadData = try encoder.encode(payload)
+        case let .approvalResolved(payload): payloadData = try encoder.encode(payload)
+        case let .turnCompleted(payload), let .turnInterrupted(payload):
+            payloadData = try encoder.encode(payload)
+        case let .turnFailed(payload): payloadData = try encoder.encode(payload)
+        case let .providerStatusChanged(payload): payloadData = try encoder.encode(payload)
+        case .unsupported:
+            payloadData = Data("{}".utf8)
+        }
+        let payload = try JSONSerialization.jsonObject(with: payloadData)
+        let object: [String: Any] = [
+            "protocolVersion": envelope.protocolVersion,
+            "messageId": envelope.messageId,
+            "kind": EnvelopeKind.event.rawValue,
+            "requestId": NSNull(),
+            "sequence": envelope.sequence,
+            "conversationId": (envelope.conversationId as Any?) ?? NSNull(),
+            "type": envelope.rawType,
+            "payload": payload,
+        ]
+        return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     }
 
     /// Maps a wire event type onto a typed case. Unknown types and undecodable

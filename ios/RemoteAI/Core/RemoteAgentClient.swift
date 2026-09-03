@@ -26,7 +26,18 @@ public actor RemoteAgentClient: AgentClient {
         guard ["http", "https"].contains(origin.scheme?.lowercased()), origin.host != nil,
             origin.user == nil, origin.password == nil
         else { throw AgentClientError.invalidRequest("invalid agent origin") }
-        return origin.appendingPathComponent(path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+        guard var components = URLComponents(url: origin, resolvingAgainstBaseURL: false) else {
+            throw AgentClientError.invalidRequest("invalid agent origin")
+        }
+        let base = components.percentEncodedPath.trimmingCharacters(
+            in: CharacterSet(charactersIn: "/")
+        )
+        let suffix = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        components.percentEncodedPath = "/" + [base, suffix].filter { !$0.isEmpty }.joined(separator: "/")
+        guard let endpoint = components.url else {
+            throw AgentClientError.invalidRequest("invalid agent path")
+        }
+        return endpoint
     }
 
     /// Streaming sends keep the socket alive for deltas and close only after
@@ -115,18 +126,147 @@ public actor RemoteAgentClient: AgentClient {
     }
 
     public func listDailyConversations(provider: ProviderId) async throws -> [ConversationSummary] {
-        try await rest("GET", path: "v1/conversations/daily", query: [.init(name: "provider", value: provider.rawValue)])
+        let conversations: [ConversationSummary] = try await rest(
+            "GET",
+            path: "v1/conversations/daily",
+            query: [.init(name: "provider", value: provider.rawValue)]
+        )
+        guard conversations.allSatisfy({ $0.provider == provider && $0.kind == .daily }) else {
+            throw AgentClientError.providerMismatch
+        }
+        return conversations
     }
 
     public func listProjects(provider: ProviderId) async throws -> [ProjectSummary] {
-        try await rest("GET", path: "v1/projects", query: [.init(name: "provider", value: provider.rawValue)])
+        let projects: [ProjectSummary] = try await rest(
+            "GET",
+            path: "v1/projects",
+            query: [.init(name: "provider", value: provider.rawValue)]
+        )
+        guard projects.allSatisfy({ $0.provider == provider }) else {
+            throw AgentClientError.providerMismatch
+        }
+        return projects
     }
 
     public func listProjectConversations(provider: ProviderId, projectId: String) async throws -> [ConversationSummary] {
-        try await rest("GET", path: "v1/projects/\(projectId)/conversations", query: [.init(name: "provider", value: provider.rawValue)])
+        var pathAllowed = CharacterSet.urlPathAllowed
+        pathAllowed.remove(charactersIn: "/%")
+        guard let encodedProjectId = projectId.addingPercentEncoding(withAllowedCharacters: pathAllowed)
+        else { throw AgentClientError.invalidRequest("invalid project id") }
+        let conversations: [ConversationSummary] = try await rest(
+            "GET",
+            path: "v1/projects/\(encodedProjectId)/conversations",
+            query: [.init(name: "provider", value: provider.rawValue)]
+        )
+        guard conversations.allSatisfy({
+            $0.provider == provider && $0.kind == .project && $0.projectId == projectId
+        }) else { throw AgentClientError.providerMismatch }
+        return conversations
     }
 
-    public func history(provider: ProviderId, conversationId: String, cursor: String?, limit: Int) async throws -> HistoryPage { throw AgentClientError.transport("history requires GatewaySession") }
+    private struct HistoryRequestPayload: Codable, Sendable {
+        let provider: ProviderId
+        let conversationId: String
+        let cursor: String?
+        let limit: Int
+    }
+
+    private struct HistoryResponse: Decodable, Sendable {
+        let conversationId: String
+        let events: [HistoryWireEvent]
+        let nextCursor: String?
+    }
+
+    private struct HistoryWireEvent: Decodable, Sendable {
+        let messageId: String?
+        let sequence: Int?
+        let conversationId: String?
+        let rawType: String
+        let event: ConversationEvent
+        let fingerprint: String
+
+        private enum CodingKeys: String, CodingKey {
+            case messageId, sequence, conversationId, type, payload
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            messageId = try container.decodeIfPresent(String.self, forKey: .messageId)
+            sequence = try container.decodeIfPresent(Int.self, forKey: .sequence)
+            conversationId = try container.decodeIfPresent(String.self, forKey: .conversationId)
+            rawType = try container.decode(String.self, forKey: .type)
+            let payload = try container.decode(JSONValue.self, forKey: .payload)
+            let payloadData = try payload.data()
+            event = ProtocolCoding.decodeEventPayload(rawType: rawType, payload: payloadData)
+            var fingerprintData = Data(rawType.utf8)
+            fingerprintData.append(0)
+            fingerprintData.append(payloadData)
+            fingerprint = SHA256.hash(data: fingerprintData).map { String(format: "%02x", $0) }.joined()
+        }
+    }
+
+    public static func decodeHistoryPage(
+        _ data: Data,
+        provider: ProviderId,
+        conversationId: String
+    ) throws -> HistoryPage {
+        let response = try ProtocolCoding.decoder.decode(HistoryResponse.self, from: data)
+        return try historyPage(
+            from: response,
+            provider: provider,
+            requestedConversationId: conversationId
+        )
+    }
+
+    private static func historyPage(
+        from response: HistoryResponse,
+        provider: ProviderId,
+        requestedConversationId: String
+    ) throws -> HistoryPage {
+        guard response.conversationId == requestedConversationId else {
+            throw AgentClientError.providerMismatch
+        }
+        let events = response.events.enumerated().map { index, wire in
+            EventEnvelope(
+                messageId: wire.messageId
+                    ?? "history-\(provider.rawValue)-\(requestedConversationId)-\(wire.fingerprint)",
+                sequence: wire.sequence ?? index + 1,
+                conversationId: wire.conversationId ?? requestedConversationId,
+                rawType: wire.rawType,
+                event: wire.event
+            )
+        }
+        return HistoryPage(
+            events: events,
+            hasMore: response.nextCursor != nil,
+            nextCursor: response.nextCursor
+        )
+    }
+
+    public func history(
+        provider: ProviderId,
+        conversationId: String,
+        cursor: String?,
+        limit: Int
+    ) async throws -> HistoryPage {
+        let response: HistoryResponse = try await request(
+            type: .conversationHistory,
+            conversationId: conversationId,
+            payload: HistoryRequestPayload(
+                provider: provider,
+                conversationId: conversationId,
+                cursor: cursor,
+                limit: limit
+            ),
+            response: HistoryResponse.self
+        )
+        return try Self.historyPage(
+            from: response,
+            provider: provider,
+            requestedConversationId: conversationId
+        )
+    }
 
     private struct StartPayload: Codable, Sendable { let provider: ProviderId; let kind: ConversationKind; let cwd: String? }
 
@@ -323,6 +463,52 @@ public actor RemoteAgentClient: AgentClient {
                 throw AgentClientError.transport(Self.socketFailureMessage(stage: "receive"))
             }
             return result
+        }
+    }
+}
+
+private enum JSONValue: Decodable, Sendable {
+    case object([String: JSONValue])
+    case array([JSONValue])
+    case string(String)
+    case number(Double)
+    case bool(Bool)
+    case null
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode([JSONValue].self) {
+            self = .array(value)
+        } else if let value = try? container.decode([String: JSONValue].self) {
+            self = .object(value)
+        } else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "unsupported JSON payload"
+            )
+        }
+    }
+
+    func data() throws -> Data {
+        try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    }
+
+    private var object: Any {
+        switch self {
+        case let .object(value): return value.mapValues(\.object)
+        case let .array(value): return value.map(\.object)
+        case let .string(value): return value
+        case let .number(value): return value
+        case let .bool(value): return value
+        case .null: return NSNull()
         }
     }
 }

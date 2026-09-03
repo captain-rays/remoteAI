@@ -9,6 +9,8 @@ public enum AllSuites {
         MockAgentClientSuite.suite,
         ConnectionSuite.suite,
         CryptoSuite.suite,
+        RemoteAgentClientSuite.suite,
+        CacheStoreSuite.suite,
         AppModelSuite.suite,
         ConversationViewModelSuite.suite,
         TranscriptRendererSuite.suite,

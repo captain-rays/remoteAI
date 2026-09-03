@@ -30,6 +30,69 @@ public enum AppModelSuite {
                 try expectEqual(await second.selectedProvider, .claude)
             },
 
+            TestCase("construction immediately restores the selected provider cache") {
+                let preferences = InMemoryPreferencesStore(lastProvider: .claude)
+                let cache = InMemoryCatalogCache()
+                let cached = ConversationSummary(
+                    id: "cached-claude",
+                    provider: .claude,
+                    kind: .daily,
+                    title: "Cached before refresh",
+                    updatedAt: Date(timeIntervalSince1970: 1_788_000_000),
+                    status: .idle
+                )
+                cache.store(
+                    CatalogSnapshot(
+                        provider: .claude,
+                        dailyConversations: [cached],
+                        projects: []
+                    )
+                )
+
+                let model = await makeModel(preferences: preferences, cache: cache)
+
+                try expectEqual(await model.dailyConversations, [cached])
+            },
+
+            TestCase("catalog refresh preserves cached sessions for projects not opened") {
+                let cache = InMemoryCatalogCache()
+                let project = ProjectSummary(
+                    id: "codex:/Users/dev/work/api",
+                    provider: .codex,
+                    canonicalPath: "/Users/dev/work/api",
+                    displayPath: "~/work/api",
+                    title: "api",
+                    updatedAt: Date(timeIntervalSince1970: 1_788_000_000),
+                    available: true
+                )
+                let cachedSession = ConversationSummary(
+                    id: "cached-project-session",
+                    provider: .codex,
+                    kind: .project,
+                    title: "Cached project session",
+                    projectId: project.id,
+                    projectPath: project.canonicalPath,
+                    updatedAt: Date(timeIntervalSince1970: 1_788_000_000),
+                    status: .idle
+                )
+                cache.store(
+                    CatalogSnapshot(
+                        provider: .codex,
+                        dailyConversations: [],
+                        projects: [project],
+                        projectConversations: [project.id: [cachedSession]]
+                    )
+                )
+                let model = await makeModel(cache: cache)
+                await model.setConnectionState(.online)
+
+                await model.reloadCatalog()
+                await model.setConnectionState(.disconnected)
+                await model.selectProject(project)
+
+                try expectEqual(await model.projectConversations, [cachedSession])
+            },
+
             TestCase("switching provider empties the visible lists before new data loads") {
                 let model = await makeModel()
                 await model.setConnectionState(.online)
@@ -89,6 +152,22 @@ public enum AppModelSuite {
                 try expectFalse(sessions.isEmpty)
                 try expectTrue(sessions.allSatisfy { $0.kind == .project })
                 try expectTrue(sessions.allSatisfy { $0.projectId == project.id })
+            },
+
+            TestCase("explicit project refresh stays within the selected provider and project") {
+                let client = MockAgentClient()
+                let model = await makeModel(client: client)
+                await model.setConnectionState(.online)
+                await model.reloadCatalog()
+                let project = try expectNotNil(await model.projects.first)
+                await model.selectProject(project)
+
+                await model.refreshSelectedProject()
+
+                let sessions = await model.projectConversations
+                try expectTrue(sessions.allSatisfy { $0.provider == project.provider })
+                try expectTrue(sessions.allSatisfy { $0.projectId == project.id })
+                try expectEqual(await client.transferRequestCount, 0)
             },
 
             TestCase("selecting a project is cleared when the provider changes") {
