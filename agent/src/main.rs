@@ -178,8 +178,7 @@ async fn main() -> anyhow::Result<()> {
     let store = Store::open(&config.state_dir).await?;
     let key = load_or_create_private_key(store.private_key_path())?;
     let public_key = key.public_key().to_encoded_point(false).as_bytes().to_vec();
-    let mut pairing =
-        PairingRegistry::new("mac-local", &format!("http://{}", config.bind), public_key);
+    let mut pairing = PairingRegistry::new("mac-local", &config.public_origin, public_key);
     let payload = pairing.issue(&Uuid::new_v4().to_string(), Utc::now());
     println!("pairing issued: {}", pairing_log_line(&payload)?);
 

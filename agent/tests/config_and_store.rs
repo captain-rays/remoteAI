@@ -1,6 +1,7 @@
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 
 use remote_ai_agent::config::AgentConfig;
 use remote_ai_agent::discovery::{discover_at, discover_provider};
@@ -8,19 +9,62 @@ use remote_ai_agent::protocol::ProviderId;
 use remote_ai_agent::store::Store;
 use tempfile::tempdir;
 
+fn with_public_origin_env<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+    let previous = std::env::var_os("REMOTEAI_PUBLIC_ORIGIN");
+    unsafe {
+        match value {
+            Some(value) => std::env::set_var("REMOTEAI_PUBLIC_ORIGIN", value),
+            None => std::env::remove_var("REMOTEAI_PUBLIC_ORIGIN"),
+        }
+    }
+    let result = f();
+    unsafe {
+        match previous {
+            Some(value) => std::env::set_var("REMOTEAI_PUBLIC_ORIGIN", value),
+            None => std::env::remove_var("REMOTEAI_PUBLIC_ORIGIN"),
+        }
+    }
+    result
+}
+
+#[test]
+fn public_origin_defaults_to_local_agent_url() {
+    with_public_origin_env(None, || {
+        assert_eq!(
+            AgentConfig::default().public_origin,
+            "http://127.0.0.1:8787"
+        );
+    });
+}
+
+#[test]
+fn public_origin_can_be_overridden_for_a_tunnel() {
+    with_public_origin_env(Some("https://tunnel.example"), || {
+        assert_eq!(
+            AgentConfig::default().public_origin,
+            "https://tunnel.example"
+        );
+    });
+}
+
 #[test]
 fn configuration_is_localhost_only_and_state_is_overrideable() {
-    let config = AgentConfig::default();
-    assert_eq!(config.bind.to_string(), "127.0.0.1:8787");
-    assert!(
-        config
-            .state_dir
-            .ends_with("Library/Application Support/RemoteAI")
-    );
+    with_public_origin_env(None, || {
+        let config = AgentConfig::default();
+        assert_eq!(config.bind.to_string(), "127.0.0.1:8787");
+        assert_eq!(config.public_origin, "http://127.0.0.1:8787");
+        assert!(
+            config
+                .state_dir
+                .ends_with("Library/Application Support/RemoteAI")
+        );
 
-    let temp = tempdir().unwrap();
-    let overridden = AgentConfig::with_state_dir(temp.path());
-    assert_eq!(overridden.state_dir, temp.path());
+        let temp = tempdir().unwrap();
+        let overridden = AgentConfig::with_state_dir(temp.path());
+        assert_eq!(overridden.state_dir, temp.path());
+    });
 }
 
 #[tokio::test]
