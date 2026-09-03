@@ -44,7 +44,7 @@ public final class AppDependencies {
         // Lane B ships against the mock agent by design. Integration replaces
         // this with a WebSocket-backed AgentClient driven by
         // ConnectionCoordinator + CryptoBox; nothing else in the app changes.
-        return AppDependencies(
+        let dependencies = AppDependencies(
             client: MockAgentClient(),
             preferences: preferences,
             cache: cache,
@@ -52,6 +52,12 @@ public final class AppDependencies {
             pairingService: MockPairingService(),
             uploadFixture: uploadFixture
         )
+        if useMock {
+            // The in-process mock has no pairing handshake or network hop.
+            // Keep production launches disconnected until an explicit pairing.
+            dependencies.setConnectionState(.online)
+        }
+        return dependencies
     }
 
     /// Propagates connectivity to every screen that must go read-only offline.

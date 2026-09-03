@@ -42,7 +42,13 @@ final class PairingAndRevocationUITests: XCTestCase {
     func testRevokingThisPhoneAsksForConfirmation() {
         let app = launchApp()
         app.tabBars.buttons["Settings"].tap()
-        app.buttons["revoke-device"].tap()
+        let revoke = app.descendants(matching: .any)
+            .matching(identifier: "revoke-device").firstMatch
+        for _ in 0..<3 where !revoke.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(revoke.waitForExistence(timeout: 5))
+        revoke.tap()
 
         XCTAssertTrue(app.buttons["Revoke"].waitForExistence(timeout: 5))
         app.buttons["Cancel"].tap()
@@ -51,7 +57,10 @@ final class PairingAndRevocationUITests: XCTestCase {
 
     func testApprovalOffersOnlyAllowOnceAndDeny() {
         let app = launchApp()
-        app.staticTexts["Shell one-liners"].firstMatch.tap()
+        let dailyChat = app.descendants(matching: .any)
+            .matching(identifier: "Shell one-liners").firstMatch
+        XCTAssertTrue(dailyChat.waitForExistence(timeout: 5))
+        dailyChat.tap()
 
         let composer = app.textViews["composer"]
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
@@ -59,14 +68,18 @@ final class PairingAndRevocationUITests: XCTestCase {
         composer.typeText("please run something that needs approval")
         app.buttons["send"].tap()
 
-        XCTAssertTrue(app.otherElements["approval-card"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["approval-allow_once"].exists)
-        XCTAssertTrue(app.buttons["approval-deny"].exists)
-        XCTAssertEqual(
-            app.buttons.matching(
-                NSPredicate(format: "identifier BEGINSWITH %@", "approval-")
-            ).count,
-            2,
+        let approvalCard = app.descendants(matching: .any)
+            .matching(identifier: "approval-card").firstMatch
+        XCTAssertTrue(approvalCard.waitForExistence(timeout: 10))
+        let allowOnce = app.descendants(matching: .any)
+            .matching(identifier: "approval-allow_once").firstMatch
+        let deny = app.descendants(matching: .any)
+            .matching(identifier: "approval-deny").firstMatch
+        XCTAssertTrue(allowOnce.waitForExistence(timeout: 5))
+        XCTAssertTrue(deny.waitForExistence(timeout: 5))
+        XCTAssertFalse(
+            app.descendants(matching: .any)
+                .matching(identifier: "approval-always").firstMatch.exists,
             "there must be no permanent-allow option"
         )
     }

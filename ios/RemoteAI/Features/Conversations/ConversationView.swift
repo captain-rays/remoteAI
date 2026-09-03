@@ -30,6 +30,10 @@ public struct ConversationView: View {
         .task {
             model.isOnline = isOnline
             await model.loadHistory()
+        }
+        .task {
+            // Subscribe independently so a send cannot race the history load
+            // and publish events before the realtime consumer is attached.
             await consumeEvents()
         }
         .onChange(of: isOnline) { _, newValue in model.isOnline = newValue }

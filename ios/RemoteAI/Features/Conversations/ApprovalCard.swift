@@ -68,6 +68,7 @@ public struct ApprovalCard: View {
         .padding()
         .background(Color.secondary.opacity(0.1))
         .clipShape(RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("approval-card")
     }
 }

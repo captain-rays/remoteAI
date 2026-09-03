@@ -62,6 +62,15 @@ public enum AppDependenciesSuite {
                 try expectTrue(await dependencies.appModel.isOnline == false)
             },
 
+            TestCase("mock live dependencies start with the in-process agent online") {
+                let dependencies = await MainActor.run {
+                    AppDependencies.live(arguments: ["RemoteAI", "-UseMockAgent"])
+                }
+                try expectTrue(await dependencies.appModel.isOnline)
+                try expectTrue(await dependencies.files.isOnline)
+                try expectTrue(await dependencies.transfers.isOnline)
+            },
+
             TestCase("mock document picker can inject an explicit fixture") {
                 let dependencies = await MainActor.run {
                     AppDependencies.live(

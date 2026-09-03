@@ -22,14 +22,18 @@ final class ProviderSeparationUITests: XCTestCase {
     func testSwitchingToClaudeLeavesNoCodexRow() {
         let app = launchApp()
 
-        let codexChat = app.staticTexts["Shell one-liners"]
+        let codexChat = app.descendants(matching: .any)
+            .matching(identifier: "Shell one-liners").firstMatch
         XCTAssertTrue(codexChat.waitForExistence(timeout: 5))
 
         app.segmentedControls["provider-switcher"].buttons["Claude"].tap()
 
-        XCTAssertTrue(app.staticTexts["Trip planning"].waitForExistence(timeout: 5))
+        let claudeChat = app.descendants(matching: .any)
+            .matching(identifier: "Trip planning").firstMatch
+        XCTAssertTrue(claudeChat.waitForExistence(timeout: 5))
         XCTAssertFalse(
-            app.staticTexts["Shell one-liners"].exists,
+            app.descendants(matching: .any)
+                .matching(identifier: "Shell one-liners").firstMatch.exists,
             "a Codex chat must not survive the switch to Claude"
         )
     }
@@ -38,13 +42,22 @@ final class ProviderSeparationUITests: XCTestCase {
         let app = launchApp()
         app.tabBars.buttons["Projects"].tap()
 
-        XCTAssertTrue(app.staticTexts["Fix hero layout"].waitForExistence(timeout: 5) == false)
-        XCTAssertTrue(app.staticTexts["api"].waitForExistence(timeout: 5))
+        XCTAssertFalse(
+            app.descendants(matching: .any)
+                .matching(identifier: "Fix hero layout").firstMatch.waitForExistence(timeout: 5)
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)
+                .matching(identifier: "api").firstMatch.waitForExistence(timeout: 5)
+        )
 
         app.segmentedControls["provider-switcher"].buttons["Claude"].tap()
-        XCTAssertTrue(app.staticTexts["notes"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.descendants(matching: .any)
+                .matching(identifier: "notes").firstMatch.waitForExistence(timeout: 5)
+        )
         XCTAssertFalse(
-            app.staticTexts["site"].exists,
+            app.descendants(matching: .any).matching(identifier: "site").firstMatch.exists,
             "the Codex-only project must not appear under Claude"
         )
     }
@@ -52,22 +65,33 @@ final class ProviderSeparationUITests: XCTestCase {
     func testProjectShowsOnlyItsOwnSessions() {
         let app = launchApp()
         app.tabBars.buttons["Projects"].tap()
-        app.staticTexts["api"].firstMatch.tap()
+        app.descendants(matching: .any).matching(identifier: "api").firstMatch.tap()
 
-        XCTAssertTrue(app.staticTexts["Refactor router"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.descendants(matching: .any)
+                .matching(identifier: "Refactor router").firstMatch.waitForExistence(timeout: 5)
+        )
         XCTAssertFalse(
-            app.staticTexts["Fix hero layout"].exists,
+            app.descendants(matching: .any)
+                .matching(identifier: "Fix hero layout").firstMatch.exists,
             "another project's session must not appear here"
         )
         XCTAssertFalse(
-            app.staticTexts["Shell one-liners"].exists,
+            app.descendants(matching: .any)
+                .matching(identifier: "Shell one-liners").firstMatch.exists,
             "a daily chat must not appear inside a project"
         )
     }
 
     func testDailyTabNeverShowsProjectSessions() {
         let app = launchApp()
-        XCTAssertTrue(app.staticTexts["Shell one-liners"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.staticTexts["Refactor router"].exists)
+        XCTAssertTrue(
+            app.descendants(matching: .any)
+                .matching(identifier: "Shell one-liners").firstMatch.waitForExistence(timeout: 5)
+        )
+        XCTAssertFalse(
+            app.descendants(matching: .any)
+                .matching(identifier: "Refactor router").firstMatch.exists
+        )
     }
 }
