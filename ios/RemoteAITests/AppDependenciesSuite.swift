@@ -141,11 +141,6 @@ public enum AppDependenciesSuite {
                         pairingService: service
                     )
                 }
-                await MainActor.run {
-                    dependencies.pairing.onPaired = { [weak dependencies] in
-                        dependencies?.setConnectionState(.online)
-                    }
-                }
                 await dependencies.bootstrapPairingIfRequested(
                     arguments: ["RemoteAI", "-RemoteAIPairingFile", path.path]
                 )
@@ -168,11 +163,6 @@ public enum AppDependenciesSuite {
                         store: InMemorySecretStore(),
                         pairingService: service
                     )
-                }
-                await MainActor.run {
-                    dependencies.pairing.onPaired = { [weak dependencies] in
-                        dependencies?.setConnectionState(.online)
-                    }
                 }
                 await dependencies.bootstrapPairingIfRequested(
                     arguments: [

@@ -122,7 +122,14 @@ public final class AppDependencies {
             return
         }
         await pairing.pair(scannedText: payload)
-        launchPairingStatus = pairing.state == .paired ? .paired : .failed
+        if pairing.state == .paired {
+            // Keep the launch path observable even if a view has not yet
+            // subscribed to PairingViewModel's callback.
+            setConnectionState(.online)
+            launchPairingStatus = .paired
+        } else {
+            launchPairingStatus = .failed
+        }
     }
 
     /// Returns an inline payload only when the flag has a non-option value and
