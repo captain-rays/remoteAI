@@ -517,19 +517,18 @@ fn normalize_user_record(record_id: &str, value: &Value) -> Vec<Value> {
     let Some(content) = value.pointer("/message/content") else {
         return Vec::new();
     };
-    if let Some(items) = content.as_array() {
-        if let Some(tool) = items
+    if let Some(items) = content.as_array()
+        && let Some(tool) = items
             .iter()
             .find(|item| item.get("type").and_then(Value::as_str) == Some("tool_result"))
-        {
-            let mut payload = json!({
-                "toolId": tool.get("tool_use_id").cloned().unwrap_or(Value::Null)
-            });
-            if let Some(text) = content_text(tool.get("content")) {
-                payload["text"] = Value::String(text);
-            }
-            return vec![json!({"type": "tool.completed", "payload": payload})];
+    {
+        let mut payload = json!({
+            "toolId": tool.get("tool_use_id").cloned().unwrap_or(Value::Null)
+        });
+        if let Some(text) = content_text(tool.get("content")) {
+            payload["text"] = Value::String(text);
         }
+        return vec![json!({"type": "tool.completed", "payload": payload})];
     }
     let Some(text) = content_text(Some(content)) else {
         return Vec::new();
