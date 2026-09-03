@@ -1,4 +1,7 @@
+pub mod config;
+pub mod discovery;
 pub mod protocol;
+pub mod store;
 
 pub const fn agent_name() -> &'static str {
     "RemoteAI Agent"
