@@ -2,7 +2,7 @@ import SwiftUI
 
 @MainActor
 public struct RootView: View {
-    private let dependencies: AppDependencies
+    @Bindable private var dependencies: AppDependencies
     @Bindable private var model: AppModel
     @State private var selectedTab = Tab.chat
 
@@ -18,8 +18,8 @@ public struct RootView: View {
     public var body: some View {
         VStack(spacing: 0) {
             ProviderSwitcher(model: model)
-            ConnectionBanner(state: model.connectionState)
-            Text("Connection: \(model.connectionState.rawValue)")
+            ConnectionBanner(state: dependencies.connectionState)
+            Text("Connection: \(dependencies.connectionState.rawValue)")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("connection-state")

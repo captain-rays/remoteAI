@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 public enum LaunchPairingStatus: String, Sendable, Hashable {
     case idle
@@ -12,6 +13,7 @@ public enum LaunchPairingStatus: String, Sendable, Hashable {
 /// `-UseMockAgent` selects the deterministic in-process agent, which is how the
 /// UI tests run without the Rust agent or a network.
 @MainActor
+@Observable
 public final class AppDependencies {
     nonisolated public static let defaultPublicOrigin = "http://127.0.0.1:8787"
 
@@ -22,6 +24,7 @@ public final class AppDependencies {
     public let pairing: PairingViewModel
     public let uploadFixture: UploadFixture?
     public let publicOrigin: String
+    public private(set) var connectionState: ConnectionState = .disconnected
     /// Explicit pairing bootstrap is a simulator/development flow. Its
     /// identity stays in-process so an unavailable simulator keychain cannot
     /// prevent the one-shot smoke from reaching the paired state.
@@ -180,6 +183,7 @@ public final class AppDependencies {
 
     /// Propagates connectivity to every screen that must go read-only offline.
     public func setConnectionState(_ state: ConnectionState) {
+        connectionState = state
         appModel.setConnectionState(state)
         files.isOnline = state.allowsMutation
         transfers.isOnline = state.allowsMutation
