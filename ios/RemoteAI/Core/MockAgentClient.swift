@@ -10,7 +10,13 @@ import Foundation
 ///   keeps the turn open until a decision arrives;
 /// - text containing `long` — streams and keeps the turn open so it can be
 ///   interrupted;
+/// - text containing `fail` — rejects the *first* attempt per conversation so
+///   the retry path can be exercised, then behaves normally;
 /// - anything else — streams and completes the turn.
+///
+/// A conversation whose `writeState` is `.busy` rejects every send with
+/// `session_busy` while staying fully readable, mirroring the agent's
+/// single-writer rule.
 public actor MockAgentClient: AgentClient {
 
     public nonisolated let events: AsyncStream<EventEnvelope>
@@ -24,6 +30,8 @@ public actor MockAgentClient: AgentClient {
     private var history: [String: [EventEnvelope]] = [:]
     private var pendingApprovals: [String: ApprovalRequest] = [:]
     private var activeTurns: [String: String] = [:]
+    /// Conversations whose scripted `fail` rejection has already been served.
+    private var scriptedFailures: Set<String> = []
     private var tickets: [String: TransferTicket] = [:]
     private var uploadedChunks: [String: [Int: Data]] = [:]
     private var audit: [AuditEntry] = []
@@ -108,10 +116,13 @@ public actor MockAgentClient: AgentClient {
                 title: "Trip planning",
                 updatedAt: day("2026-09-01T20:00:00Z"), status: .idle
             ),
+            // Held by another writer (desktop app or terminal). Readable here,
+            // never writable.
             ConversationSummary(
                 id: "claude-daily-2", provider: .claude, kind: .daily,
                 title: "Reading list",
-                updatedAt: day("2026-08-29T19:00:00Z"), status: .idle
+                updatedAt: day("2026-08-29T19:00:00Z"), status: .idle,
+                writeState: .busy, writeBlockCode: "session_busy"
             ),
             ConversationSummary(
                 id: "claude-project-api-1", provider: .claude, kind: .project,
@@ -196,6 +207,124 @@ public actor MockAgentClient: AgentClient {
                 targetPath: "/Users/dev/work/api/notes.txt", outcome: "ok"
             ),
         ]
+
+        // Transcripts the agent would have synchronized from the provider
+        // before this device ever opened the session. They are written straight
+        // into `history` rather than streamed, because nothing on this device
+        // produced them.
+        var seeded = 0
+        func envelope(
+            _ conversationId: String, _ rawType: String, _ event: ConversationEvent
+        ) -> EventEnvelope {
+            seeded += 1
+            return EventEnvelope(
+                messageId: "seed-\(seeded)",
+                sequence: seeded,
+                conversationId: conversationId,
+                rawType: rawType,
+                event: event
+            )
+        }
+
+        self.history = [
+            "claude-daily-1": [
+                envelope(
+                    "claude-daily-1", "conversation.user_message",
+                    .userMessage(
+                        MessagePayload(
+                            messageId: "claude-seed-user-1", role: .user,
+                            text: "Plan the trip and show the parser."
+                        )
+                    )
+                ),
+                envelope(
+                    "claude-daily-1", "conversation.reasoning_completed",
+                    .reasoningCompleted(
+                        ReasoningPayload(
+                            reasoningId: "claude-seed-reason-1",
+                            text: "Weighing two itineraries."
+                        )
+                    )
+                ),
+                envelope(
+                    "claude-daily-1", "conversation.message_completed",
+                    .messageCompleted(
+                        MessagePayload(
+                            messageId: "claude-seed-assistant-1", role: .assistant,
+                            text: """
+                                Here is the **parser** you asked for:
+
+                                ```swift
+                                let trip = Trip(days: 3)
+                                ```
+
+                                > Fences stay intact while streaming.
+                                """
+                        )
+                    )
+                ),
+                envelope(
+                    "claude-daily-1", "turn.completed",
+                    .turnCompleted(TurnPayload(turnId: "claude-seed-turn-1"))
+                ),
+            ],
+            "claude-daily-2": [
+                envelope(
+                    "claude-daily-2", "conversation.user_message",
+                    .userMessage(
+                        MessagePayload(
+                            messageId: "claude-busy-user-1", role: .user,
+                            text: "Which book is next?"
+                        )
+                    )
+                ),
+                envelope(
+                    "claude-daily-2", "conversation.message_completed",
+                    .messageCompleted(
+                        MessagePayload(
+                            messageId: "claude-busy-assistant-1", role: .assistant,
+                            text: "Finish **Dune**, then start the essays."
+                        )
+                    )
+                ),
+                envelope(
+                    "claude-daily-2", "turn.completed",
+                    .turnCompleted(TurnPayload(turnId: "claude-busy-turn-1"))
+                ),
+            ],
+            "codex-project-api-1": [
+                envelope(
+                    "codex-project-api-1", "conversation.user_message",
+                    .userMessage(
+                        MessagePayload(
+                            messageId: "codex-seed-user-1", role: .user,
+                            text: "Show the router table."
+                        )
+                    )
+                ),
+                envelope(
+                    "codex-project-api-1", "conversation.message_completed",
+                    .messageCompleted(
+                        MessagePayload(
+                            messageId: "codex-seed-assistant-1", role: .assistant,
+                            text: """
+                                The **router** table is generated by:
+
+                                ```bash
+                                swift run routes list
+                                ```
+                                """
+                        )
+                    )
+                ),
+                envelope(
+                    "codex-project-api-1", "turn.completed",
+                    .turnCompleted(TurnPayload(turnId: "codex-seed-turn-1"))
+                ),
+            ],
+        ]
+        // Live events must never reuse a seeded sequence number.
+        self.sequence = seeded
     }
 
     private nonisolated static func date(_ iso: String) -> Date {
@@ -322,6 +451,14 @@ public actor MockAgentClient: AgentClient {
         let conversation = try requireConversation(
             provider: provider, conversationId: conversationId
         )
+        if conversation.writeState == .busy {
+            throw AgentClientError.rejected(conversation.writeBlockCode ?? "session_busy")
+        }
+        if text.lowercased().contains("fail"),
+            scriptedFailures.insert(conversationId).inserted
+        {
+            throw AgentClientError.transport("send_failed")
+        }
         let turnId = "turn-\(sequence + 1)"
         activeTurns[conversationId] = turnId
 

@@ -31,6 +31,10 @@ struct MessageBubble: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: item.role == .user ? .trailing : .leading)
+        // Without an explicit container the bubble's identifier is stamped onto
+        // every descendant, which hides the renderer's own code/quote/copy
+        // identifiers and the delivery marker from acceptance tests.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("\(item.role.rawValue)-message-\(item.id)")
     }
 

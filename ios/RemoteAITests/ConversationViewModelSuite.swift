@@ -283,6 +283,52 @@ public enum ConversationViewModelSuite {
                 try expectEqual(users[0].deliveryState, .sent)
             },
 
+            TestCase("a provider echo of the user turn reconciles with the local bubble") {
+                let client = ControlledSendClient(mode: .history([]))
+                let model = await makeViewModel(client: client)
+                await model.send("ship it")
+
+                // Codex replays the user turn under its own id. Claude never
+                // does. Either way the screen must show one bubble, not two.
+                _ = await model.handle(
+                    event(
+                        7, "conversation.user_message",
+                        .userMessage(
+                            MessagePayload(
+                                messageId: "server-user-1", role: .user, text: "ship it"
+                            )
+                        )
+                    )
+                )
+
+                let users = await model.messages.filter { $0.role == .user }
+                try expectEqual(users.count, 1, "the echo must not add a second bubble")
+                try expectEqual(users[0].text, "ship it")
+                try expectEqual(users[0].deliveryState, .sent)
+            },
+
+            TestCase("an unrelated user message is still shown") {
+                let client = ControlledSendClient(mode: .history([]))
+                let model = await makeViewModel(client: client)
+                await model.send("ship it")
+
+                _ = await model.handle(
+                    event(
+                        7, "conversation.user_message",
+                        .userMessage(
+                            MessagePayload(
+                                messageId: "server-user-2", role: .user, text: "and deploy"
+                            )
+                        )
+                    )
+                )
+
+                try expectEqual(
+                    await model.messages.filter { $0.role == .user }.map(\.text),
+                    ["ship it", "and deploy"]
+                )
+            },
+
             TestCase("session busy preserves the failed user item and safe block message") {
                 let client = ControlledSendClient(
                     mode: .failure(.rejected("session_busy"))

@@ -182,6 +182,9 @@ private struct FencedCodeBlockView: View {
         .padding(10)
         .background(Color.secondary.opacity(0.1))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        // Keep the language label and the copy button addressable instead of
+        // letting the block's identifier overwrite theirs.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("code-block-\(index)")
     }
 

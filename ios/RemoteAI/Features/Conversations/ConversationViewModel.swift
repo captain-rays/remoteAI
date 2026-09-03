@@ -105,6 +105,12 @@ public final class ConversationViewModel {
     /// are coalesced under a synthetic id that is cleared when the turn ends.
     private var currentStreamId: String?
     private var failedMessageId: String?
+    /// Provider echoes of the local user turn that have already been folded in.
+    private var reconciledUserEchoes: Set<String> = []
+
+    /// Prefix of an optimistic user message, which exists before any provider
+    /// has given the turn an id.
+    private static let localMessagePrefix = "local-"
 
     public init(
         conversation: ConversationSummary,
@@ -199,7 +205,7 @@ public final class ConversationViewModel {
     public func send(_ text: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let messageId = "local-\(UUID().uuidString)"
+        let messageId = "\(Self.localMessagePrefix)\(UUID().uuidString)"
         items.append(
             .message(
                 MessageItem(
@@ -309,7 +315,9 @@ public final class ConversationViewModel {
     private func apply(_ event: ConversationEvent) {
         switch event {
         case let .userMessage(payload):
-            upsertMessage(payload, streaming: false, deliveryState: .sent)
+            if !reconcileUserEcho(payload) {
+                upsertMessage(payload, streaming: false, deliveryState: .sent)
+            }
             isRunning = true
 
         case let .delta(payload):
@@ -353,6 +361,29 @@ public final class ConversationViewModel {
     }
 
     // MARK: - Timeline mutation
+
+    /// Claude never echoes the user's own turn; Codex replays it under a
+    /// provider id. When an echo does arrive, fold it into the optimistic
+    /// bubble instead of showing the same text twice.
+    private func reconcileUserEcho(_ payload: MessagePayload) -> Bool {
+        guard payload.role == .user, let messageId = payload.messageId,
+            !reconciledUserEchoes.contains(messageId)
+        else { return false }
+
+        let match = items.lastIndex { item in
+            guard case let .message(message) = item else { return false }
+            return message.role == .user
+                && message.deliveryState != nil
+                && message.id.hasPrefix(Self.localMessagePrefix)
+                && message.text == payload.text
+        }
+        guard let match, case var .message(local) = items[match] else { return false }
+
+        local.deliveryState = .sent
+        items[match] = .message(local)
+        reconciledUserEchoes.insert(messageId)
+        return true
+    }
 
     private func appendDelta(_ payload: MessagePayload) {
         let messageId = payload.messageId ?? currentStreamId ?? "stream-\(items.count)"
