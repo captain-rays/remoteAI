@@ -52,6 +52,7 @@ public actor RemoteAgentClient: AgentClient {
         case "connect": return "The Mac WebSocket could not connect."
         case "send": return "The message could not reach the Mac."
         case "receive": return "The Mac WebSocket closed before responding."
+        case "timeout": return "The Mac did not finish the turn in time."
         default: return "The secure WebSocket failed."
         }
     }
@@ -255,7 +256,11 @@ public actor RemoteAgentClient: AgentClient {
         while true {
             let message: URLSessionWebSocketTask.Message
             do {
-                message = try await task.receive()
+                message = try await receiveMessage(
+                    task, timeoutNanoseconds: waitForTurnCompletion ? 30_000_000_000 : 15_000_000_000
+                )
+            } catch let error as AgentClientError {
+                throw error
             } catch {
                 throw AgentClientError.transport(Self.socketFailureMessage(stage: "receive"))
             }
@@ -296,6 +301,23 @@ public actor RemoteAgentClient: AgentClient {
                     continuation.resume(returning: ())
                 }
             }
+        }
+    }
+
+    private func receiveMessage(
+        _ task: URLSessionWebSocketTask, timeoutNanoseconds: UInt64
+    ) async throws -> URLSessionWebSocketTask.Message {
+        try await withThrowingTaskGroup(of: URLSessionWebSocketTask.Message.self) { group in
+            group.addTask { try await task.receive() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: timeoutNanoseconds)
+                throw AgentClientError.transport(Self.socketFailureMessage(stage: "timeout"))
+            }
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else {
+                throw AgentClientError.transport(Self.socketFailureMessage(stage: "receive"))
+            }
+            return result
         }
     }
 }

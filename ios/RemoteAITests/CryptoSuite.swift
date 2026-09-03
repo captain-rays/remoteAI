@@ -166,6 +166,10 @@ public enum CryptoSuite {
                     RemoteAgentClient.socketFailureMessage(stage: "receive"),
                     "The Mac WebSocket closed before responding."
                 )
+                try expectEqual(
+                    RemoteAgentClient.socketFailureMessage(stage: "timeout"),
+                    "The Mac did not finish the turn in time."
+                )
             },
 
             TestCase("remote wire maps start DTO and authenticates frame routing") {
