@@ -12,15 +12,22 @@ struct MessageBubble: View {
             HStack(spacing: 6) {
                 Text(item.text)
                     .textSelection(.enabled)
-                if item.isStreaming {
+                if item.isStreaming || item.deliveryState == .sending {
                     ProgressView().controlSize(.mini)
                 }
             }
             .padding(10)
             .background(background)
             .clipShape(RoundedRectangle(cornerRadius: 10))
+            if item.deliveryState == .failed {
+                Text("Not sent")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("message-delivery-failed")
+            }
         }
         .frame(maxWidth: .infinity, alignment: item.role == .user ? .trailing : .leading)
+        .accessibilityIdentifier("\(item.role.rawValue)-message-\(item.id)")
     }
 
     private var alignment: HorizontalAlignment { item.role == .user ? .trailing : .leading }

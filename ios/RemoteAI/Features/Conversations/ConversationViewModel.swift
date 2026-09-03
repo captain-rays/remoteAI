@@ -1,11 +1,32 @@
 import Foundation
 import Observation
 
+public enum MessageDeliveryState: String, Sendable, Hashable {
+    case sending
+    case sent
+    case failed
+}
+
 public struct MessageItem: Identifiable, Sendable, Hashable {
     public let id: String
     public let role: MessageRole
     public internal(set) var text: String
     public internal(set) var isStreaming: Bool
+    public internal(set) var deliveryState: MessageDeliveryState?
+
+    public init(
+        id: String,
+        role: MessageRole,
+        text: String,
+        isStreaming: Bool,
+        deliveryState: MessageDeliveryState? = nil
+    ) {
+        self.id = id
+        self.role = role
+        self.text = text
+        self.isStreaming = isStreaming
+        self.deliveryState = deliveryState
+    }
 }
 
 public struct ToolItem: Identifiable, Sendable, Hashable {
@@ -59,6 +80,7 @@ public final class ConversationViewModel {
     /// Deltas from the Rust agent carry no message id, so one turn's fragments
     /// are coalesced under a synthetic id that is cleared when the turn ends.
     private var currentStreamId: String?
+    private var failedMessageId: String?
 
     public init(conversation: ConversationSummary, client: AgentClient) {
         self.conversation = conversation
@@ -109,18 +131,40 @@ public final class ConversationViewModel {
     public func send(_ text: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        let messageId = "local-\(UUID().uuidString)"
+        items.append(
+            .message(
+                MessageItem(
+                    id: messageId,
+                    role: .user,
+                    text: trimmed,
+                    isStreaming: false,
+                    deliveryState: .sending
+                )
+            )
+        )
+        await send(messageId: messageId, text: trimmed)
+    }
+
+    private func send(messageId: String, text: String) async {
         guard isOnline else {
-            failedDraft = trimmed
+            markDelivery(messageId, as: .failed)
+            failedMessageId = messageId
+            failedDraft = text
             appendError(code: "offline", message: "Mac is offline. The message was not sent.")
             return
         }
         do {
             try await client.send(
-                provider: conversation.provider, conversationId: conversation.id, text: trimmed
+                provider: conversation.provider, conversationId: conversation.id, text: text
             )
+            markDelivery(messageId, as: .sent)
+            failedMessageId = nil
             failedDraft = nil
         } catch {
-            failedDraft = trimmed
+            markDelivery(messageId, as: .failed)
+            failedMessageId = messageId
+            failedDraft = text
             appendError(code: Self.errorCode(for: error), message: Self.errorMessage(for: error))
         }
     }
@@ -136,6 +180,8 @@ public final class ConversationViewModel {
         switch error as? AgentClientError {
         case .offline: return "Mac is offline. The message was not sent."
         case .notPaired: return "Pair with your Mac before sending a message."
+        case .rejected("session_busy"):
+            return "This conversation is active elsewhere. You can view its history, but cannot send."
         case .rejected: return "The Mac rejected this message."
         case .transport: return "The message could not reach the Mac."
         default: return "The message could not be sent."
@@ -144,9 +190,9 @@ public final class ConversationViewModel {
 
     /// Only ever called from the retry button; nothing retries on its own.
     public func retryFailedSend() async {
-        guard let draft = failedDraft else { return }
-        failedDraft = nil
-        await send(draft)
+        guard let draft = failedDraft, let messageId = failedMessageId else { return }
+        markDelivery(messageId, as: .sending)
+        await send(messageId: messageId, text: draft)
     }
 
     public func stop() async {
@@ -195,7 +241,7 @@ public final class ConversationViewModel {
     private func apply(_ event: ConversationEvent) {
         switch event {
         case let .userMessage(payload):
-            upsertMessage(payload, streaming: false)
+            upsertMessage(payload, streaming: false, deliveryState: .sent)
             isRunning = true
 
         case let .delta(payload):
@@ -256,7 +302,10 @@ public final class ConversationViewModel {
     }
 
     private func upsertMessage(
-        _ payload: MessagePayload, streaming: Bool, replaceText: Bool = false
+        _ payload: MessagePayload,
+        streaming: Bool,
+        replaceText: Bool = false,
+        deliveryState: MessageDeliveryState? = nil
     ) {
         let messageId =
             payload.messageId
@@ -267,13 +316,15 @@ public final class ConversationViewModel {
             guard case var .message(item) = items[index] else { return }
             if replaceText { item.text = payload.text }
             item.isStreaming = streaming
+            item.deliveryState = deliveryState ?? item.deliveryState
             items[index] = .message(item)
         } else {
             items.append(
                 .message(
                     MessageItem(
                         id: messageId, role: payload.role,
-                        text: payload.text, isStreaming: streaming
+                        text: payload.text, isStreaming: streaming,
+                        deliveryState: deliveryState
                     )
                 )
             )
@@ -300,6 +351,12 @@ public final class ConversationViewModel {
 
     private func indexOfMessage(_ id: String) -> Int? {
         items.firstIndex { $0.id == "message:\(id)" }
+    }
+
+    private func markDelivery(_ id: String, as state: MessageDeliveryState) {
+        guard let index = indexOfMessage(id), case var .message(item) = items[index] else { return }
+        item.deliveryState = state
+        items[index] = .message(item)
     }
 
     private func finishStreaming() {
