@@ -5,6 +5,8 @@ import RemoteAITestKit
 
 public enum PairingViewModelSuite {
 
+    final class Flag: @unchecked Sendable { var value = false }
+
     static let now = ISO8601DateFormatter().date(from: "2026-09-03T10:00:00Z")!
 
     static func qr(
@@ -46,6 +48,14 @@ public enum PairingViewModelSuite {
                 try expectEqual(identity.macId, "mac-1")
                 try expectEqual(identity.origin, "https://remoteai.example.com")
                 try expectFalse(identity.privateKey.isEmpty)
+            },
+
+            TestCase("successful pairing invokes the connection hook") {
+                let model = await makeViewModel()
+                let didPair = Flag()
+                await MainActor.run { model.onPaired = { didPair.value = true } }
+                await model.pair(scannedText: qr())
+                try expectTrue(didPair.value)
             },
 
             TestCase("an expired QR code is refused and stores nothing") {
@@ -105,6 +115,52 @@ public enum PairingViewModelSuite {
                 await model.revoke()
                 try expectNil(try store.load())
                 try expectEqual(await model.state, .idle)
+            },
+
+            TestCase("remote pairing request targets the configured origin") {
+                let payload = PairingPayload(
+                    origin: "https://tunnel.example",
+                    macId: "mac-1",
+                    macPublicKey: Data([4, 1]),
+                    pairingSecret: Data("secret-value".utf8),
+                    expiresAt: now
+                )
+                let request = try RemotePairingService.makePairRequest(
+                    origin: URL(string: "https://tunnel.example")!,
+                    payload: payload,
+                    deviceId: "phone-1",
+                    deviceLabel: "Test iPhone",
+                    phonePublicKey: Data([4, 2])
+                )
+                try expectEqual(request.url?.absoluteString, "https://tunnel.example/v1/pair")
+                try expectEqual(request.httpMethod, "POST")
+                let body = try expectNotNil(request.httpBody)
+                let json = try expectNotNil(
+                    try JSONSerialization.jsonObject(with: body) as? [String: Any]
+                )
+                try expectEqual(json["pairingSecret"] as? String, "secret-value")
+                try expectEqual(json["deviceId"] as? String, "phone-1")
+                try expectEqual(json["devicePublicKey"] as? [UInt8], [4, 2])
+            },
+
+            TestCase("default device id is stable from the phone public key") {
+                let key = Data([4, 1, 2, 3])
+                try expectEqual(
+                    RemotePairingService.deterministicDeviceId(publicKey: key),
+                    RemotePairingService.deterministicDeviceId(publicKey: key)
+                )
+                try expectFalse(
+                    RemotePairingService.deterministicDeviceId(publicKey: key).isEmpty
+                )
+            },
+
+            TestCase("pairing payload accepts the Agent's JSON byte representation") {
+                let text = """
+                {"origin":"https://agent.example","macId":"mac-1","macPublicKey":[4,1],"pairingSecret":"one-time-secret","expiresAt":"2026-09-03T10:05:00Z"}
+                """
+                let payload = try PairingPayload.decode(text)
+                try expectEqual(payload.macPublicKey, Data([4, 1]))
+                try expectEqual(payload.pairingSecret, Data("one-time-secret".utf8))
             },
         ]
     )

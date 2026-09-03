@@ -11,6 +11,56 @@ public enum CryptoError: Error, Equatable, Sendable {
     case openFailed
 }
 
+/// Routing fields are serialized exactly as the Rust gateway's serde struct:
+/// declaration order (`deviceId`, then `conversationId`) and camelCase keys.
+public struct RoutingMetadata: Codable, Sendable, Hashable {
+    public let deviceId: String
+    public let conversationId: String?
+
+    public init(deviceId: String, conversationId: String?) {
+        self.deviceId = deviceId
+        self.conversationId = conversationId
+    }
+
+    public func canonicalData() throws -> Data {
+        // Foundation's JSONEncoder may sort dictionary keys even without
+        // outputFormatting; build the two-field object explicitly so its byte
+        // order matches serde's declaration order on the Rust gateway.
+        let encoder = JSONEncoder()
+        var data = Data("{\"deviceId\":".utf8)
+        data.append(try encoder.encode(deviceId))
+        data.append(Data(",\"conversationId\":".utf8))
+        if let conversationId {
+            data.append(try encoder.encode(conversationId))
+        } else {
+            data.append(Data("null".utf8))
+        }
+        data.append(Data("}".utf8))
+        return data
+    }
+}
+
+public struct EncryptedFrame: Codable, Sendable, Hashable {
+    public let counter: UInt64
+    public let routing: RoutingMetadata
+    public let ciphertext: String
+
+    public init(counter: UInt64, routing: RoutingMetadata, ciphertext: String) {
+        self.counter = counter
+        self.routing = routing
+        self.ciphertext = ciphertext
+    }
+
+    private enum CodingKeys: String, CodingKey { case counter, routing, ciphertext }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(counter, forKey: .counter)
+        try container.encode(routing, forKey: .routing)
+        try container.encode(ciphertext, forKey: .ciphertext)
+    }
+}
+
 /// Which side of the channel a frame travels on. The direction is part of the
 /// nonce so a frame can never be reflected back at its sender.
 public enum CryptoDirection: String, Sendable, Hashable, CaseIterable {
@@ -20,8 +70,8 @@ public enum CryptoDirection: String, Sendable, Hashable, CaseIterable {
     /// Exactly four bytes, per the frozen nonce layout.
     public var noncePrefix: Data {
         switch self {
-        case .phoneToMac: return Data("P2M\u{0}".utf8)
-        case .macToPhone: return Data("M2P\u{0}".utf8)
+        case .phoneToMac: return Data("IOS>".utf8)
+        case .macToPhone: return Data("MAC>".utf8)
         }
     }
 
@@ -49,18 +99,34 @@ public struct SessionKeys: @unchecked Sendable {
         peerPublicKey: P256.KeyAgreement.PublicKey,
         salt: Data
     ) throws -> SessionKeys {
+        return try derive(
+            privateKey: privateKey,
+            peerPublicKey: peerPublicKey,
+            macId: "mac-1",
+            deviceId: "phone-1"
+        )
+    }
+
+    /// Derives the Rust Agent v1 directional keys using the frozen labels.
+    public static func derive(
+        privateKey: P256.KeyAgreement.PrivateKey,
+        peerPublicKey: P256.KeyAgreement.PublicKey,
+        macId: String,
+        deviceId: String
+    ) throws -> SessionKeys {
         let shared = try privateKey.sharedSecretFromKeyAgreement(with: peerPublicKey)
+        let salt = Data("RemoteAI protocol v1".utf8)
         return SessionKeys(
             phoneToMac: shared.hkdfDerivedSymmetricKey(
                 using: SHA256.self,
                 salt: salt,
-                sharedInfo: CryptoDirection.phoneToMac.hkdfInfo,
+                sharedInfo: Data("ios->mac|\(macId)|\(deviceId)".utf8),
                 outputByteCount: 32
             ),
             macToPhone: shared.hkdfDerivedSymmetricKey(
                 using: SHA256.self,
                 salt: salt,
-                sharedInfo: CryptoDirection.macToPhone.hkdfInfo,
+                sharedInfo: Data("mac->ios|\(macId)|\(deviceId)".utf8),
                 outputByteCount: 32
             )
         )
@@ -141,6 +207,38 @@ public struct PairingPayload: Codable, Sendable, Hashable {
         self.macPublicKey = macPublicKey
         self.pairingSecret = pairingSecret
         self.expiresAt = expiresAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case origin, macId, macPublicKey, pairingSecret, expiresAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        origin = try container.decode(String.self, forKey: .origin)
+        macId = try container.decode(String.self, forKey: .macId)
+        macPublicKey = try Self.decodeBytes(from: container, key: .macPublicKey)
+        pairingSecret = try Self.decodeBytes(from: container, key: .pairingSecret)
+        expiresAt = try container.decode(Date.self, forKey: .expiresAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(origin, forKey: .origin)
+        try container.encode(macId, forKey: .macId)
+        try container.encode(macPublicKey.base64EncodedString(), forKey: .macPublicKey)
+        try container.encode(pairingSecret.base64EncodedString(), forKey: .pairingSecret)
+        try container.encode(expiresAt, forKey: .expiresAt)
+    }
+
+    private static func decodeBytes<K: CodingKey>(
+        from container: KeyedDecodingContainer<K>, key: K
+    ) throws -> Data {
+        if let encoded = try? container.decode(String.self, forKey: key) {
+            if let base64 = Data(base64Encoded: encoded) { return base64 }
+            return Data(encoded.utf8)
+        }
+        return Data(try container.decode([UInt8].self, forKey: key))
     }
 
     public static func decode(_ text: String) throws -> PairingPayload {

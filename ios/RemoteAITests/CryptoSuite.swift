@@ -9,6 +9,14 @@ public enum CryptoSuite {
         key.withUnsafeBytes { Data($0) }
     }
 
+    static func hex(_ value: String) -> Data {
+        Data(stride(from: 0, to: value.count, by: 2).map { index in
+            let start = value.index(value.startIndex, offsetBy: index)
+            let end = value.index(start, offsetBy: 2)
+            return UInt8(value[start..<end], radix: 16)!
+        })
+    }
+
     static func pairingJSON(expiresAt: String, secret: String = "c2VjcmV0LXZhbHVl") -> String {
         let macKey = P256.KeyAgreement.PrivateKey().publicKey.rawRepresentation.base64EncodedString()
         return """
@@ -53,15 +61,112 @@ public enum CryptoSuite {
                 )
             },
 
+            TestCase("directional keys match the Rust protocol vector") {
+                let phone = try P256.KeyAgreement.PrivateKey(
+                    rawRepresentation: hex(
+                        "0000000000000000000000000000000000000000000000000000000000000001"
+                    )
+                )
+                let mac = try P256.KeyAgreement.PublicKey(
+                    x963Representation: hex(
+                        "047cf27b188d034f7e8a52380304b51ac3c08969e277f21b35a60b48fc4766997807775510db8ed040293d9ac69f7430dbba7dade63ce982299e04b79d227873d1"
+                    )
+                )
+                let keys = try SessionKeys.derive(
+                    privateKey: phone,
+                    peerPublicKey: mac,
+                    macId: "mac-1",
+                    deviceId: "phone-1"
+                )
+                try expectEqual(
+                    keyBytes(keys.phoneToMac),
+                    hex("fe99dca6260ab356477e502fe5df8a5ae7bf31b0be49129c75a90fc055b6015c")
+                )
+                try expectEqual(
+                    keyBytes(keys.macToPhone),
+                    hex("47bb3375b2095cf6aef154456c6e1da6d75e16369061127682e742a9a31ccc05")
+                )
+            },
+
             TestCase("nonces are a four-byte direction prefix plus a big-endian counter") {
                 let nonce = try CryptoBox.nonceBytes(direction: .phoneToMac, counter: 1)
                 try expectEqual(nonce.count, 12)
-                try expectEqual(Array(nonce.prefix(4)), Array(Data("P2M\u{0}".utf8)))
+                try expectEqual(Array(nonce.prefix(4)), Array(Data("IOS>".utf8)))
                 try expectEqual(Array(nonce.suffix(8)), [0, 0, 0, 0, 0, 0, 0, 1])
 
                 let other = try CryptoBox.nonceBytes(direction: .macToPhone, counter: 1)
-                try expectEqual(Array(other.prefix(4)), Array(Data("M2P\u{0}".utf8)))
+                try expectEqual(Array(other.prefix(4)), Array(Data("MAC>".utf8)))
                 try expectFalse(nonce == other, "direction must be part of the nonce")
+            },
+
+            TestCase("routing metadata bytes match the Rust AAD serialization") {
+                let routing = RoutingMetadata(deviceId: "phone-1", conversationId: "conv-1")
+                let aad = try routing.canonicalData()
+                try expectEqual(
+                    String(decoding: aad, as: UTF8.self),
+                    "{\"deviceId\":\"phone-1\",\"conversationId\":\"conv-1\"}"
+                )
+                let frame = EncryptedFrame(
+                    counter: 7, routing: routing, ciphertext: "AQID"
+                )
+                let wire = try JSONEncoder().encode(frame)
+                let object = try expectNotNil(
+                    try JSONSerialization.jsonObject(with: wire) as? [String: Any]
+                )
+                try expectEqual(object["counter"] as? Int, 7)
+                try expectEqual(object["ciphertext"] as? String, "AQID")
+            },
+
+            TestCase("remote client endpoint rejects credential-bearing origins") {
+                let endpoint = try await expectThrows {
+                    _ = try RemoteAgentClient.endpoint(
+                        origin: URL(string: "https://user:password@example.com")!,
+                        path: "v1/diagnostics"
+                    )
+                }
+                try expectEqual(endpoint as? AgentClientError, .invalidRequest("invalid agent origin"))
+            },
+
+            TestCase("streaming keeps deltas and closes on terminal events") {
+                let delta = EventEnvelope(
+                    sequence: 1,
+                    conversationId: "conv-1",
+                    rawType: "conversation.delta",
+                    event: .unsupported(rawType: "conversation.delta")
+                )
+                let completed = EventEnvelope(
+                    sequence: 2,
+                    conversationId: "conv-1",
+                    rawType: "turn.completed",
+                    event: .unsupported(rawType: "turn.completed")
+                )
+                try expectTrue(RemoteAgentClient.shouldKeepSocket(after: delta))
+                try expectFalse(RemoteAgentClient.shouldKeepSocket(after: completed))
+            },
+
+            TestCase("remote wire maps start DTO and authenticates frame routing") {
+                let response = RemoteAgentClient.StartResponse(
+                    conversationId: "conv-1", provider: .codex
+                )
+                let summary = RemoteAgentClient.conversationSummary(
+                    from: response,
+                    kind: .daily,
+                    cwd: nil,
+                    now: Date(timeIntervalSince1970: 0)
+                )
+                try expectEqual(summary.id, "conv-1")
+                try expectEqual(summary.provider, .codex)
+                let routing = RoutingMetadata(deviceId: "phone-1", conversationId: "conv-1")
+                let plaintext = Data("{\"kind\":\"request\",\"type\":\"conversation.send\"}".utf8)
+                let key = SymmetricKey(size: .bits256)
+                let frame = try RemoteAgentClient.makeEncryptedFrame(
+                    plaintext: plaintext, counter: 3, routing: routing, key: key
+                )
+                let ciphertext = try expectNotNil(Data(base64Encoded: frame.ciphertext))
+                let opened = try CryptoBox(key: key, direction: .phoneToMac).open(
+                    ciphertext, counter: frame.counter, aad: frame.routing.canonicalData()
+                )
+                try expectEqual(opened, plaintext)
             },
 
             TestCase("a sealed frame round-trips between the two peers") {

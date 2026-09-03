@@ -62,6 +62,19 @@ public enum AppDependenciesSuite {
                 try expectTrue(await dependencies.appModel.isOnline == false)
             },
 
+            TestCase("agent public origin comes from an explicit launch argument") {
+                let dependencies = await MainActor.run {
+                    AppDependencies.live(
+                        arguments: ["RemoteAI", "-AgentPublicOrigin", "https://tunnel.example"]
+                    )
+                }
+                try expectEqual(await dependencies.publicOrigin, "https://tunnel.example")
+                try expectFalse(
+                    await dependencies.appModel.isOnline,
+                    "a real endpoint stays disconnected until pairing"
+                )
+            },
+
             TestCase("mock live dependencies start with the in-process agent online") {
                 let dependencies = await MainActor.run {
                     AppDependencies.live(arguments: ["RemoteAI", "-UseMockAgent"])

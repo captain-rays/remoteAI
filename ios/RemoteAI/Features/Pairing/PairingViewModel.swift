@@ -16,6 +16,98 @@ public protocol PairingService: Sendable {
     ) async throws -> Bool
 }
 
+public enum RemotePairingError: Error, Equatable, Sendable {
+    case invalidOrigin
+    case invalidSecret
+    case invalidResponse
+    case httpStatus(Int)
+}
+
+/// URLSession-backed pairing against the Agent's public `/v1/pair` endpoint.
+/// The QR secret is sent only in the request body and is never logged or
+/// persisted by this service.
+public final class RemotePairingService: PairingService, @unchecked Sendable {
+    private struct PairRequest: Encodable {
+        let pairingSecret: String
+        let deviceId: String
+        let deviceLabel: String
+        let devicePublicKey: [UInt8]
+    }
+
+    private let origin: URL
+    private let session: URLSession
+    private let deviceId: String?
+    private let deviceLabel: String
+
+    public init(
+        origin: URL,
+        deviceId: String? = nil,
+        deviceLabel: String = "iPhone",
+        session: URLSession = .shared
+    ) {
+        self.origin = origin
+        self.session = session
+        self.deviceId = deviceId
+        self.deviceLabel = deviceLabel
+    }
+
+    /// Stable identifier derived from public key material, so reconnecting
+    /// after relaunch authenticates as the same paired device without storing
+    /// another identifier alongside the private key.
+    public static func deterministicDeviceId(publicKey: Data) -> String {
+        let digest = SHA256.hash(data: publicKey)
+        return "phone-" + digest.prefix(16).map { String(format: "%02x", $0) }.joined()
+    }
+
+    public static func makePairRequest(
+        origin: URL,
+        payload: PairingPayload,
+        deviceId: String,
+        deviceLabel: String,
+        phonePublicKey: Data
+    ) throws -> URLRequest {
+        guard ["http", "https"].contains(origin.scheme?.lowercased()), origin.host != nil,
+            origin.user == nil, origin.password == nil
+        else { throw RemotePairingError.invalidOrigin }
+        guard let secret = String(data: payload.pairingSecret, encoding: .utf8), !secret.isEmpty
+        else { throw RemotePairingError.invalidSecret }
+
+        let endpoint = origin.appendingPathComponent("v1/pair")
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(
+            PairRequest(
+                pairingSecret: secret,
+                deviceId: deviceId,
+                deviceLabel: deviceLabel,
+                devicePublicKey: Array(phonePublicKey)
+            )
+        )
+        return request
+    }
+
+    public func completePairing(
+        payload: PairingPayload, phonePublicKey: Data
+    ) async throws -> Bool {
+        let request = try Self.makePairRequest(
+            origin: origin,
+            payload: payload,
+            deviceId: deviceId ?? Self.deterministicDeviceId(publicKey: phonePublicKey),
+            deviceLabel: deviceLabel,
+            phonePublicKey: phonePublicKey
+        )
+        let (_, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw RemotePairingError.invalidResponse
+        }
+        guard http.statusCode == 200 else {
+            throw RemotePairingError.httpStatus(http.statusCode)
+        }
+        return true
+    }
+}
+
 public final class MockPairingService: PairingService, @unchecked Sendable {
     private let shouldSucceed: Bool
 
@@ -36,6 +128,9 @@ public final class MockPairingService: PairingService, @unchecked Sendable {
 @Observable
 public final class PairingViewModel {
     public private(set) var state: PairingState = .idle
+    /// App-level hook used to transition the connection coordinator after the
+    /// handshake. It is nil in isolated tests and the mock pairing path.
+    public var onPaired: (@MainActor @Sendable () -> Void)?
 
     private let store: SecretStore
     private let registry: UsedSecretRegistry
@@ -78,7 +173,7 @@ public final class PairingViewModel {
         let phoneKey = P256.KeyAgreement.PrivateKey()
         do {
             let accepted = try await service.completePairing(
-                payload: payload, phonePublicKey: phoneKey.publicKey.rawRepresentation
+                payload: payload, phonePublicKey: phoneKey.publicKey.x963Representation
             )
             guard accepted else {
                 state = .failed("The Mac refused this pairing code.")
@@ -93,6 +188,7 @@ public final class PairingViewModel {
                 )
             )
             state = .paired
+            onPaired?()
         } catch {
             state = .failed("Pairing could not be completed.")
         }
