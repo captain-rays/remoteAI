@@ -62,7 +62,18 @@ impl AuditLog {
 fn redact(value: &str) -> String {
     let lower = value.to_ascii_lowercase();
     if [
-        "token", "secret", "password", "cookie", "api_key", "apikey", "body", "message", "content",
+        "token",
+        "secret",
+        "password",
+        "cookie",
+        "authorization",
+        "api_key",
+        "api-key",
+        "api key",
+        "apikey",
+        "body",
+        "message",
+        "content",
     ]
     .iter()
     .any(|needle| lower.contains(needle))

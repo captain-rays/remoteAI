@@ -21,6 +21,43 @@ fn audit_redacts_credentials_bodies_and_file_contents() {
     assert!(!json.contains("api_key"));
 }
 
+#[test]
+fn audit_redacts_nested_sensitive_json_and_paths_without_retaining_original_text() {
+    let log = AuditLog::new();
+    for nested in [
+        r#"{"headers":{"authorization":"auth-value"}}"#,
+        r#"{"meta":{"apiKey":"api-value"}}"#,
+        r#"{"headers":{"cookie":"session-cookie"}}"#,
+        r#"{"credentials":{"password":"pw"}}"#,
+    ] {
+        log.record(AuditRecord {
+            device_id: "phone-1".into(),
+            provider: Some(ProviderId::Claude),
+            conversation_id: Some("session-1".into()),
+            action: "conversation.send".into(),
+            target_path: Some("/tmp/project/api-key.txt".into()),
+            result: nested.into(),
+        });
+    }
+    let rows = log.list();
+    assert_eq!(rows.len(), 4);
+    assert!(rows.iter().all(|row| row.result == "redacted"));
+    assert!(
+        rows.iter()
+            .all(|row| row.target_path.as_deref() == Some("redacted"))
+    );
+    let json = serde_json::to_string(&rows).unwrap();
+    for secret in [
+        "auth-value",
+        "session-cookie",
+        "pw",
+        "api-value",
+        "api-key.txt",
+    ] {
+        assert!(!json.contains(secret), "secret leaked: {secret}");
+    }
+}
+
 #[tokio::test]
 async fn diagnostics_report_versions_and_tunnel_reachability_without_secrets() {
     let diagnostics = Diagnostics::new(
