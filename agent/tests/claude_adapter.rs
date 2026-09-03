@@ -34,6 +34,7 @@ fn command_spec_requires_manual_permissions_and_resume_is_explicit() {
         start.args,
         [
             "--print",
+            "--verbose",
             "--input-format",
             "stream-json",
             "--output-format",
@@ -52,6 +53,26 @@ fn command_spec_requires_manual_permissions_and_resume_is_explicit() {
     );
     let joined = start.args.join(" ");
     assert!(!joined.contains("dangerously-skip-permissions"));
+}
+
+/// The CLI refuses `--print --output-format stream-json` unless `--verbose` is
+/// also passed: it exits 1 with
+/// "When using --print, --output-format=stream-json requires --verbose".
+/// Verified against claude 2.1.210.
+#[test]
+fn stream_json_output_requires_verbose() {
+    let adapter = ClaudeAdapter::new("/usr/local/bin/claude", "/Users/test");
+    for spec in [adapter.command_spec(None), adapter.command_spec(Some("session-1"))] {
+        assert!(
+            spec.args.iter().any(|arg| arg == "--print"),
+            "adapter must run the CLI non-interactively"
+        );
+        assert!(
+            spec.args.iter().any(|arg| arg == "--verbose"),
+            "stream-json output without --verbose makes the CLI exit 1: {:?}",
+            spec.args
+        );
+    }
 }
 
 #[test]

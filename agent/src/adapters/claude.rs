@@ -158,6 +158,9 @@ impl ClaudeAdapter {
     pub fn command_spec(&self, resume: Option<&str>) -> CommandSpec {
         let mut args = vec![
             "--print",
+            // The CLI rejects `--print --output-format stream-json` without
+            // this and exits 1 before emitting a single event.
+            "--verbose",
             "--input-format",
             "stream-json",
             "--output-format",
