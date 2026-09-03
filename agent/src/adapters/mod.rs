@@ -8,6 +8,7 @@ use crate::protocol::{
     ApprovalDecision, ConversationEvent, ConversationKind, ConversationSummary, ProviderStatus,
 };
 
+pub mod claude;
 pub mod codex;
 pub mod mock;
 
