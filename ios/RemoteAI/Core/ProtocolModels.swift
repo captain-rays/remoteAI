@@ -543,6 +543,14 @@ public enum ProtocolCoding {
             throw ProtocolError.malformed("missing envelope routing fields")
         }
 
+        if typeName == "error" {
+            let payload = object["payload"] as? [String: Any]
+            let code = payload?["code"] as? String ?? "unknown"
+            // Gateway business errors intentionally expose only a stable code;
+            // provider stderr, prompts, and credentials never cross this API.
+            throw ProtocolError.agentError(code: code, message: "")
+        }
+
         let payloadObject = object["payload"] ?? [String: Any]()
         let payloadData = try JSONSerialization.data(withJSONObject: payloadObject)
         let payload: Payload

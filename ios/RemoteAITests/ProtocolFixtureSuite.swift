@@ -290,6 +290,31 @@ public enum ProtocolFixtureSuite {
                 )
             },
 
+            TestCase("a gateway type error payload is surfaced by stable code") {
+                let json = """
+                {
+                  "protocolVersion": 1,
+                  "messageId": "r2",
+                  "kind": "response",
+                  "requestId": "q2",
+                  "type": "error",
+                  "payload": {
+                    "code": "provider_operation_failed",
+                    "message": "vendor stderr and prompt must not escape"
+                  }
+                }
+                """
+                let error = try await expectThrows {
+                    _ = try ProtocolCoding.decodeResponse(
+                        EmptyPayload.self, from: data(json)
+                    )
+                }
+                try expectEqual(
+                    error as? ProtocolError,
+                    .agentError(code: "provider_operation_failed", message: "")
+                )
+            },
+
             TestCase("decodes a file entry") {
                 let entry = try ProtocolCoding.decoder.decode(FileEntry.self, from: data(fileEntryJSON))
                 try expectEqual(entry.name, "README.md")
@@ -326,4 +351,6 @@ public enum ProtocolFixtureSuite {
             },
         ]
     )
+
+    private struct EmptyPayload: Decodable, Sendable {}
 }

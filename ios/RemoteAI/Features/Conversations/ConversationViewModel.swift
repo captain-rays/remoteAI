@@ -118,7 +118,24 @@ public final class ConversationViewModel {
             failedDraft = nil
         } catch {
             failedDraft = trimmed
-            appendError(code: "send_failed", message: "\(error)")
+            appendError(code: Self.errorCode(for: error), message: Self.errorMessage(for: error))
+        }
+    }
+
+    private static func errorCode(for error: Error) -> String {
+        if case let AgentClientError.rejected(code) = error { return code }
+        if case AgentClientError.offline = error { return "offline" }
+        if case AgentClientError.notPaired = error { return "not_paired" }
+        return "send_failed"
+    }
+
+    private static func errorMessage(for error: Error) -> String {
+        switch error as? AgentClientError {
+        case .offline: return "Mac is offline. The message was not sent."
+        case .notPaired: return "Pair with your Mac before sending a message."
+        case .rejected: return "The Mac rejected this message."
+        case .transport: return "The message could not reach the Mac."
+        default: return "The message could not be sent."
         }
     }
 

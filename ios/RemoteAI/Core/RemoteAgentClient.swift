@@ -287,7 +287,12 @@ public actor RemoteAgentClient: AgentClient {
                 }
                 continue
             }
-            let result = try ProtocolCoding.decodeResponse(Response.self, from: opened).payload
+            let result: Response
+            do {
+                result = try ProtocolCoding.decodeResponse(Response.self, from: opened).payload
+            } catch let ProtocolError.agentError(code, _) {
+                throw AgentClientError.rejected(code)
+            }
             if !waitForTurnCompletion { return result }
         }
     }
