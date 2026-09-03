@@ -47,6 +47,15 @@ public actor RemoteAgentClient: AgentClient {
         }
     }
 
+    public static func socketFailureMessage(stage: String) -> String {
+        switch stage {
+        case "connect": return "The Mac WebSocket could not connect."
+        case "send": return "The message could not reach the Mac."
+        case "receive": return "The Mac WebSocket closed before responding."
+        default: return "The secure WebSocket failed."
+        }
+    }
+
     public static func makeEncryptedFrame(
         plaintext: Data,
         counter: UInt64,
@@ -224,6 +233,11 @@ public actor RemoteAgentClient: AgentClient {
         task.resume()
         socket = task
         defer { task.cancel(with: .normalClosure, reason: nil); socket = nil }
+        do {
+            try await waitUntilConnected(task)
+        } catch {
+            throw AgentClientError.transport(Self.socketFailureMessage(stage: "connect"))
+        }
 
         let envelope = RequestEnvelope(type: type, conversationId: conversationId, payload: payload)
         let plaintext = try ProtocolCoding.encoder.encode(envelope)
@@ -233,9 +247,18 @@ public actor RemoteAgentClient: AgentClient {
         let frame = EncryptedFrame(
             counter: sendCounter, routing: routing, ciphertext: sealed.base64EncodedString()
         )
-        try await task.send(.data(try JSONEncoder().encode(frame)))
+        do {
+            try await task.send(.data(try JSONEncoder().encode(frame)))
+        } catch {
+            throw AgentClientError.transport(Self.socketFailureMessage(stage: "send"))
+        }
         while true {
-            let message = try await task.receive()
+            let message: URLSessionWebSocketTask.Message
+            do {
+                message = try await task.receive()
+            } catch {
+                throw AgentClientError.transport(Self.socketFailureMessage(stage: "receive"))
+            }
             let data: Data
             switch message {
             case .data(let value): data = value
@@ -261,6 +284,18 @@ public actor RemoteAgentClient: AgentClient {
             }
             let result = try ProtocolCoding.decodeResponse(Response.self, from: opened).payload
             if !waitForTurnCompletion { return result }
+        }
+    }
+
+    private func waitUntilConnected(_ task: URLSessionWebSocketTask) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            task.sendPing { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: ())
+                }
+            }
         }
     }
 }

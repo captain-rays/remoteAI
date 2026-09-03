@@ -157,6 +157,17 @@ public enum CryptoSuite {
                 )
             },
 
+            TestCase("websocket failures expose only a safe lifecycle stage") {
+                try expectEqual(
+                    RemoteAgentClient.socketFailureMessage(stage: "send"),
+                    "The message could not reach the Mac."
+                )
+                try expectEqual(
+                    RemoteAgentClient.socketFailureMessage(stage: "receive"),
+                    "The Mac WebSocket closed before responding."
+                )
+            },
+
             TestCase("remote wire maps start DTO and authenticates frame routing") {
                 let response = RemoteAgentClient.StartResponse(
                     conversationId: "conv-1", provider: .codex
