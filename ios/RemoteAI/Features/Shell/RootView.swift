@@ -19,6 +19,10 @@ public struct RootView: View {
         VStack(spacing: 0) {
             ProviderSwitcher(model: model)
             ConnectionBanner(state: model.connectionState)
+            Text("Connection: \(model.connectionState.rawValue)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("connection-state")
             if dependencies.launchPairingStatus != .idle {
                 Text("Pairing bootstrap: \(dependencies.launchPairingStatus.rawValue)")
                     .font(.caption)
