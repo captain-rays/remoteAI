@@ -238,6 +238,47 @@ async fn provider_events_are_available_without_another_client_frame() {
 }
 
 #[tokio::test]
+async fn asynchronous_events_are_routed_to_the_active_conversation() {
+    let state = state();
+    let adapter = Arc::new(MockAdapter::new(ProviderId::Claude));
+    state.set_provider_adapters(vec![adapter.clone()]).await;
+    let inbound = CryptoBox::new([11; 32], *b"IOS>");
+    let outbound = CryptoBox::new([11; 32], *b"MAC>");
+    let mut session =
+        GatewaySession::new(state, "phone-1", inbound.receiver(), outbound.clone()).await;
+    let start = session
+        .handle_frame(&request_frame(
+            &inbound,
+            1,
+            "conversation.start",
+            json!({"provider":"claude","kind":"daily"}),
+        ))
+        .await
+        .unwrap();
+    let conversation_id = decode_frames(start, &outbound)
+        .into_iter()
+        .find_map(|value| {
+            (value["kind"] == "response").then(|| {
+                value["payload"]["conversationId"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+        })
+        .unwrap();
+    adapter.emit_event(remote_ai_agent::protocol::ConversationEvent::Delta {
+        text: "async".into(),
+    });
+    let frame = tokio::time::timeout(std::time::Duration::from_secs(1), session.next_event())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let value = decode_frames(vec![frame], &outbound).pop().unwrap();
+    assert_eq!(value["conversationId"], conversation_id);
+}
+
+#[tokio::test]
 async fn paired_device_keys_drive_gateway_session_crypto() {
     let mac_private = SecretKey::from_slice(&[1_u8; 32]).unwrap();
     let device_private = SecretKey::from_slice(&[2_u8; 32]).unwrap();

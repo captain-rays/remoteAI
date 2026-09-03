@@ -764,6 +764,7 @@ pub struct GatewaySession {
     outbound: CryptoBox,
     outbound_counter: u64,
     event_rx: mpsc::Receiver<(ProviderId, ConversationEvent)>,
+    active_conversations: HashMap<ProviderId, String>,
 }
 
 impl GatewaySession {
@@ -801,18 +802,19 @@ impl GatewaySession {
             outbound,
             outbound_counter: 0,
             event_rx,
+            active_conversations: HashMap::new(),
         }
     }
 
     pub async fn next_event(&mut self) -> Result<Option<Vec<u8>>, GatewayBusinessError> {
-        let Some((_provider, event)) = self.event_rx.recv().await else {
+        let Some((provider, event)) = self.event_rx.recv().await else {
             return Ok(None);
         };
         let routing = RoutingMetadata {
             device_id: self.device_id.clone(),
             conversation_id: None,
         };
-        self.encode_event(event, &routing).map(Some)
+        self.encode_event(provider, event, &routing).map(Some)
     }
 
     pub async fn poll_event_frames(&mut self) -> Result<Vec<Vec<u8>>, GatewayBusinessError> {
@@ -965,6 +967,19 @@ impl GatewaySession {
                 )?]);
             }
         };
+        if let Some(conversation_id) = payload
+            .get("conversationId")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                request
+                    .payload
+                    .get("conversationId")
+                    .and_then(Value::as_str)
+            })
+        {
+            self.active_conversations
+                .insert(provider, conversation_id.to_owned());
+        }
         let mut outputs = vec![self.encrypt_json(
             &routing,
             &serde_json::json!({
@@ -1007,14 +1022,15 @@ impl GatewaySession {
     ) -> Result<Vec<Vec<u8>>, GatewayBusinessError> {
         tokio::task::yield_now().await;
         let mut outputs = Vec::new();
-        while let Ok((_provider, event)) = self.event_rx.try_recv() {
-            outputs.push(self.encode_event(event, routing)?);
+        while let Ok((provider, event)) = self.event_rx.try_recv() {
+            outputs.push(self.encode_event(provider, event, routing)?);
         }
         Ok(outputs)
     }
 
     fn encode_event(
         &mut self,
+        provider: ProviderId,
         event: ConversationEvent,
         routing: &RoutingMetadata,
     ) -> Result<Vec<u8>, GatewayBusinessError> {
@@ -1023,6 +1039,7 @@ impl GatewaySession {
             .get("conversationId")
             .and_then(Value::as_str)
             .or(routing.conversation_id.as_deref())
+            .or_else(|| self.active_conversations.get(&provider).map(String::as_str))
             .unwrap_or("unknown")
             .to_owned();
         let buffered = self
