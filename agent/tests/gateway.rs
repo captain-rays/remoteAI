@@ -206,6 +206,134 @@ async fn authenticated_audit_and_diagnostics_routes_are_redacted() {
 }
 
 #[tokio::test]
+async fn transfer_upload_requires_authentication_and_explicit_conflict_policy() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("same.txt"), "old").unwrap();
+    let state = paired_state();
+    state.set_file_root(root.path()).await;
+    let app = router(state);
+    let create = |headers: bool, body: &'static str| {
+        let mut request = Request::post("/v1/transfers/create")
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap();
+        if headers {
+            request
+                .headers_mut()
+                .insert("x-remoteai-device", "phone-1".parse().unwrap());
+        }
+        request
+    };
+    assert_eq!(
+        app.clone()
+            .oneshot(create(false, r#"{"path":"new.txt"}"#))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.clone()
+            .oneshot(create(true, r#"{"path":"same.txt"}"#))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+}
+
+#[tokio::test]
+async fn transfer_upload_decodes_base64_chunks_and_finishes_atomically() {
+    let root = tempfile::tempdir().unwrap();
+    let state = paired_state();
+    state.set_file_root(root.path()).await;
+    let app = router(state);
+    let create = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/transfers/create")
+                .header("x-remoteai-device", "phone-1")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"path":"payload.txt","sha256":"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::OK);
+    let body = to_bytes(create.into_body(), usize::MAX).await.unwrap();
+    let transfer: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let transfer_id = transfer["id"].as_str().unwrap().to_owned();
+    let path = format!("/v1/transfers/{transfer_id}/chunk");
+    let chunk = app
+        .clone()
+        .oneshot(
+            Request::post(path)
+                .header("x-remoteai-device", "phone-1")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"offset":0,"data":"aGVsbG8="}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(chunk.status(), StatusCode::NO_CONTENT);
+    let finish = app
+        .oneshot(
+            Request::post(format!("/v1/transfers/{transfer_id}/finish"))
+                .header("x-remoteai-device", "phone-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(finish.status(), StatusCode::NO_CONTENT);
+    assert_eq!(fs::read(root.path().join("payload.txt")).unwrap(), b"hello");
+}
+
+#[tokio::test]
+async fn transfer_download_requires_auth_and_honors_explicit_range() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("download.txt"), "0123456789").unwrap();
+    let state = paired_state();
+    state.set_file_root(root.path()).await;
+    let app = router(state);
+    let denied = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/transfers/download?path=download.txt&start=2&end=6")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/transfers/download?path=download.txt&start=2&end=6")
+                .header("x-remoteai-device", "phone-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+        "2345"
+    );
+    let traversal = app
+        .oneshot(
+            Request::get("/v1/transfers/download?path=../download.txt&start=0&end=1")
+                .header("x-remoteai-device", "phone-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(traversal.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn device_revoke_invalidates_future_authenticated_requests() {
     let app = router(paired_state());
     let response = app

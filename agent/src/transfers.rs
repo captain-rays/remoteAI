@@ -199,6 +199,9 @@ impl TransferManager {
 
     fn resolve_existing(&self, relative: &Path) -> Result<PathBuf, TransferError> {
         let path = self.root.join(relative);
+        if !normalize_path(&path).starts_with(&self.root) {
+            return Err(TransferError::PathOutsideRoot);
+        }
         let canonical = path.canonicalize().map_err(io_error)?;
         if canonical.starts_with(&self.root) {
             Ok(canonical)
@@ -206,6 +209,20 @@ impl TransferManager {
             Err(TransferError::PathOutsideRoot)
         }
     }
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
 }
 
 fn unique_destination(destination: &Path) -> PathBuf {

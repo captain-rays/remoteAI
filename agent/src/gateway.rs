@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Json, Path as AxumPath, Query, State};
+use axum::extract::{DefaultBodyLimit, Json, Path as AxumPath, Query, State};
 use axum::http::{Request, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -28,6 +28,11 @@ use crate::protocol::{
     ConversationKind, ConversationSummary, EnvelopeKind, ProviderId, RequestEnvelope,
     validate_protocol_version,
 };
+use crate::transfers::{ConflictPolicy, TransferError, TransferManager};
+
+const MAX_CHUNK_BYTES: usize = 4 * 1024 * 1024;
+const MAX_CHUNK_BODY_BYTES: usize = 8 * 1024 * 1024;
+const MAX_DOWNLOAD_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct GatewayState {
@@ -35,6 +40,7 @@ pub struct GatewayState {
     pub event_buffer: Arc<Mutex<EventBuffer>>,
     pub sessions: Arc<RwLock<HashMap<ProviderId, Vec<ConversationSummary>>>>,
     pub file_root: Arc<RwLock<Option<FileService>>>,
+    pub transfers: Arc<RwLock<Option<TransferManager>>>,
     pub audit: AuditLog,
     pub diagnostics: Arc<Diagnostics>,
 }
@@ -46,6 +52,7 @@ impl GatewayState {
             event_buffer: Arc::new(Mutex::new(EventBuffer::new(event_capacity))),
             sessions: Arc::new(RwLock::new(HashMap::new())),
             file_root: Arc::new(RwLock::new(None)),
+            transfers: Arc::new(RwLock::new(None)),
             audit: AuditLog::new(),
             diagnostics: Arc::new(Diagnostics::new(
                 crate::agent_name(),
@@ -59,7 +66,8 @@ impl GatewayState {
     }
 
     pub async fn set_file_root(&self, root: impl AsRef<std::path::Path>) {
-        *self.file_root.write().await = Some(FileService::new(root));
+        *self.file_root.write().await = Some(FileService::new(root.as_ref()));
+        *self.transfers.write().await = Some(TransferManager::new(root));
     }
 }
 
@@ -96,6 +104,32 @@ pub fn router(state: GatewayState) -> Router {
         .route(
             "/v1/files/preview",
             get(files_preview).route_layer(middleware::from_fn_with_state(state.clone(), ws_auth)),
+        )
+        .route(
+            "/v1/transfers/create",
+            post(transfer_create)
+                .route_layer(middleware::from_fn_with_state(state.clone(), ws_auth)),
+        )
+        .route(
+            "/v1/transfers/{transfer_id}/chunk",
+            post(transfer_chunk)
+                .route_layer(middleware::from_fn_with_state(state.clone(), ws_auth))
+                .layer(DefaultBodyLimit::max(MAX_CHUNK_BODY_BYTES)),
+        )
+        .route(
+            "/v1/transfers/{transfer_id}/finish",
+            post(transfer_finish)
+                .route_layer(middleware::from_fn_with_state(state.clone(), ws_auth)),
+        )
+        .route(
+            "/v1/transfers/{transfer_id}/cancel",
+            post(transfer_cancel)
+                .route_layer(middleware::from_fn_with_state(state.clone(), ws_auth)),
+        )
+        .route(
+            "/v1/transfers/download",
+            get(transfer_download)
+                .route_layer(middleware::from_fn_with_state(state.clone(), ws_auth)),
         )
         .route(
             "/v1/audit",
@@ -295,6 +329,157 @@ async fn files_preview(
         Err(crate::files::FilesError::PathOutsideRoot) => StatusCode::FORBIDDEN.into_response(),
         Err(crate::files::FilesError::NotFound) => StatusCode::NOT_FOUND.into_response(),
         Err(_) => StatusCode::BAD_REQUEST.into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TransferCreateRequest {
+    #[serde(alias = "destination", alias = "targetPath")]
+    path: String,
+    #[serde(default, alias = "sha256")]
+    expected_sha256: Option<String>,
+    #[serde(default, alias = "conflict")]
+    conflict_policy: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TransferChunkRequest {
+    offset: u64,
+    #[serde(alias = "base64")]
+    data: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TransferDownloadQuery {
+    path: String,
+    start: Option<u64>,
+    end: Option<u64>,
+}
+
+async fn transfer_create(
+    State(state): State<GatewayState>,
+    Json(request): Json<TransferCreateRequest>,
+) -> Response {
+    let Some(manager) = state.transfers.read().await.clone() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let policy = match request.conflict_policy.as_deref() {
+        None => None,
+        Some("keep_both") => Some(ConflictPolicy::KeepBoth),
+        Some("overwrite") => Some(ConflictPolicy::Overwrite),
+        Some(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    match manager
+        .create_upload(
+            &PathBuf::from(request.path),
+            request.expected_sha256,
+            policy,
+        )
+        .await
+    {
+        Ok(upload) => Json(serde_json::json!({
+            "id": upload.id,
+            "destination": upload.destination,
+        }))
+        .into_response(),
+        Err(error) => transfer_error_response(error),
+    }
+}
+
+async fn transfer_chunk(
+    State(state): State<GatewayState>,
+    AxumPath(transfer_id): AxumPath<String>,
+    Json(request): Json<TransferChunkRequest>,
+) -> Response {
+    let Some(manager) = state.transfers.read().await.clone() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(request.data) {
+        Ok(bytes) if bytes.len() <= MAX_CHUNK_BYTES => bytes,
+        Ok(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    match manager
+        .write_chunk(&transfer_id, request.offset, &bytes)
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => transfer_error_response(error),
+    }
+}
+
+async fn transfer_finish(
+    State(state): State<GatewayState>,
+    AxumPath(transfer_id): AxumPath<String>,
+) -> Response {
+    let Some(manager) = state.transfers.read().await.clone() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    match manager.finish(&transfer_id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => transfer_error_response(error),
+    }
+}
+
+async fn transfer_cancel(
+    State(state): State<GatewayState>,
+    AxumPath(transfer_id): AxumPath<String>,
+) -> Response {
+    let Some(manager) = state.transfers.read().await.clone() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    match manager.cancel(&transfer_id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => transfer_error_response(error),
+    }
+}
+
+async fn transfer_download(
+    State(state): State<GatewayState>,
+    Query(query): Query<TransferDownloadQuery>,
+) -> Response {
+    let Some(manager) = state.transfers.read().await.clone() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let start = query.start.unwrap_or(0);
+    let end = query
+        .end
+        .unwrap_or(start.saturating_add(MAX_DOWNLOAD_BYTES));
+    if end < start || end.saturating_sub(start) > MAX_DOWNLOAD_BYTES {
+        return StatusCode::RANGE_NOT_SATISFIABLE.into_response();
+    }
+    match manager
+        .read_range(&PathBuf::from(query.path), start, end)
+        .await
+    {
+        Ok(bytes) => {
+            let status = if query.start.is_some() || query.end.is_some() {
+                StatusCode::PARTIAL_CONTENT
+            } else {
+                StatusCode::OK
+            };
+            (
+                status,
+                [("content-type", "application/octet-stream")],
+                bytes,
+            )
+                .into_response()
+        }
+        Err(error) => transfer_error_response(error),
+    }
+}
+
+fn transfer_error_response(error: TransferError) -> Response {
+    match error {
+        TransferError::Conflict { .. } => StatusCode::CONFLICT.into_response(),
+        TransferError::PathOutsideRoot => StatusCode::FORBIDDEN.into_response(),
+        TransferError::UnknownTransfer => StatusCode::NOT_FOUND.into_response(),
+        TransferError::InvalidOffset
+        | TransferError::HashMismatch
+        | TransferError::Authentication => StatusCode::BAD_REQUEST.into_response(),
+        TransferError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
