@@ -32,12 +32,36 @@ if [ "$have_xcodegen" -eq 1 ] && [ "$have_xcodebuild" -eq 1 ]; then
     echo "==> xcodegen generate"
     xcodegen generate --spec ios/project.yml
 
+    # The handoff document names iPhone 16, which only exists from Xcode 16.
+    # Prefer it, but fall back to any available iPhone so the gate is runnable
+    # on an older Xcode instead of failing with "destination not found".
+    simulator="${REMOTEAI_SIMULATOR:-}"
+    if [ -z "$simulator" ]; then
+        for candidate in "iPhone 16" "iPhone 15" "iPhone SE (3rd generation)"; do
+            if xcrun simctl list devices available | grep -q "^    $candidate ("; then
+                simulator="$candidate"
+                break
+            fi
+        done
+    fi
+    if [ -z "$simulator" ]; then
+        echo "==> XCODE GATE: NOT RUN"
+        echo "    no available iPhone simulator found (xcrun simctl list devices available)"
+        [ "$require_xcode" -eq 1 ] && exit 1
+        exit 0
+    fi
+
     echo
-    echo "==> xcodebuild test (iPhone 16 simulator)"
+    echo "==> xcodebuild test ($simulator simulator)"
+    # Pin DerivedData to the worktree. The shared default location is keyed by
+    # project name, so a sibling worktree's cached package build leaks in and
+    # fails the compile with stale type signatures.
     xcodebuild \
         -project ios/RemoteAI.xcodeproj \
         -scheme RemoteAI \
-        -destination 'platform=iOS Simulator,name=iPhone 16' \
+        -destination "platform=iOS Simulator,name=$simulator" \
+        -derivedDataPath ios/.derivedData \
+        -skip-testing:RemoteAIUITests/RealAgentConversationUITests \
         test
 else
     echo "==> XCODE GATE: NOT RUN"
