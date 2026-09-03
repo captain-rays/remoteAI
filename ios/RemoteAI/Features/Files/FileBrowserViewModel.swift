@@ -137,6 +137,14 @@ public final class FileBrowserViewModel {
 
     public func clearPreview() { preview = nil }
 
+    public static func parentPath(of path: String) -> String? {
+        guard path != "/" else { return nil }
+        var components = path.split(separator: "/").map(String.init)
+        guard !components.isEmpty else { return nil }
+        components.removeLast()
+        return components.isEmpty ? "/" : "/" + components.joined(separator: "/")
+    }
+
     static func normalize(_ path: String) throws -> String {
         guard path.hasPrefix("/") else { throw AgentClientError.rejected("relative_path") }
         let components = path.split(separator: "/")

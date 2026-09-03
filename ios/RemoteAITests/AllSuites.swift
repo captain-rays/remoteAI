@@ -11,5 +11,6 @@ public enum AllSuites {
         AppModelSuite.suite,
         ConversationViewModelSuite.suite,
         FileBrowserViewModelSuite.suite,
+        TransferSuite.suite,
     ]
 }

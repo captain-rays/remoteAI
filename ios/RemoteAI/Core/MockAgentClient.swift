@@ -448,7 +448,9 @@ public actor MockAgentClient: AgentClient {
         let chunkSize = 64 * 1024
         let totalChunks = max(1, Int((request.byteCount + Int64(chunkSize) - 1) / Int64(chunkSize)))
 
-        if let existing, request.conflictPolicy == nil {
+        // Conflict handling applies to uploads onto the Mac only; a download
+        // reads a file that is expected to already exist.
+        if request.direction == .upload, let existing, request.conflictPolicy == nil {
             // No policy chosen: report the conflict and leave the destination alone.
             return TransferTicket(
                 id: "ticket-\(tickets.count + 1)",
@@ -462,7 +464,7 @@ public actor MockAgentClient: AgentClient {
         }
 
         let destination: String
-        if existing != nil, request.conflictPolicy == .keepBoth {
+        if request.direction == .upload, existing != nil, request.conflictPolicy == .keepBoth {
             destination = MockAgentClient.uniquePath(for: intended, in: entries)
         } else {
             destination = intended
