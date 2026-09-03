@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader as StdBufReader};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -15,6 +17,8 @@ use crate::protocol::{
     ApprovalDecision, ConversationEvent, ConversationKind, ConversationSummary, ProviderId,
     ProviderStatus,
 };
+
+const MAX_METADATA_LINE_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandSpec {
@@ -129,6 +133,7 @@ pub struct ClaudeAdapter {
     status: ProviderStatus,
     events: broadcast::Sender<ConversationEvent>,
     sessions: RwLock<HashMap<String, Arc<ClaudeSession>>>,
+    session_paths: RwLock<HashMap<String, PathBuf>>,
 }
 
 struct ClaudeSession {
@@ -152,6 +157,7 @@ impl ClaudeAdapter {
             mapper: ClaudeMapper::new(home.into()),
             events,
             sessions: RwLock::new(HashMap::new()),
+            session_paths: RwLock::new(HashMap::new()),
         }
     }
 
@@ -240,7 +246,39 @@ impl ProviderAdapter for ClaudeAdapter {
     async fn list_conversations(&self) -> anyhow::Result<Vec<ConversationSummary>> {
         // Claude's supported project/session files are metadata indexes. We intentionally do not
         // copy transcript bodies or credentials into Agent storage.
-        Ok(Vec::new())
+        let projects = self.mapper.home.join(".claude/projects");
+        let mut pending = vec![projects];
+        let mut conversations = Vec::new();
+        let mut session_paths = HashMap::new();
+        while let Some(directory) = pending.pop() {
+            let entries = match fs::read_dir(&directory) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
+            };
+            for entry in entries {
+                let entry = entry?;
+                let path = entry.path();
+                let file_type = entry.file_type()?;
+                if file_type.is_dir() {
+                    pending.push(path);
+                } else if file_type.is_file()
+                    && path.extension().and_then(|extension| extension.to_str()) == Some("jsonl")
+                    && let Some(conversation) = read_conversation_metadata(&self.mapper, &path)?
+                {
+                    session_paths.entry(conversation.id.clone()).or_insert(path);
+                    conversations.push(conversation);
+                }
+            }
+        }
+        conversations.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        *self.session_paths.write().await = session_paths;
+        Ok(conversations)
     }
 
     async fn load_conversation(
@@ -354,6 +392,96 @@ impl ProviderAdapter for ClaudeAdapter {
 
 fn same_path(left: &Path, right: &Path) -> bool {
     left.components().eq(right.components())
+}
+
+fn read_conversation_metadata(
+    mapper: &ClaudeMapper,
+    path: &Path,
+) -> anyhow::Result<Option<ConversationSummary>> {
+    let file = File::open(path)?;
+    let mut metadata = SessionMetadata::default();
+    for line in StdBufReader::new(file).lines() {
+        let line = match line {
+            Ok(line) if line.len() <= MAX_METADATA_LINE_BYTES => line,
+            Ok(_) | Err(_) => continue,
+        };
+        let value: Value = match serde_json::from_str(&line) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        metadata.session_id = metadata
+            .session_id
+            .or_else(|| string_field(&value, &["sessionId", "session_id"]));
+        metadata.cwd = metadata.cwd.or_else(|| string_field(&value, &["cwd"]));
+        metadata.title = metadata.title.or_else(|| first_user_text(&value));
+        if metadata.session_id.is_some() && metadata.cwd.is_some() && metadata.title.is_some() {
+            break;
+        }
+    }
+
+    let id = metadata.session_id.or_else(|| {
+        path.file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(str::to_owned)
+    });
+    let Some(id) = id else {
+        return Ok(None);
+    };
+    let cwd = metadata
+        .cwd
+        .map(PathBuf::from)
+        .unwrap_or_else(|| mapper.home.clone());
+    let updated_at = fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .map(DateTime::<Utc>::from)
+        .unwrap_or_else(|_| Utc::now());
+    Ok(Some(ConversationSummary {
+        id,
+        provider: ProviderId::Claude,
+        kind: mapper.classify(cwd.clone()),
+        title: metadata
+            .title
+            .unwrap_or_else(|| "Untitled Claude session".into()),
+        project_id: None,
+        project_path: (mapper.classify(cwd.clone()) == ConversationKind::Project)
+            .then(|| cwd.to_string_lossy().into_owned()),
+        updated_at,
+        status: "idle".into(),
+        write_state: None,
+        write_block_code: None,
+    }))
+}
+
+#[derive(Default)]
+struct SessionMetadata {
+    session_id: Option<String>,
+    cwd: Option<String>,
+    title: Option<String>,
+}
+
+fn string_field(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_str))
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn first_user_text(value: &Value) -> Option<String> {
+    if value.get("type").and_then(Value::as_str) != Some("user") {
+        return None;
+    }
+    let content = value.pointer("/message/content")?;
+    let text = match content {
+        Value::String(text) => Some(text.as_str()),
+        Value::Array(items) => items.iter().find_map(|item| {
+            (item.get("type").and_then(Value::as_str) == Some("text"))
+                .then(|| item.get("text").and_then(Value::as_str))
+                .flatten()
+        }),
+        _ => None,
+    }?;
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.chars().take(256).collect())
 }
 
 #[allow(dead_code)]

@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","session_id":"session-b","cwd":"__HOME__"}
+{"type":"user","session_id":"session-b","cwd":"__HOME__","message":{"role":"user","content":[{"type":"text","text":"Daily task"}]}}

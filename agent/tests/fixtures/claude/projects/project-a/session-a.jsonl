@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","session_id":"session-a","cwd":"/actual/project-a"}
+{"type":"user","sessionId":"session-a","cwd":"/actual/project-a","message":{"role":"user","content":"Build project alpha"}}
+{"type":"assistant","sessionId":"session-a","message":{"content":[{"type":"text","text":"done"}]}}
+not-json-and-never-exposed

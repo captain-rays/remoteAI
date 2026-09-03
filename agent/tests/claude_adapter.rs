@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::{Duration, SystemTime};
 
 use remote_ai_agent::adapters::claude::{ClaudeAdapter, ClaudeMapper};
 use remote_ai_agent::protocol::{ConversationEvent, ConversationKind, ProviderId};
@@ -62,7 +63,10 @@ fn command_spec_requires_manual_permissions_and_resume_is_explicit() {
 #[test]
 fn stream_json_output_requires_verbose() {
     let adapter = ClaudeAdapter::new("/usr/local/bin/claude", "/Users/test");
-    for spec in [adapter.command_spec(None), adapter.command_spec(Some("session-1"))] {
+    for spec in [
+        adapter.command_spec(None),
+        adapter.command_spec(Some("session-1")),
+    ] {
         assert!(
             spec.args.iter().any(|arg| arg == "--print"),
             "adapter must run the CLI non-interactively"
@@ -95,4 +99,54 @@ async fn lists_real_claude_sessions_without_modifying_them() {
     use remote_ai_agent::adapters::ProviderAdapter;
     let adapter = ClaudeAdapter::new("claude", std::env::var("HOME").unwrap());
     let _ = adapter.list_conversations().await.unwrap();
+}
+
+#[tokio::test]
+async fn indexes_claude_project_sessions_from_bounded_metadata() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let temp = tempfile::tempdir().unwrap();
+    let projects = temp.path().join(".claude/projects");
+    std::fs::create_dir_all(projects.join("project-a/nested")).unwrap();
+    std::fs::write(temp.path().join(".claude/.credentials.json"), "secret").unwrap();
+    std::fs::write(
+        temp.path().join(".claude/projects/settings.json"),
+        r#"{"token":"must not be read"}"#,
+    )
+    .unwrap();
+
+    let project_file = projects.join("project-a/nested/session-a.jsonl");
+    let daily_file = projects.join("session-b.jsonl");
+    std::fs::write(
+        &project_file,
+        include_str!("fixtures/claude/projects/project-a/session-a.jsonl"),
+    )
+    .unwrap();
+    let daily_fixture = include_str!("fixtures/claude/projects/project-b/session-b.jsonl")
+        .replace("__HOME__", temp.path().to_str().unwrap());
+    std::fs::write(&daily_file, daily_fixture).unwrap();
+    std::fs::File::open(&project_file)
+        .unwrap()
+        .set_modified(SystemTime::now())
+        .unwrap();
+    std::fs::File::open(&daily_file)
+        .unwrap()
+        .set_modified(SystemTime::now() - Duration::from_secs(60))
+        .unwrap();
+
+    let adapter = ClaudeAdapter::new("claude", temp.path());
+    let conversations = adapter.list_conversations().await.unwrap();
+
+    assert_eq!(conversations.len(), 2);
+    assert_eq!(conversations[0].id, "session-a");
+    assert_eq!(conversations[0].kind, ConversationKind::Project);
+    assert_eq!(
+        conversations[0].project_path.as_deref(),
+        Some("/actual/project-a")
+    );
+    assert_eq!(conversations[0].title, "Build project alpha");
+    assert_eq!(conversations[1].id, "session-b");
+    assert_eq!(conversations[1].kind, ConversationKind::Daily);
+    assert_eq!(conversations[1].project_path, None);
+    assert_eq!(conversations[1].title, "Daily task");
 }
