@@ -137,6 +137,8 @@ pub struct ClaudeAdapter {
     events: broadcast::Sender<ConversationEvent>,
     sessions: RwLock<HashMap<String, Arc<ClaudeSession>>>,
     session_paths: RwLock<HashMap<String, PathBuf>>,
+    /// Placeholder id handed to the phone -> the id Claude itself assigned.
+    adopted_ids: Arc<RwLock<HashMap<String, String>>>,
     history_page_size: usize,
 }
 
@@ -162,8 +164,15 @@ impl ClaudeAdapter {
             events,
             sessions: RwLock::new(HashMap::new()),
             session_paths: RwLock::new(HashMap::new()),
+            adopted_ids: Arc::new(RwLock::new(HashMap::new())),
             history_page_size: DEFAULT_HISTORY_PAGE_SIZE,
         }
+    }
+
+    /// The id Claude assigned to a session this agent started, once its first
+    /// record arrives. Until then the placeholder is all anyone has.
+    pub async fn resolved_session_id(&self, id: &str) -> Option<String> {
+        self.adopted_ids.read().await.get(id).cloned()
     }
 
     /// Narrow the page size. Tests use it to exercise paging on small
@@ -200,10 +209,23 @@ impl ClaudeAdapter {
         }
     }
 
-    async fn spawn_session(&self, resume: Option<&str>) -> anyhow::Result<Arc<ClaudeSession>> {
+    async fn spawn_session(
+        &self,
+        resume: Option<&str>,
+        cwd: Option<&Path>,
+        local_id: &str,
+    ) -> anyhow::Result<Arc<ClaudeSession>> {
         let spec = self.command_spec(resume);
-        let mut child = Command::new(&spec.program)
-            .args(&spec.args)
+        let mut command = Command::new(&spec.program);
+        command.args(&spec.args);
+        if let Some(cwd) = cwd {
+            // Claude records the session under the directory its process runs
+            // in. Passing a cwd in the first message does nothing, which is how
+            // phone-started project sessions used to land in the agent's own
+            // directory and never show up on the Mac.
+            command.current_dir(cwd);
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -224,9 +246,16 @@ impl ClaudeAdapter {
         }
         let events = self.events.clone();
         let mapper = self.mapper.clone();
+        let adopted = self.adopted_ids.clone();
+        let local_id = local_id.to_owned();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
+                if let Some(real) = session_id_from_init(&line)
+                    && real != local_id
+                {
+                    adopted.write().await.insert(local_id.clone(), real);
+                }
                 if let Ok(value) = mapper.map_line(&line) {
                     let _ = events.send(value);
                 }
@@ -298,14 +327,26 @@ impl ProviderAdapter for ClaudeAdapter {
         id: &str,
         cursor: Option<String>,
     ) -> anyhow::Result<ConversationPage> {
-        let path = self
-            .session_paths
-            .read()
-            .await
-            .get(id)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("session is not indexed"))?;
-        let events = read_conversation_events(id, &path)?;
+        // A session started from the phone is addressed by its placeholder id
+        // until a refresh; resolve it to the transcript Claude actually wrote.
+        let resolved = self.resolved_session_id(id).await;
+        let lookup = resolved.as_deref().unwrap_or(id);
+        let path = self.session_paths.read().await.get(lookup).cloned();
+        let Some(path) = path else {
+            // A session this agent just started has no transcript on disk yet.
+            // That is an empty history, not a failure — the phone opens the
+            // screen before the first turn exists.
+            anyhow::ensure!(
+                self.sessions.read().await.contains_key(id),
+                "session is not indexed"
+            );
+            return Ok(ConversationPage {
+                conversation_id: id.to_owned(),
+                events: Vec::new(),
+                next_cursor: None,
+            });
+        };
+        let events = read_conversation_events(lookup, &path)?;
         let start = cursor
             .as_deref()
             .map(|cursor| cursor.parse::<usize>())
@@ -322,24 +363,28 @@ impl ProviderAdapter for ClaudeAdapter {
     }
 
     async fn start(&self, _kind: ConversationKind, cwd: Option<PathBuf>) -> anyhow::Result<String> {
-        let session = self.spawn_session(None).await?;
-        let id = format!("pending-{}", uuid::Uuid::new_v4());
-        self.sessions
-            .write()
-            .await
-            .insert(id.clone(), session.clone());
-        if let Some(cwd) = cwd {
-            Self::write(
-                &session,
-                json!({"type":"user","cwd":cwd,"message":{"role":"user","content":""}}),
-            )
-            .await?;
+        if let Some(cwd) = cwd.as_deref() {
+            anyhow::ensure!(cwd.is_dir(), "project directory is not available");
         }
+        let id = format!("pending-{}", uuid::Uuid::new_v4());
+        let session = self.spawn_session(None, cwd.as_deref(), &id).await?;
+        self.sessions.write().await.insert(id.clone(), session);
         Ok(id)
     }
 
     async fn resume(&self, id: &str) -> anyhow::Result<()> {
-        let session = self.spawn_session(Some(id)).await?;
+        // Resume in the session's own project, so the resumed turns are stored
+        // where the rest of that session lives.
+        let cwd = self
+            .list_conversations()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .find(|summary| summary.id == id)
+            .and_then(|summary| summary.project_path)
+            .map(PathBuf::from)
+            .filter(|path| path.is_dir());
+        let session = self.spawn_session(Some(id), cwd.as_deref(), id).await?;
         self.sessions.write().await.insert(id.to_owned(), session);
         Ok(())
     }
@@ -491,6 +536,19 @@ fn read_conversation_events(session_id: &str, path: &Path) -> anyhow::Result<Vec
         events.extend(normalize_history_record(session_id, line_number, &value));
     }
     Ok(events)
+}
+
+/// The session id Claude reports in its `system`/`init` record.
+fn session_id_from_init(line: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    if value.get("type").and_then(Value::as_str) != Some("system") {
+        return None;
+    }
+    value
+        .get("session_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
 }
 
 fn normalize_history_record(session_id: &str, line_number: usize, value: &Value) -> Vec<Value> {

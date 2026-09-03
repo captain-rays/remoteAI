@@ -152,6 +152,123 @@ async fn indexes_claude_project_sessions_from_bounded_metadata() {
 }
 
 #[tokio::test]
+async fn a_started_project_session_runs_in_that_project_and_adopts_its_real_id() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+    use remote_ai_agent::protocol::{ConversationEvent, ConversationKind};
+
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project-alpha");
+    std::fs::create_dir_all(&project).unwrap();
+
+    // A stub CLI that reports the directory it was actually started in, the
+    // way Claude's stream-json init record does.
+    let stub = temp.path().join("fake-claude.sh");
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\nprintf '{\"type\":\"system\",\"subtype\":\"init\",\
+\"session_id\":\"real-session-1\",\"cwd\":\"%s\"}\\n' \"$PWD\"\ncat > /dev/null\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    let adapter = ClaudeAdapter::new(&stub, temp.path());
+    let mut events = adapter.subscribe();
+    let id = adapter
+        .start(ConversationKind::Project, Some(project.clone()))
+        .await
+        .unwrap();
+
+    let started = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
+        .await
+        .expect("the stub should report its startup")
+        .expect("event");
+    let ConversationEvent::Started(payload) = started else {
+        panic!("expected a started event, got {started:?}");
+    };
+    assert_eq!(
+        payload.get("cwd").and_then(|value| value.as_str()),
+        Some(project.canonicalize().unwrap().to_string_lossy().as_ref()),
+        "the CLI must run in the project the phone chose"
+    );
+
+    // The provider's own id must replace the placeholder, or the Mac and the
+    // phone are looking at two different sessions.
+    let resolved = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Some(real) = adapter.resolved_session_id(&id).await {
+                return real;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the placeholder id should resolve");
+    assert_eq!(resolved, "real-session-1");
+
+    // Reading the placeholder must reach the transcript Claude wrote, so the
+    // screen the phone already has open fills in.
+    std::fs::create_dir_all(temp.path().join(".claude/projects/project-alpha")).unwrap();
+    std::fs::write(
+        temp.path()
+            .join(".claude/projects/project-alpha/real-session-1.jsonl"),
+        format!(
+            r#"{{"type":"user","sessionId":"real-session-1","uuid":"u-1","cwd":"{}","message":{{"content":[{{"type":"text","text":"hi"}}]}}}}"#,
+            project.display()
+        ),
+    )
+    .unwrap();
+    adapter.list_conversations().await.unwrap();
+
+    let page = adapter.load_conversation(&id, None).await.unwrap();
+    assert_eq!(page.events.len(), 1);
+    assert_eq!(page.events[0]["type"], "conversation.user_message");
+}
+
+#[tokio::test]
+async fn a_started_project_session_rejects_a_directory_that_is_not_there() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+    use remote_ai_agent::protocol::ConversationKind;
+
+    let temp = tempfile::tempdir().unwrap();
+    let adapter = ClaudeAdapter::new("/usr/bin/true", temp.path());
+
+    assert!(
+        adapter
+            .start(ConversationKind::Project, Some(temp.path().join("missing")))
+            .await
+            .is_err(),
+        "a project directory that does not exist must not start a session"
+    );
+}
+
+#[tokio::test]
+async fn a_session_started_here_reads_back_as_empty_history() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+    use remote_ai_agent::protocol::ConversationKind;
+
+    let temp = tempfile::tempdir().unwrap();
+    // `true` exits immediately: this test is about a started session that has
+    // not written a transcript yet, not about talking to Claude.
+    let adapter = ClaudeAdapter::new("/usr/bin/true", temp.path());
+    let id = adapter.start(ConversationKind::Daily, None).await.unwrap();
+
+    let page = adapter.load_conversation(&id, None).await.unwrap();
+
+    assert!(page.events.is_empty());
+    assert_eq!(page.next_cursor, None);
+    assert_eq!(page.conversation_id, id);
+
+    assert!(
+        adapter.load_conversation("never-seen", None).await.is_err(),
+        "an unknown conversation is still an error"
+    );
+}
+
+#[tokio::test]
 async fn history_pages_skip_records_with_nothing_to_show() {
     use remote_ai_agent::adapters::ProviderAdapter;
 
