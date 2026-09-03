@@ -19,7 +19,9 @@ use crate::protocol::{
 };
 
 const MAX_METADATA_LINE_BYTES: usize = 64 * 1024;
-const HISTORY_PAGE_SIZE: usize = 3;
+/// Upper bound on one history page. Real transcripts are long, so the agent —
+/// not the client — decides how much one read may cost.
+const DEFAULT_HISTORY_PAGE_SIZE: usize = 50;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandSpec {
@@ -135,6 +137,7 @@ pub struct ClaudeAdapter {
     events: broadcast::Sender<ConversationEvent>,
     sessions: RwLock<HashMap<String, Arc<ClaudeSession>>>,
     session_paths: RwLock<HashMap<String, PathBuf>>,
+    history_page_size: usize,
 }
 
 struct ClaudeSession {
@@ -159,7 +162,15 @@ impl ClaudeAdapter {
             events,
             sessions: RwLock::new(HashMap::new()),
             session_paths: RwLock::new(HashMap::new()),
+            history_page_size: DEFAULT_HISTORY_PAGE_SIZE,
         }
+    }
+
+    /// Narrow the page size. Tests use it to exercise paging on small
+    /// fixtures; production keeps the default bound.
+    pub fn with_history_page_size(mut self, size: usize) -> Self {
+        self.history_page_size = size.max(1);
+        self
     }
 
     pub fn command_spec(&self, resume: Option<&str>) -> CommandSpec {
@@ -302,7 +313,7 @@ impl ProviderAdapter for ClaudeAdapter {
             .map_err(|_| anyhow::anyhow!("invalid history cursor"))?
             .unwrap_or(0);
         anyhow::ensure!(start <= events.len(), "history cursor is out of range");
-        let end = (start + HISTORY_PAGE_SIZE).min(events.len());
+        let end = (start + self.history_page_size).min(events.len());
         Ok(ConversationPage {
             conversation_id: id.to_owned(),
             events: events[start..end].to_vec(),
@@ -506,10 +517,11 @@ fn normalize_history_record(session_id: &str, line_number: usize, value: &Value)
             };
             vec![json!({"type": event_type, "payload": {}})]
         }
-        _ => vec![json!({
-            "type": "unsupported",
-            "payload": {"provider": "claude", "sourceType": kind}
-        })],
+        // A stored transcript is mostly bookkeeping — queue operations,
+        // attachments, hook records. There is nothing to render, so it must
+        // not occupy a page slot and leave the phone staring at a blank
+        // transcript. Unknown *live* events still degrade to `unsupported`.
+        _ => Vec::new(),
     }
 }
 
@@ -547,7 +559,13 @@ fn normalize_assistant_record(record_id: &str, value: &Value) -> Vec<Value> {
     for (index, item) in items.iter().enumerate() {
         match item.get("type").and_then(Value::as_str) {
             Some("thinking") => {
-                if let Some(text) = item.get("thinking").and_then(Value::as_str) {
+                // Claude Code stores a signature-only block when the reasoning
+                // body was not persisted; an empty disclosure is noise.
+                if let Some(text) = item
+                    .get("thinking")
+                    .and_then(Value::as_str)
+                    .filter(|text| !text.trim().is_empty())
+                {
                     let reasoning_id = if index == 0 {
                         record_id.to_owned()
                     } else {

@@ -152,6 +152,88 @@ async fn indexes_claude_project_sessions_from_bounded_metadata() {
 }
 
 #[tokio::test]
+async fn history_pages_skip_records_with_nothing_to_show() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let temp = tempfile::tempdir().unwrap();
+    let project_file = temp
+        .path()
+        .join(".claude/projects/project-noise/session-noise.jsonl");
+    std::fs::create_dir_all(project_file.parent().unwrap()).unwrap();
+    // A real Claude transcript is mostly bookkeeping: queue operations and
+    // attachments outnumber the turns and render as nothing on the phone.
+    let mut lines = vec![
+        r#"{"type":"user","sessionId":"session-noise","uuid":"u-1","cwd":"/tmp/noise","message":{"content":[{"type":"text","text":"hello"}]}}"#.to_owned(),
+    ];
+    for index in 0..10 {
+        lines.push(format!(
+            r#"{{"type":"queue-operation","sessionId":"session-noise","uuid":"q-{index}"}}"#
+        ));
+    }
+    lines.push(
+        r#"{"type":"assistant","sessionId":"session-noise","uuid":"a-1","message":{"content":[{"type":"text","text":"world"}]}}"#
+            .to_owned(),
+    );
+    std::fs::write(&project_file, lines.join("\n")).unwrap();
+
+    let adapter = ClaudeAdapter::new("claude", temp.path()).with_history_page_size(3);
+    adapter.list_conversations().await.unwrap();
+
+    let page = adapter
+        .load_conversation("session-noise", None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        page.events.len(),
+        2,
+        "bookkeeping records must not fill a page with blanks: {:?}",
+        page.events
+    );
+    assert_eq!(page.events[0]["type"], "conversation.user_message");
+    assert_eq!(page.events[1]["type"], "conversation.message_completed");
+    assert_eq!(page.next_cursor, None);
+}
+
+#[tokio::test]
+async fn a_signature_only_thinking_block_is_not_shown_as_reasoning() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let temp = tempfile::tempdir().unwrap();
+    let project_file = temp
+        .path()
+        .join(".claude/projects/project-sig/session-sig.jsonl");
+    std::fs::create_dir_all(project_file.parent().unwrap()).unwrap();
+    std::fs::write(
+        &project_file,
+        concat!(
+            r#"{"type":"user","sessionId":"session-sig","uuid":"u-1","cwd":"/tmp/sig","message":{"content":[{"type":"text","text":"hi"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","sessionId":"session-sig","uuid":"a-1","message":{"content":[{"type":"thinking","thinking":"","signature":"abc"},{"type":"text","text":"done"}]}}"#,
+        ),
+    )
+    .unwrap();
+
+    let adapter = ClaudeAdapter::new("claude", temp.path());
+    adapter.list_conversations().await.unwrap();
+
+    let page = adapter
+        .load_conversation("session-sig", None)
+        .await
+        .unwrap();
+
+    assert!(
+        !page
+            .events
+            .iter()
+            .any(|event| event["type"] == "conversation.reasoning_completed"),
+        "an empty thinking block must not become a reasoning row: {:?}",
+        page.events
+    );
+    assert_eq!(page.events.len(), 2);
+}
+
+#[tokio::test]
 async fn loads_paged_claude_history_with_normalized_events() {
     use remote_ai_agent::adapters::ProviderAdapter;
 
@@ -165,7 +247,7 @@ async fn loads_paged_claude_history_with_normalized_events() {
         include_str!("fixtures/claude/projects/project-a/session-a.jsonl"),
     )
     .unwrap();
-    let adapter = ClaudeAdapter::new("claude", temp.path());
+    let adapter = ClaudeAdapter::new("claude", temp.path()).with_history_page_size(3);
     adapter.list_conversations().await.unwrap();
 
     let first = adapter.load_conversation("session-a", None).await.unwrap();
