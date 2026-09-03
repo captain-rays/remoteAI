@@ -1,0 +1,2 @@
+{"protocolVersion":1,"messageId":"11111111-1111-4111-8111-111111111111","kind":"event","requestId":null,"sequence":1,"conversationId":"thread-1","type":"conversation.delta","payload":{"text":"hello"}}
+{"protocolVersion":1,"messageId":"22222222-2222-4222-8222-222222222222","kind":"event","requestId":null,"sequence":2,"conversationId":"thread-1","type":"future.event","payload":{"future":true}}

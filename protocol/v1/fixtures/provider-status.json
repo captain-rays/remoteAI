@@ -1,0 +1,7 @@
+{
+  "provider": "codex",
+  "available": true,
+  "executablePath": "/usr/local/bin/codex",
+  "version": "0.144.4",
+  "reason": null
+}

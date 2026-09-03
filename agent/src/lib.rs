@@ -1,3 +1,5 @@
+pub mod protocol;
+
 pub const fn agent_name() -> &'static str {
     "RemoteAI Agent"
 }
