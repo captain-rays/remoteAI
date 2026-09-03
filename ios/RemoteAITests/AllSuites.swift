@@ -9,5 +9,6 @@ public enum AllSuites {
         ConnectionSuite.suite,
         CryptoSuite.suite,
         AppModelSuite.suite,
+        ConversationViewModelSuite.suite,
     ]
 }
