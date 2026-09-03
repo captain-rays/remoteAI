@@ -41,6 +41,21 @@ public final class FileBrowserViewModel {
 
     // MARK: - Navigation
 
+    /// Loads the agent-selected home directory the first time Files is shown.
+    /// Re-entering the tab keeps the user's current location intact.
+    public func loadInitialDirectory() async {
+        guard listing == nil, isOnline else { return }
+        errorMessage = nil
+        do {
+            let result = try await client.initialDirectory()
+            listing = result
+            cachedListings[cacheKey(result.path)] = result
+            recordRecent(result.path)
+        } catch {
+            errorMessage = "\(error)"
+        }
+    }
+
     public func open(_ path: String) async {
         errorMessage = nil
         preview = nil

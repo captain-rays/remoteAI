@@ -215,6 +215,9 @@ public protocol AgentClient: Sendable {
 
     func decideApproval(id: String, decision: ApprovalDecision) async throws
 
+    /// Returns the agent's default browsing directory (typically the user's home).
+    /// The client owns this path so the UI never hardcodes a machine-specific home.
+    func initialDirectory() async throws -> DirectoryListing
     func listFiles(path: String, showHidden: Bool) async throws -> DirectoryListing
     func filePreview(path: String, maxBytes: Int) async throws -> FilePreview
 

@@ -401,6 +401,10 @@ public actor MockAgentClient: AgentClient {
         )
     }
 
+    public func initialDirectory() async throws -> DirectoryListing {
+        try await listFiles(path: "/Users/dev", showHidden: false)
+    }
+
     public func listFiles(path: String, showHidden: Bool) async throws -> DirectoryListing {
         let normalized = try MockAgentClient.normalize(path)
         guard let entries = directories[normalized] else {

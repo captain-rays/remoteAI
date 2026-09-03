@@ -102,6 +102,7 @@ public struct FileBrowserView: View {
                     }
                 }
             }
+            .task { await model.loadInitialDirectory() }
         }
     }
 

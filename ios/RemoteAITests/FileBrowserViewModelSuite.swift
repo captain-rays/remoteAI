@@ -19,6 +19,13 @@ public enum FileBrowserViewModelSuite {
     public static let suite = TestSuite(
         name: "FileBrowserViewModelSuite",
         cases: [
+            TestCase("initial directory loads from the agent without a hardcoded path") {
+                let model = await makeViewModel()
+                await model.loadInitialDirectory()
+                let listing = try expectNotNil(await model.listing)
+                try expectTrue(listing.entries.contains { $0.name == "work" })
+            },
+
             TestCase("opening a directory lists its entries") {
                 let model = await makeViewModel()
                 await model.open("/Users/dev/work/api")
