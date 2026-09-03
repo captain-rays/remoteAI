@@ -19,8 +19,11 @@ import Foundation
 /// single-writer rule.
 public actor MockAgentClient: AgentClient {
 
-    public nonisolated let events: AsyncStream<EventEnvelope>
-    private nonisolated let continuation: AsyncStream<EventEnvelope>.Continuation
+    private nonisolated let fanout = EventFanout()
+
+    /// A fresh delivery of the feed per caller: two open transcripts must both
+    /// see every event.
+    public nonisolated var events: AsyncStream<EventEnvelope> { fanout.stream() }
 
     private var sequence = 0
     private var conversations: [ConversationSummary]
@@ -42,9 +45,6 @@ public actor MockAgentClient: AgentClient {
     public private(set) var transferRequestCount = 0
 
     public init() {
-        var captured: AsyncStream<EventEnvelope>.Continuation!
-        self.events = AsyncStream(bufferingPolicy: .unbounded) { captured = $0 }
-        self.continuation = captured
 
         let day = MockAgentClient.date
         self.projects = [
@@ -347,7 +347,7 @@ public actor MockAgentClient: AgentClient {
         if let conversationId {
             history[conversationId, default: []].append(envelope)
         }
-        continuation.yield(envelope)
+        fanout.yield(envelope)
         return envelope
     }
 

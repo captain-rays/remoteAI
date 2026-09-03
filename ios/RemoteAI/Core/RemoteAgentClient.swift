@@ -5,21 +5,21 @@ import Foundation
 /// read-only catalog/diagnostics APIs; mutating conversation requests travel
 /// over the encrypted websocket required by GatewaySession.
 public actor RemoteAgentClient: AgentClient {
-    public nonisolated let events: AsyncStream<EventEnvelope>
+    private nonisolated let fanout = EventFanout()
+
+    /// A fresh delivery of the feed per caller: two open transcripts must both
+    /// see every event.
+    public nonisolated var events: AsyncStream<EventEnvelope> { fanout.stream() }
 
     private let store: SecretStore
     private let session: URLSession
     private var socket: URLSessionWebSocketTask?
     private var keys: SessionKeys?
     private var sendCounter: UInt64 = 0
-    private let continuation: AsyncStream<EventEnvelope>.Continuation
 
     public init(store: SecretStore, session: URLSession = .shared) {
         self.store = store
         self.session = session
-        var captured: AsyncStream<EventEnvelope>.Continuation!
-        self.events = AsyncStream(bufferingPolicy: .unbounded) { captured = $0 }
-        self.continuation = captured
     }
 
     public static func endpoint(origin: URL, path: String) throws -> URL {
@@ -420,7 +420,7 @@ public actor RemoteAgentClient: AgentClient {
             let object = try JSONSerialization.jsonObject(with: opened) as? [String: Any]
             if object?["kind"] as? String == EnvelopeKind.event.rawValue {
                 if let event = try? ProtocolCoding.decodeEvent(from: opened) {
-                    continuation.yield(event)
+                    fanout.yield(event)
                     if waitForTurnCompletion, !Self.shouldKeepSocket(after: event) {
                         return try ProtocolCoding.decoder.decode(Response.self, from: Data("{}".utf8))
                     }

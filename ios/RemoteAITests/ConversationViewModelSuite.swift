@@ -33,6 +33,24 @@ public enum ConversationViewModelSuite {
         )
     }
 
+    /// Waits for one specific event off a stream, giving up after a short wait
+    /// so a broken fan-out fails the test instead of hanging it.
+    static func waitForEvent(
+        _ stream: AsyncStream<EventEnvelope>, rawType: String
+    ) -> Task<Bool, Never> {
+        let waiter = Task { () -> Bool in
+            for await envelope in stream where envelope.rawType == rawType {
+                return true
+            }
+            return false
+        }
+        Task {
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            waiter.cancel()
+        }
+        return waiter
+    }
+
     static func delta(_ sequence: Int, _ text: String, id: String = "a1") -> EventEnvelope {
         event(
             sequence, "conversation.delta",
@@ -281,6 +299,29 @@ public enum ConversationViewModelSuite {
                 let users = await model.messages.filter { $0.role == .user }
                 try expectEqual(users.count, 1, "retry must update the same optimistic item")
                 try expectEqual(users[0].deliveryState, .sent)
+            },
+
+            TestCase("two open conversations each receive every event") {
+                // One AsyncStream hands each element to exactly one consumer,
+                // so a second open transcript silently eats the first one's
+                // events. Both must see the same single user_message event.
+                let client = MockAgentClient()
+                let first = await makeViewModel(client: client)
+                let second = await makeViewModel(client: client)
+
+                let firstSaw = waitForEvent(
+                    await first.eventStream(), rawType: "conversation.user_message"
+                )
+                let secondSaw = waitForEvent(
+                    await second.eventStream(), rawType: "conversation.user_message"
+                )
+
+                try await client.send(
+                    provider: .codex, conversationId: conversation.id, text: "ping"
+                )
+
+                try expectTrue(await firstSaw.value, "the first transcript missed the event")
+                try expectTrue(await secondSaw.value, "the second transcript missed the event")
             },
 
             TestCase("a provider echo of the user turn reconciles with the local bubble") {
