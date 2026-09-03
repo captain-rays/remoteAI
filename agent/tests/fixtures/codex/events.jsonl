@@ -1,0 +1,5 @@
+{"method":"item/agentMessage/delta","params":{"threadId":"project-1","turnId":"turn-1","itemId":"item-1","delta":"hello"}}
+{"id":"approval-command","method":"item/commandExecution/requestApproval","params":{"threadId":"project-1","turnId":"turn-1","itemId":"item-2","startedAtMs":1788393600000,"command":"git status","cwd":"/tmp/project"}}
+{"id":"approval-file","method":"item/fileChange/requestApproval","params":{"threadId":"project-1","turnId":"turn-1","itemId":"item-3","startedAtMs":1788393600000,"reason":"write file"}}
+{"method":"turn/completed","params":{"threadId":"project-1","turn":{"id":"turn-1","status":"completed","items":[]}}}
+{"method":"future/notification","params":{"threadId":"project-1","value":true}}

@@ -1,0 +1,22 @@
+{
+  "requests": [
+    "initialize",
+    "thread/list",
+    "thread/read",
+    "thread/start",
+    "thread/resume",
+    "turn/start",
+    "turn/interrupt"
+  ],
+  "notifications": [
+    "thread/started",
+    "turn/started",
+    "turn/completed",
+    "item/completed",
+    "item/agentMessage/delta"
+  ],
+  "serverRequests": [
+    "item/commandExecution/requestApproval",
+    "item/fileChange/requestApproval"
+  ]
+}
