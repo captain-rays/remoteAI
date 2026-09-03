@@ -48,6 +48,7 @@ public struct RootView: View {
             }
         }
         .task {
+            await dependencies.bootstrapPairingIfRequested()
             // Loading the catalog is the only thing that happens on launch.
             // No transfer is started here or anywhere else automatically.
             await model.reloadCatalog()

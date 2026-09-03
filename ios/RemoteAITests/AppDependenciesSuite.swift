@@ -4,6 +4,15 @@ import RemoteAITestKit
 
 public enum AppDependenciesSuite {
 
+    final class RecordingPairingService: PairingService, @unchecked Sendable {
+        private(set) var callCount = 0
+
+        func completePairing(payload: PairingPayload, phonePublicKey: Data) async throws -> Bool {
+            callCount += 1
+            return true
+        }
+    }
+
     @MainActor
     static func makeDependencies() -> AppDependencies {
         AppDependencies(
@@ -73,6 +82,53 @@ public enum AppDependenciesSuite {
                     await dependencies.appModel.isOnline,
                     "a real endpoint stays disconnected until pairing"
                 )
+            },
+
+            TestCase("pairing file launch argument is opt-in and parsed once") {
+                let url = URL(fileURLWithPath: "/tmp/remoteai-pairing.json")
+                try expectEqual(
+                    AppDependencies.pairingFileURL(
+                        arguments: ["RemoteAI", "-RemoteAIPairingFile", url.path]
+                    ),
+                    url
+                )
+                try expectNil(AppDependencies.pairingFileURL(arguments: ["RemoteAI"]))
+                try expectNil(
+                    AppDependencies.pairingFileURL(
+                        arguments: ["RemoteAI", "-RemoteAIPairingFile", "-UseMockAgent"]
+                    )
+                )
+            },
+
+            TestCase("explicit pairing file triggers one handshake and online hook") {
+                let service = RecordingPairingService()
+                let path = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("remoteai-pairing-\(UUID().uuidString).json")
+                try Data(PairingViewModelSuite.qr().utf8).write(to: path, options: .completeFileProtection)
+                defer { try? FileManager.default.removeItem(at: path) }
+                let dependencies = await MainActor.run {
+                    AppDependencies(
+                        client: MockAgentClient(),
+                        preferences: InMemoryPreferencesStore(),
+                        cache: InMemoryCatalogCache(),
+                        store: InMemorySecretStore(),
+                        pairingService: service
+                    )
+                }
+                await MainActor.run {
+                    dependencies.pairing.onPaired = { [weak dependencies] in
+                        dependencies?.setConnectionState(.online)
+                    }
+                }
+                await dependencies.bootstrapPairingIfRequested(
+                    arguments: ["RemoteAI", "-RemoteAIPairingFile", path.path]
+                )
+                try expectEqual(service.callCount, 1)
+                try expectTrue(await dependencies.appModel.isOnline)
+                await dependencies.bootstrapPairingIfRequested(
+                    arguments: ["RemoteAI", "-RemoteAIPairingFile", path.path]
+                )
+                try expectEqual(service.callCount, 1)
             },
 
             TestCase("mock live dependencies start with the in-process agent online") {

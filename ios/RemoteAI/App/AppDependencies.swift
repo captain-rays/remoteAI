@@ -15,6 +15,7 @@ public final class AppDependencies {
     public let pairing: PairingViewModel
     public let uploadFixture: UploadFixture?
     public let publicOrigin: String
+    private var didAttemptLaunchPairing = false
 
     public init(
         client: AgentClient,
@@ -74,6 +75,29 @@ public final class AppDependencies {
             dependencies.setConnectionState(.online)
         }
         return dependencies
+    }
+
+    /// Performs one explicit developer/simulator pairing bootstrap. The file
+    /// is opt-in, bounded, and consumed only in memory; its contents are never
+    /// logged or copied to app storage.
+    public func bootstrapPairingIfRequested(arguments: [String] = CommandLine.arguments) async {
+        guard !didAttemptLaunchPairing, let file = Self.pairingFileURL(arguments: arguments) else {
+            return
+        }
+        didAttemptLaunchPairing = true
+        guard let data = try? Data(contentsOf: file), data.count <= 64 * 1024,
+            let payload = String(data: data, encoding: .utf8), !payload.isEmpty
+        else { return }
+        await pairing.pair(scannedText: payload)
+    }
+
+    nonisolated public static func pairingFileURL(arguments: [String]) -> URL? {
+        guard let index = arguments.firstIndex(of: "-RemoteAIPairingFile"),
+            arguments.indices.contains(arguments.index(after: index))
+        else { return nil }
+        let path = arguments[arguments.index(after: index)]
+        guard !path.isEmpty, !path.hasPrefix("-") else { return nil }
+        return URL(fileURLWithPath: path)
     }
 
     /// Resolves a tunnel/agent origin without accepting credentials or a
