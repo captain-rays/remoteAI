@@ -6,6 +6,8 @@ use axum::body::to_bytes;
 use base64::Engine;
 use chrono::Utc;
 use http::{Request, StatusCode};
+use remote_ai_agent::adapters::ProviderAdapter;
+use remote_ai_agent::adapters::mock::MockAdapter;
 use remote_ai_agent::audit::{AuditRecord, AuditRow};
 use remote_ai_agent::crypto::CryptoBox;
 use remote_ai_agent::event_buffer::EventBuffer;
@@ -75,6 +77,43 @@ async fn pair_endpoint_consumes_a_secret_once() {
 }
 
 #[tokio::test]
+async fn a_catalog_read_indexes_only_the_requested_provider() {
+    let state = paired_state();
+    let codex = Arc::new(MockAdapter::new(ProviderId::Codex));
+    let claude = Arc::new(MockAdapter::new(ProviderId::Claude));
+    codex.start(ConversationKind::Daily, None).await.unwrap();
+    claude.start(ConversationKind::Daily, None).await.unwrap();
+    state.set_provider_adapters(vec![codex, claude]).await;
+
+    // A real agent starts with an empty index and only reads the provider the
+    // phone is actually looking at.
+    let response = router(state.clone())
+        .oneshot(
+            Request::get("/v1/conversations/daily?provider=claude")
+                .header("x-remoteai-device", "phone-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let values: Vec<ConversationSummary> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(values.len(), 1);
+    assert_eq!(values[0].provider, ProviderId::Claude);
+    assert!(
+        state
+            .sessions
+            .read()
+            .await
+            .get(&ProviderId::Codex)
+            .is_none(),
+        "reading one provider must not index the other"
+    );
+}
+
+#[tokio::test]
 async fn authenticated_catalog_route_exposes_only_requested_provider_daily_sessions() {
     let state = paired_state();
     state
@@ -122,7 +161,9 @@ async fn project_conversations_route_filters_by_provider_and_project_id() {
                 provider: ProviderId::Codex,
                 kind: ConversationKind::Project,
                 title: "Project session".into(),
-                project_id: Some("codex:project-1".into()),
+                // Whatever the adapter put here, the phone addresses a project
+                // by the id the catalog published.
+                project_id: Some("codex:provider-native".into()),
                 project_path: Some("/tmp/project".into()),
                 updated_at: Utc::now(),
                 status: "idle".into(),
@@ -131,12 +172,28 @@ async fn project_conversations_route_filters_by_provider_and_project_id() {
             }],
         )
         .await;
-    let response = router(state)
+
+    let listed = router(state.clone())
         .oneshot(
-            Request::get("/v1/projects/codex:project-1/conversations?provider=codex")
+            Request::get("/v1/projects?provider=codex")
                 .header("x-remoteai-device", "phone-1")
                 .body(Body::empty())
                 .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(listed.into_body(), usize::MAX).await.unwrap();
+    let projects: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    let project_id = projects[0]["id"].as_str().unwrap().to_owned();
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::get(format!(
+                "/v1/projects/{project_id}/conversations?provider=codex"
+            ))
+            .header("x-remoteai-device", "phone-1")
+            .body(Body::empty())
+            .unwrap(),
         )
         .await
         .unwrap();
@@ -145,6 +202,23 @@ async fn project_conversations_route_filters_by_provider_and_project_id() {
     let values: Vec<ConversationSummary> = serde_json::from_slice(&body).unwrap();
     assert_eq!(values.len(), 1);
     assert_eq!(values[0].kind, ConversationKind::Project);
+    assert_eq!(values[0].project_id.as_deref(), Some(project_id.as_str()));
+
+    let other = router(state)
+        .oneshot(
+            Request::get("/v1/projects/codex:provider-native/conversations?provider=codex")
+                .header("x-remoteai-device", "phone-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(other.into_body(), usize::MAX).await.unwrap();
+    let values: Vec<ConversationSummary> = serde_json::from_slice(&body).unwrap();
+    assert!(
+        values.is_empty(),
+        "a stale provider-native id must not match"
+    );
 }
 
 #[tokio::test]

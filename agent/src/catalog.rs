@@ -23,7 +23,7 @@ pub fn build_catalog(
     });
 
     let mut projects: HashMap<String, ProjectSummary> = HashMap::new();
-    for conversation in &conversations {
+    for conversation in &mut conversations {
         if conversation.kind != ConversationKind::Project {
             continue;
         }
@@ -32,6 +32,10 @@ pub fn build_catalog(
         };
         let canonical_path = canonical_or_normalized(Path::new(path));
         let id = project_id(provider, &canonical_path);
+        // Adapters either leave this empty (Claude) or use a provider-native
+        // value (Codex). Neither can address a project, so the catalog is the
+        // single source of the id the phone sends back.
+        conversation.project_id = Some(id.clone());
         let display_path = friendly_path(Path::new(path), home);
         let available = Path::new(&canonical_path).is_dir();
         projects

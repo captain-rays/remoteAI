@@ -240,6 +240,9 @@ async fn daily_conversations(
     let Some(provider) = parse_provider(&query.provider) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
+    // This read is what the phone asked for, so index the provider now. A
+    // failure keeps whatever was indexed before rather than emptying the list.
+    state.refresh_provider(provider).await;
     let sessions = state
         .sessions
         .read()
@@ -267,6 +270,9 @@ async fn projects(
     let Some(provider) = parse_provider(&query.provider) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
+    // This read is what the phone asked for, so index the provider now. A
+    // failure keeps whatever was indexed before rather than emptying the list.
+    state.refresh_provider(provider).await;
     let sessions = state
         .sessions
         .read()
@@ -288,6 +294,9 @@ async fn project_conversations(
     let Some(provider) = parse_provider(&query.provider) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
+    // This read is what the phone asked for, so index the provider now. A
+    // failure keeps whatever was indexed before rather than emptying the list.
+    state.refresh_provider(provider).await;
     let sessions = state
         .sessions
         .read()

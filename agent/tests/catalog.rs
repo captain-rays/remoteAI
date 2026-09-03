@@ -59,6 +59,44 @@ fn catalog_keeps_provider_daily_and_project_boundaries() {
 }
 
 #[test]
+fn a_project_conversation_carries_the_catalog_project_id() {
+    let home = PathBuf::from("/Users/test");
+    // Claude leaves the field empty and Codex fills in a provider-native value;
+    // neither can be used to open a project, so the catalog owns the id.
+    let mut codex_native = conversation(
+        ProviderId::Codex,
+        "codex-1",
+        ConversationKind::Project,
+        Some("/tmp/project"),
+        30,
+    );
+    codex_native.project_id = Some("codex-native-id".into());
+    let claude_empty = conversation(
+        ProviderId::Claude,
+        "claude-1",
+        ConversationKind::Project,
+        Some("/tmp/project"),
+        30,
+    );
+
+    let codex = build_catalog(ProviderId::Codex, &home, vec![codex_native]).unwrap();
+    let claude = build_catalog(ProviderId::Claude, &home, vec![claude_empty]).unwrap();
+
+    assert_eq!(
+        codex.conversations[0].project_id.as_deref(),
+        Some(codex.projects[0].id.as_str())
+    );
+    assert_eq!(
+        claude.conversations[0].project_id.as_deref(),
+        Some(claude.projects[0].id.as_str())
+    );
+    assert_ne!(
+        codex.conversations[0].project_id,
+        claude.conversations[0].project_id
+    );
+}
+
+#[test]
 fn same_path_has_distinct_provider_project_ids_and_missing_paths_stay_visible() {
     let home = PathBuf::from("/Users/test");
     let path = "/definitely/missing/project";
