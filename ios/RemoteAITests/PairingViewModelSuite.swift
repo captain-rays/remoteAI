@@ -72,6 +72,13 @@ public enum PairingViewModelSuite {
                 try expectNil(try store.load())
             },
 
+            TestCase("Rust RFC3339 fractional expiresAt decodes") {
+                let payload = try PairingPayload.decode(
+                    qr(expiresAt: "2026-09-03T10:05:41.580758Z")
+                )
+                try payload.validate(now: now)
+            },
+
             TestCase("a plaintext origin is refused") {
                 let model = await makeViewModel()
                 await model.pair(scannedText: qr(origin: "http://remoteai.example.com"))
