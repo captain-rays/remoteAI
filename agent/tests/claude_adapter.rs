@@ -150,3 +150,48 @@ async fn indexes_claude_project_sessions_from_bounded_metadata() {
     assert_eq!(conversations[1].project_path, None);
     assert_eq!(conversations[1].title, "Daily task");
 }
+
+#[tokio::test]
+async fn loads_paged_claude_history_with_normalized_events() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let temp = tempfile::tempdir().unwrap();
+    let project_file = temp
+        .path()
+        .join(".claude/projects/project-a/session-a.jsonl");
+    std::fs::create_dir_all(project_file.parent().unwrap()).unwrap();
+    std::fs::write(
+        &project_file,
+        include_str!("fixtures/claude/projects/project-a/session-a.jsonl"),
+    )
+    .unwrap();
+    let adapter = ClaudeAdapter::new("claude", temp.path());
+    adapter.list_conversations().await.unwrap();
+
+    let first = adapter.load_conversation("session-a", None).await.unwrap();
+    assert_eq!(first.events.len(), 3);
+    assert_eq!(first.next_cursor.as_deref(), Some("3"));
+    assert_eq!(first.events[0]["type"], "conversation.user_message");
+    assert_eq!(first.events[0]["payload"]["messageId"], "user-1");
+    assert_eq!(first.events[0]["payload"]["text"], "Build project alpha");
+    assert_eq!(first.events[1]["type"], "conversation.reasoning_completed");
+    assert_eq!(first.events[1]["payload"]["reasoningId"], "assistant-1");
+    assert_eq!(first.events[2]["type"], "conversation.message_completed");
+    assert_eq!(first.events[2]["payload"]["text"], "done");
+
+    let second = adapter
+        .load_conversation("session-a", first.next_cursor)
+        .await
+        .unwrap();
+    assert_eq!(second.events.len(), 3);
+    assert_eq!(second.next_cursor, None);
+    assert_eq!(second.events[0]["type"], "tool.started");
+    assert_eq!(second.events[1]["type"], "tool.completed");
+    assert_eq!(second.events[2]["type"], "turn.completed");
+    assert!(
+        first
+            .events
+            .iter()
+            .all(|event| !second.events.contains(event))
+    );
+}

@@ -19,6 +19,7 @@ use crate::protocol::{
 };
 
 const MAX_METADATA_LINE_BYTES: usize = 64 * 1024;
+const HISTORY_PAGE_SIZE: usize = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandSpec {
@@ -284,16 +285,28 @@ impl ProviderAdapter for ClaudeAdapter {
     async fn load_conversation(
         &self,
         id: &str,
-        _cursor: Option<String>,
+        cursor: Option<String>,
     ) -> anyhow::Result<ConversationPage> {
-        anyhow::ensure!(
-            self.sessions.read().await.contains_key(id),
-            "session is not active"
-        );
+        let path = self
+            .session_paths
+            .read()
+            .await
+            .get(id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("session is not indexed"))?;
+        let events = read_conversation_events(id, &path)?;
+        let start = cursor
+            .as_deref()
+            .map(|cursor| cursor.parse::<usize>())
+            .transpose()
+            .map_err(|_| anyhow::anyhow!("invalid history cursor"))?
+            .unwrap_or(0);
+        anyhow::ensure!(start <= events.len(), "history cursor is out of range");
+        let end = (start + HISTORY_PAGE_SIZE).min(events.len());
         Ok(ConversationPage {
             conversation_id: id.to_owned(),
-            events: Vec::new(),
-            next_cursor: None,
+            events: events[start..end].to_vec(),
+            next_cursor: (end < events.len()).then(|| end.to_string()),
         })
     }
 
@@ -450,6 +463,141 @@ fn read_conversation_metadata(
         write_state: None,
         write_block_code: None,
     }))
+}
+
+fn read_conversation_events(session_id: &str, path: &Path) -> anyhow::Result<Vec<Value>> {
+    let file = File::open(path)?;
+    let mut events = Vec::new();
+    for (line_number, line) in StdBufReader::new(file).lines().enumerate() {
+        let line = match line {
+            Ok(line) if line.len() <= MAX_METADATA_LINE_BYTES => line,
+            Ok(_) | Err(_) => continue,
+        };
+        let value: Value = match serde_json::from_str(&line) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        events.extend(normalize_history_record(session_id, line_number, &value));
+    }
+    Ok(events)
+}
+
+fn normalize_history_record(session_id: &str, line_number: usize, value: &Value) -> Vec<Value> {
+    let kind = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let record_id = value
+        .get("uuid")
+        .or_else(|| value.get("id"))
+        .or_else(|| value.get("messageId"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("{session_id}:{line_number}"));
+    match kind {
+        "system" => Vec::new(),
+        "user" => normalize_user_record(&record_id, value),
+        "assistant" => normalize_assistant_record(&record_id, value),
+        "result" => {
+            let event_type = if value.get("is_error").and_then(Value::as_bool) == Some(true) {
+                "turn.failed"
+            } else {
+                "turn.completed"
+            };
+            vec![json!({"type": event_type, "payload": {}})]
+        }
+        _ => vec![json!({
+            "type": "unsupported",
+            "payload": {"provider": "claude", "sourceType": kind}
+        })],
+    }
+}
+
+fn normalize_user_record(record_id: &str, value: &Value) -> Vec<Value> {
+    let Some(content) = value.pointer("/message/content") else {
+        return Vec::new();
+    };
+    if let Some(items) = content.as_array() {
+        if let Some(tool) = items
+            .iter()
+            .find(|item| item.get("type").and_then(Value::as_str) == Some("tool_result"))
+        {
+            let mut payload = json!({
+                "toolId": tool.get("tool_use_id").cloned().unwrap_or(Value::Null)
+            });
+            if let Some(text) = content_text(tool.get("content")) {
+                payload["text"] = Value::String(text);
+            }
+            return vec![json!({"type": "tool.completed", "payload": payload})];
+        }
+    }
+    let Some(text) = content_text(Some(content)) else {
+        return Vec::new();
+    };
+    vec![json!({
+        "type": "conversation.user_message",
+        "payload": {"messageId": record_id, "role": "user", "text": text}
+    })]
+}
+
+fn normalize_assistant_record(record_id: &str, value: &Value) -> Vec<Value> {
+    let Some(items) = value.pointer("/message/content").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut events = Vec::new();
+    for (index, item) in items.iter().enumerate() {
+        match item.get("type").and_then(Value::as_str) {
+            Some("thinking") => {
+                if let Some(text) = item.get("thinking").and_then(Value::as_str) {
+                    let reasoning_id = if index == 0 {
+                        record_id.to_owned()
+                    } else {
+                        format!("{record_id}:{index}")
+                    };
+                    events.push(json!({
+                        "type": "conversation.reasoning_completed",
+                        "payload": {"reasoningId": reasoning_id, "text": text}
+                    }));
+                }
+            }
+            Some("text") => {
+                if let Some(text) = item.get("text").and_then(Value::as_str) {
+                    events.push(json!({
+                        "type": "conversation.message_completed",
+                        "payload": {"messageId": record_id, "role": "assistant", "text": text}
+                    }));
+                }
+            }
+            Some("tool_use") => {
+                events.push(json!({
+                    "type": "tool.started",
+                    "payload": {
+                        "toolId": item.get("id").cloned().unwrap_or(Value::Null),
+                        "name": item.get("name").cloned().unwrap_or(Value::Null)
+                    }
+                }));
+            }
+            _ => {}
+        }
+    }
+    events
+}
+
+fn content_text(value: Option<&Value>) -> Option<String> {
+    let text = match value? {
+        Value::String(text) => text.clone(),
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| {
+                (item.get("type").and_then(Value::as_str) == Some("text"))
+                    .then(|| item.get("text").and_then(Value::as_str))
+                    .flatten()
+            })
+            .collect::<Vec<_>>()
+            .join(""),
+        _ => return None,
+    };
+    (!text.is_empty()).then_some(text)
 }
 
 #[derive(Default)]
