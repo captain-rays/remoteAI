@@ -140,6 +140,7 @@ public enum AppDependenciesSuite {
                 )
                 try expectEqual(service.callCount, 1)
                 try expectTrue(await dependencies.appModel.isOnline)
+                try expectEqual(await dependencies.launchPairingStatus, .paired)
                 await dependencies.bootstrapPairingIfRequested(
                     arguments: ["RemoteAI", "-RemoteAIPairingFile", path.path]
                 )
@@ -170,6 +171,7 @@ public enum AppDependenciesSuite {
                 )
                 try expectEqual(service.callCount, 1)
                 try expectTrue(await dependencies.appModel.isOnline)
+                try expectEqual(await dependencies.launchPairingStatus, .paired)
             },
 
             TestCase("mock live dependencies start with the in-process agent online") {

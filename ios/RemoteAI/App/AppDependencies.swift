@@ -1,5 +1,12 @@
 import Foundation
 
+public enum LaunchPairingStatus: String, Sendable, Hashable {
+    case idle
+    case requested
+    case paired
+    case failed
+}
+
 /// Builds the object graph for one launch.
 ///
 /// `-UseMockAgent` selects the deterministic in-process agent, which is how the
@@ -15,6 +22,7 @@ public final class AppDependencies {
     public let pairing: PairingViewModel
     public let uploadFixture: UploadFixture?
     public let publicOrigin: String
+    public private(set) var launchPairingStatus: LaunchPairingStatus = .idle
     private var didAttemptLaunchPairing = false
 
     public init(
@@ -85,6 +93,7 @@ public final class AppDependencies {
             return
         }
         didAttemptLaunchPairing = true
+        launchPairingStatus = .requested
         let payload: String?
         if arguments.contains("-RemoteAIPairingPayload") {
             // An explicitly supplied (but malformed/oversized) inline value
@@ -97,8 +106,12 @@ public final class AppDependencies {
         } else {
             payload = nil
         }
-        guard let payload, !payload.isEmpty, payload.utf8.count <= 64 * 1024 else { return }
+        guard let payload, !payload.isEmpty, payload.utf8.count <= 64 * 1024 else {
+            launchPairingStatus = .failed
+            return
+        }
         await pairing.pair(scannedText: payload)
+        launchPairingStatus = pairing.state == .paired ? .paired : .failed
     }
 
     /// Returns an inline payload only when the flag has a non-option value and

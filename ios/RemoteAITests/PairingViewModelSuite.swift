@@ -6,6 +6,11 @@ import RemoteAITestKit
 public enum PairingViewModelSuite {
 
     final class Flag: @unchecked Sendable { var value = false }
+    final class HTTPFailureService: PairingService, @unchecked Sendable {
+        func completePairing(payload: PairingPayload, phonePublicKey: Data) async throws -> Bool {
+            throw RemotePairingError.httpStatus(401)
+        }
+    }
 
     static let now = ISO8601DateFormatter().date(from: "2026-09-03T10:00:00Z")!
 
@@ -104,6 +109,14 @@ public enum PairingViewModelSuite {
                 await model.pair(scannedText: qr())
                 try expectEqual(await model.state, .failed("The Mac refused this pairing code."))
                 try expectNil(try store.load())
+            },
+
+            TestCase("remote HTTP failure exposes only a safe status diagnostic") {
+                let model = await makeViewModel(service: HTTPFailureService())
+                await model.pair(scannedText: qr())
+                try expectEqual(
+                    await model.state, .failed("Pairing request failed (HTTP 401).")
+                )
             },
 
             TestCase("revoking erases the device key") {

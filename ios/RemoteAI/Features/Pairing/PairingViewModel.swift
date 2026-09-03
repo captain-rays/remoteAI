@@ -189,6 +189,12 @@ public final class PairingViewModel {
             )
             state = .paired
             onPaired?()
+        } catch let error as RemotePairingError {
+            if case let .httpStatus(code) = error {
+                state = .failed("Pairing request failed (HTTP \(code)).")
+            } else {
+                state = .failed("Pairing could not be completed.")
+            }
         } catch {
             state = .failed("Pairing could not be completed.")
         }

@@ -19,6 +19,12 @@ public struct RootView: View {
         VStack(spacing: 0) {
             ProviderSwitcher(model: model)
             ConnectionBanner(state: model.connectionState)
+            if dependencies.launchPairingStatus != .idle {
+                Text("Pairing bootstrap: \(dependencies.launchPairingStatus.rawValue)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("launch-pairing-status")
+            }
             Divider()
 
             TabView(selection: $selectedTab) {
