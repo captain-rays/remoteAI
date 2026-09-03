@@ -100,6 +100,21 @@ public enum AppDependenciesSuite {
                 )
             },
 
+            TestCase("inline pairing payload takes priority and is bounded") {
+                let payload = "{\"pairingSecret\":\"one-time\"}"
+                try expectEqual(
+                    AppDependencies.pairingPayload(
+                        arguments: ["RemoteAI", "-RemoteAIPairingPayload", payload]
+                    ),
+                    payload
+                )
+                try expectNil(
+                    AppDependencies.pairingPayload(
+                        arguments: ["RemoteAI", "-RemoteAIPairingPayload", "-UseMockAgent"]
+                    )
+                )
+            },
+
             TestCase("explicit pairing file triggers one handshake and online hook") {
                 let service = RecordingPairingService()
                 let path = FileManager.default.temporaryDirectory
@@ -129,6 +144,32 @@ public enum AppDependenciesSuite {
                     arguments: ["RemoteAI", "-RemoteAIPairingFile", path.path]
                 )
                 try expectEqual(service.callCount, 1)
+            },
+
+            TestCase("inline pairing payload triggers bootstrap before file") {
+                let service = RecordingPairingService()
+                let dependencies = await MainActor.run {
+                    AppDependencies(
+                        client: MockAgentClient(),
+                        preferences: InMemoryPreferencesStore(),
+                        cache: InMemoryCatalogCache(),
+                        store: InMemorySecretStore(),
+                        pairingService: service
+                    )
+                }
+                await MainActor.run {
+                    dependencies.pairing.onPaired = { [weak dependencies] in
+                        dependencies?.setConnectionState(.online)
+                    }
+                }
+                await dependencies.bootstrapPairingIfRequested(
+                    arguments: [
+                        "RemoteAI", "-RemoteAIPairingPayload", PairingViewModelSuite.qr(),
+                        "-RemoteAIPairingFile", "/definitely/not/read"
+                    ]
+                )
+                try expectEqual(service.callCount, 1)
+                try expectTrue(await dependencies.appModel.isOnline)
             },
 
             TestCase("mock live dependencies start with the in-process agent online") {

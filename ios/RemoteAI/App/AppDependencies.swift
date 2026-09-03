@@ -81,14 +81,37 @@ public final class AppDependencies {
     /// is opt-in, bounded, and consumed only in memory; its contents are never
     /// logged or copied to app storage.
     public func bootstrapPairingIfRequested(arguments: [String] = CommandLine.arguments) async {
-        guard !didAttemptLaunchPairing, let file = Self.pairingFileURL(arguments: arguments) else {
+        guard !didAttemptLaunchPairing else {
             return
         }
         didAttemptLaunchPairing = true
-        guard let data = try? Data(contentsOf: file), data.count <= 64 * 1024,
-            let payload = String(data: data, encoding: .utf8), !payload.isEmpty
-        else { return }
+        let payload: String?
+        if arguments.contains("-RemoteAIPairingPayload") {
+            // An explicitly supplied (but malformed/oversized) inline value
+            // must not fall back to a second source.
+            payload = Self.pairingPayload(arguments: arguments)
+        } else if let file = Self.pairingFileURL(arguments: arguments),
+            let data = try? Data(contentsOf: file), data.count <= 64 * 1024
+        {
+            payload = String(data: data, encoding: .utf8)
+        } else {
+            payload = nil
+        }
+        guard let payload, !payload.isEmpty, payload.utf8.count <= 64 * 1024 else { return }
         await pairing.pair(scannedText: payload)
+    }
+
+    /// Returns an inline payload only when the flag has a non-option value and
+    /// remains within the same bounded size as the file bootstrap.
+    nonisolated public static func pairingPayload(arguments: [String]) -> String? {
+        guard let index = arguments.firstIndex(of: "-RemoteAIPairingPayload"),
+            arguments.indices.contains(arguments.index(after: index))
+        else { return nil }
+        let payload = arguments[arguments.index(after: index)]
+        guard !payload.isEmpty, !payload.hasPrefix("-"), payload.utf8.count <= 64 * 1024 else {
+            return nil
+        }
+        return payload
     }
 
     nonisolated public static func pairingFileURL(arguments: [String]) -> URL? {
