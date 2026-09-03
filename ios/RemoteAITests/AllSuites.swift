@@ -6,5 +6,6 @@ public enum AllSuites {
         BootstrapSuite.suite,
         ProtocolFixtureSuite.suite,
         MockAgentClientSuite.suite,
+        ConnectionSuite.suite,
     ]
 }
