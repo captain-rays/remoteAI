@@ -29,7 +29,10 @@ public struct ProjectDetailView: View {
             }
 
             Section("\(project.provider.displayName) sessions") {
-                if model.projectConversations.isEmpty {
+                if model.isLoadingProjectSessions {
+                    LoadingRow(message: "Reading sessions…")
+                        .accessibilityIdentifier("project-sessions-loading")
+                } else if model.showsEmptyProjectSessions {
                     Text("No sessions in this project yet.")
                         .foregroundStyle(.secondary)
                         .accessibilityIdentifier("project-sessions-empty")

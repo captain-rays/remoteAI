@@ -17,7 +17,12 @@ public struct ProjectListView: View {
     public var body: some View {
         NavigationStack {
             List {
-                if model.projects.isEmpty {
+                if model.isLoadingCatalog {
+                    LoadingRow(
+                        message: "Reading \(model.selectedProvider.displayName) projects…"
+                    )
+                    .accessibilityIdentifier("projects-loading")
+                } else if model.showsEmptyProjects {
                     Text("No \(model.selectedProvider.displayName) projects yet.")
                         .foregroundStyle(.secondary)
                         .accessibilityIdentifier("projects-empty")

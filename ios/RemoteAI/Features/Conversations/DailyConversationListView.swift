@@ -19,7 +19,10 @@ public struct DailyConversationListView: View {
                         .foregroundStyle(.orange)
                         .accessibilityIdentifier("conversation-start-error")
                 }
-                if model.dailyConversations.isEmpty {
+                if model.isLoadingCatalog {
+                    LoadingRow(message: "Reading \(model.selectedProvider.displayName) chats…")
+                        .accessibilityIdentifier("daily-loading")
+                } else if model.showsEmptyDailyConversations {
                     Text("No \(model.selectedProvider.displayName) chats yet.")
                         .foregroundStyle(.secondary)
                         .accessibilityIdentifier("daily-empty")

@@ -12,6 +12,7 @@ public enum AllSuites {
         RemoteAgentClientSuite.suite,
         CacheStoreSuite.suite,
         AppModelSuite.suite,
+        CatalogLoadingSuite.suite,
         ConversationViewModelSuite.suite,
         TranscriptRendererSuite.suite,
         FileBrowserViewModelSuite.suite,

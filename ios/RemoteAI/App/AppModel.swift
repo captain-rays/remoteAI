@@ -19,6 +19,40 @@ public final class AppModel {
     public private(set) var connectionState: ConnectionState = .disconnected
     public private(set) var lastErrorMessage: String?
 
+    /// Where the provider-scoped catalog read has got to.
+    ///
+    /// The agent re-indexes the provider on every catalog request — Codex goes
+    /// out to its app-server for it — so the read is slow enough to see. Views
+    /// must distinguish "still reading" from "this provider really has none",
+    /// otherwise the empty-state text flashes before the rows arrive.
+    public enum CatalogLoadState: Sendable, Hashable {
+        case idle
+        case loading
+        case loaded
+        case failed
+    }
+
+    public private(set) var catalogState: CatalogLoadState = .idle
+    public private(set) var projectSessionsState: CatalogLoadState = .idle
+
+    /// True until the current provider's catalog has actually been answered.
+    public var isLoadingCatalog: Bool { catalogState == .idle || catalogState == .loading }
+
+    /// Only report "no projects" once a read has finished.
+    public var showsEmptyProjects: Bool { projects.isEmpty && !isLoadingCatalog }
+
+    public var showsEmptyDailyConversations: Bool {
+        dailyConversations.isEmpty && !isLoadingCatalog
+    }
+
+    public var isLoadingProjectSessions: Bool {
+        projectSessionsState == .idle || projectSessionsState == .loading
+    }
+
+    public var showsEmptyProjectSessions: Bool {
+        projectConversations.isEmpty && !isLoadingProjectSessions
+    }
+
     public let client: AgentClient
     private let preferences: PreferencesStore
     private let cache: CatalogCache
@@ -57,6 +91,10 @@ public final class AppModel {
         selectedProject = nil
         projectConversations = []
         lastErrorMessage = nil
+        // The new provider has not been read yet, so the lists are unknown
+        // rather than empty.
+        catalogState = .idle
+        projectSessionsState = .idle
     }
 
     public func switchProvider(to provider: ProviderId) async {
@@ -69,9 +107,12 @@ public final class AppModel {
 
     public func reloadCatalog() async {
         guard isOnline else {
+            // The cache is a real answer, so the screen stops being busy.
             applyCachedSnapshot()
+            catalogState = .loaded
             return
         }
+        catalogState = .loading
         do {
             let statuses = try await client.providerStatus()
             providerStatuses = Dictionary(
@@ -97,9 +138,11 @@ public final class AppModel {
                 )
             )
             lastErrorMessage = nil
+            catalogState = .loaded
         } catch {
             lastErrorMessage = "\(error)"
             applyCachedSnapshot()
+            catalogState = .failed
         }
     }
 
@@ -120,11 +163,14 @@ public final class AppModel {
             return
         }
         selectedProject = project
+        // A different project's sessions are unknown until this one is read.
+        projectSessionsState = .idle
         projectConversations =
             (cache.snapshot(for: selectedProvider)?.projectConversations[project.id] ?? [])
             .filter { $0.provider == selectedProvider && $0.projectId == project.id }
 
         guard isOnline else {
+            projectSessionsState = .loaded
             return
         }
         await refreshSelectedProject()
@@ -134,8 +180,10 @@ public final class AppModel {
         guard let project = selectedProject, project.provider == selectedProvider else { return }
         guard isOnline else {
             applyCachedSnapshot()
+            projectSessionsState = .loaded
             return
         }
+        projectSessionsState = .loading
         do {
             let sessions = try await client.listProjectConversations(
                 provider: selectedProvider, projectId: project.id
@@ -161,8 +209,10 @@ public final class AppModel {
             )
             cache.store(snapshot)
             lastErrorMessage = nil
+            projectSessionsState = .loaded
         } catch {
             lastErrorMessage = "\(error)"
+            projectSessionsState = .failed
         }
     }
 
