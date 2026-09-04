@@ -281,7 +281,7 @@ async fn lists_codex_projects_from_state_database_without_needing_threads() {
     assert_eq!(projects.len(), 2);
     assert_eq!(projects[0].title, "remoteAICli");
     assert_eq!(projects[0].canonical_path, "/tmp/remoteAICli");
-    assert!(projects[0].id.starts_with("codex:"));
+    assert_eq!(projects[0].id, "p1");
 }
 
 #[tokio::test]

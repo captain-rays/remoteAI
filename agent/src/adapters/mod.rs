@@ -25,11 +25,41 @@ pub struct ConversationPage {
 pub trait ProviderAdapter: Send + Sync {
     async fn status(&self) -> ProviderStatus;
     async fn list_conversations(&self) -> anyhow::Result<Vec<ConversationSummary>>;
+    /// List the provider's global Chats view. This is intentionally separate
+    /// from the generic session index because some providers have a host-owned
+    /// chat catalog that cannot be inferred from local CLI sessions.
+    async fn list_daily_conversations(&self) -> anyhow::Result<Vec<ConversationSummary>> {
+        Ok(self
+            .list_conversations()
+            .await?
+            .into_iter()
+            .filter(|conversation| conversation.kind == ConversationKind::Daily)
+            .collect())
+    }
+
+    /// Stable diagnostic for an unavailable global Chats view. An empty list
+    /// without a diagnostic is a valid empty catalog; callers can distinguish
+    /// it from an unavailable host bridge with this code.
+    fn daily_catalog_diagnostic_code(&self) -> Option<&'static str> {
+        None
+    }
+
     /// List provider-native projects when available. Providers without a
     /// separate project index may return an empty list and let the gateway
     /// derive projects from conversation metadata.
     async fn list_projects(&self) -> anyhow::Result<Vec<ProjectSummary>> {
         Ok(Vec::new())
+    }
+    async fn list_project_conversations(
+        &self,
+        project_id: &str,
+    ) -> anyhow::Result<Vec<ConversationSummary>> {
+        Ok(self
+            .list_conversations()
+            .await?
+            .into_iter()
+            .filter(|conversation| conversation.project_id.as_deref() == Some(project_id))
+            .collect())
     }
     async fn load_conversation(
         &self,

@@ -31,7 +31,7 @@ pub fn build_catalog(
             continue;
         };
         let canonical_path = canonical_or_normalized(Path::new(path));
-        let id = project_id(provider, &canonical_path);
+        let id = project_id_for_path(provider, &canonical_path);
         // Adapters either leave this empty (Claude) or use a provider-native
         // value (Codex). Neither can address a project, so the catalog is the
         // single source of the id the phone sends back.
@@ -74,7 +74,7 @@ pub fn build_catalog(
     })
 }
 
-fn project_id(provider: ProviderId, canonical_path: &str) -> String {
+pub fn project_id_for_path(provider: ProviderId, canonical_path: &str) -> String {
     let provider = match provider {
         ProviderId::Codex => "codex",
         ProviderId::Claude => "claude",

@@ -11,7 +11,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -30,6 +29,15 @@ use crate::protocol::{
 pub struct CommandSpec {
     pub program: String,
     pub args: Vec<String>,
+}
+
+/// Bridge owned by the desktop host. Codex's personal ChatGPT history is
+/// available to the unified host list, not to an independent Rust process.
+/// The agent therefore accepts an explicit bridge instead of guessing from
+/// local project/session files.
+#[async_trait]
+pub trait CodexHostBridge: Send + Sync {
+    async fn list_chatgpt_conversations(&self) -> anyhow::Result<Vec<ConversationSummary>>;
 }
 
 #[derive(Debug, Clone)]
@@ -329,6 +337,7 @@ pub struct CodexAdapter {
     rpc: Mutex<Option<Arc<RpcClient>>>,
     active_turns: Arc<RwLock<HashMap<String, String>>>,
     index_write_lock: Arc<std::sync::Mutex<()>>,
+    host_bridge: Option<Arc<dyn CodexHostBridge>>,
 }
 
 impl CodexAdapter {
@@ -349,7 +358,13 @@ impl CodexAdapter {
             rpc: Mutex::new(None),
             active_turns: Arc::new(RwLock::new(HashMap::new())),
             index_write_lock: Arc::new(std::sync::Mutex::new(())),
+            host_bridge: None,
         }
+    }
+
+    pub fn with_host_bridge(mut self, bridge: Arc<dyn CodexHostBridge>) -> Self {
+        self.host_bridge = Some(bridge);
+        self
     }
 
     pub fn command_spec(&self) -> CommandSpec {
@@ -423,32 +438,40 @@ impl ProviderAdapter for CodexAdapter {
     }
 
     async fn list_conversations(&self) -> anyhow::Result<Vec<ConversationSummary>> {
-        let indexed = self.read_session_index();
-        let rpc_result = match self.client().await {
-            Ok(client) => {
-                client
-                    .call("thread/list", json!({"sortDirection":"desc"}))
-                    .await
-            }
-            Err(error) => Err(error),
-        };
-        let mut conversations = match rpc_result {
-            Ok(result) => self.mapper.map_thread_list_value(&result)?,
-            Err(_error) if !indexed.is_empty() => indexed.clone(),
-            Err(error) => return Err(error),
-        };
-
-        let existing: HashSet<_> = conversations
-            .iter()
-            .map(|summary| summary.id.clone())
-            .collect();
-        conversations.extend(
-            indexed
-                .into_iter()
-                .filter(|summary| !existing.contains(&summary.id)),
-        );
+        let result = self
+            .client()
+            .await?
+            .call("thread/list", json!({"sortDirection":"desc"}))
+            .await?;
+        let mut conversations = self.mapper.map_thread_list_value(&result)?;
         conversations.sort_by_key(|summary| Reverse(summary.updated_at));
         Ok(conversations)
+    }
+
+    async fn list_daily_conversations(&self) -> anyhow::Result<Vec<ConversationSummary>> {
+        let Some(bridge) = self.host_bridge.as_ref() else {
+            return Ok(Vec::new());
+        };
+        Ok(bridge
+            .list_chatgpt_conversations()
+            .await?
+            .into_iter()
+            .filter(|conversation| {
+                conversation.provider == ProviderId::Codex
+                    && conversation.kind == ConversationKind::Daily
+                    && conversation.project_id.is_none()
+            })
+            .map(|mut conversation| {
+                conversation.project_path = None;
+                conversation
+            })
+            .collect())
+    }
+
+    fn daily_catalog_diagnostic_code(&self) -> Option<&'static str> {
+        self.host_bridge
+            .is_none()
+            .then_some("codex_chats_host_bridge_unavailable")
     }
 
     async fn list_projects(&self) -> anyhow::Result<Vec<ProjectSummary>> {
@@ -468,27 +491,29 @@ impl ProviderAdapter for CodexAdapter {
             "SELECT p.id, p.name, p.updated_at_ms, r.path
              FROM projects p
              LEFT JOIN project_roots r ON r.project_id = p.id
-             ORDER BY p.position ASC, r.position ASC",
+               AND NOT EXISTS (
+                 SELECT 1 FROM project_roots earlier
+                 WHERE earlier.project_id = p.id
+                   AND (earlier.position < r.position
+                     OR (earlier.position = r.position AND earlier.path < r.path))
+               )
+             ORDER BY p.position ASC, r.position ASC, r.path ASC",
         )
         .fetch_all(&pool)
         .await?;
         pool.close().await;
 
         let mut projects = Vec::new();
-        let mut seen_paths = HashSet::new();
         for row in rows {
             let Some(path) = row.try_get::<Option<String>, _>("path")? else {
                 continue;
             };
             let canonical_path = canonical_or_normalized(Path::new(&path));
-            if !seen_paths.insert(canonical_path.clone()) {
-                continue;
-            }
             let name = row.try_get::<String, _>("name")?;
             let updated_at_ms = row.try_get::<i64, _>("updated_at_ms")?;
             let display_path = display_path(&canonical_path, &self.mapper.home);
             projects.push(ProjectSummary {
-                id: project_id(&canonical_path),
+                id: row.try_get::<String, _>("id")?,
                 provider: ProviderId::Codex,
                 canonical_path: canonical_path.clone(),
                 display_path,
@@ -510,6 +535,34 @@ impl ProviderAdapter for CodexAdapter {
         }
         projects.sort_by_key(|project| Reverse(project.updated_at));
         Ok(projects)
+    }
+
+    async fn list_project_conversations(
+        &self,
+        project_id: &str,
+    ) -> anyhow::Result<Vec<ConversationSummary>> {
+        let project = self
+            .list_projects()
+            .await?
+            .into_iter()
+            .find(|project| project.id == project_id);
+        let Some(project) = project else {
+            return Ok(Vec::new());
+        };
+        let mut conversations = self.list_conversations().await?;
+        for conversation in &mut conversations {
+            let Some(path) = conversation.project_path.as_deref() else {
+                continue;
+            };
+            if canonical_or_normalized(Path::new(path)) == project.canonical_path {
+                conversation.kind = ConversationKind::Project;
+                conversation.project_id = Some(project.id.clone());
+            }
+        }
+        Ok(conversations
+            .into_iter()
+            .filter(|conversation| conversation.project_id.as_deref() == Some(project_id))
+            .collect())
     }
 
     async fn load_conversation(
@@ -883,10 +936,6 @@ fn display_path(path: &str, home: &Path) -> String {
         Ok(relative) => format!("~/{}", relative.to_string_lossy()),
         Err(_) => path.to_string_lossy().into_owned(),
     }
-}
-
-fn project_id(path: &str) -> String {
-    format!("codex:{:x}", Sha256::digest(path.as_bytes()))
 }
 
 fn parse_time(value: Option<&Value>) -> DateTime<Utc> {
