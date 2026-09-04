@@ -400,6 +400,54 @@ async fn provider_send_failure_returns_encrypted_error_and_keeps_session_alive()
 }
 
 #[tokio::test]
+async fn decrypted_business_rejection_returns_safe_error_and_keeps_session_alive() {
+    let state = state();
+    state
+        .set_provider_adapters(vec![Arc::new(MockAdapter::new(ProviderId::Claude))])
+        .await;
+    let inbound = CryptoBox::new([14; 32], *b"IOS>");
+    let outbound = CryptoBox::new([14; 32], *b"MAC>");
+    let mut session =
+        GatewaySession::new(state, "phone-1", inbound.receiver(), outbound.clone()).await;
+
+    // The frame is authenticated and decrypted, but the business payload is
+    // invalid. This must be a safe encrypted response, not a socket-fatal
+    // error, so the client can correct its request without reconnecting.
+    let invalid = session
+        .handle_frame(&request_frame(
+            &inbound,
+            1,
+            "provider.status",
+            json!({}),
+        ))
+        .await
+        .expect("decrypted business errors must stay on the websocket");
+    let invalid_value = decode_frames(invalid, &outbound)
+        .into_iter()
+        .next()
+        .unwrap();
+    assert_eq!(invalid_value["type"], "error");
+    assert_eq!(invalid_value["payload"]["code"], "invalid_request");
+    assert!(!invalid_value.to_string().contains("stderr"));
+
+    // Prove that the same session is still usable after the rejection.
+    let valid = session
+        .handle_frame(&request_frame(
+            &inbound,
+            2,
+            "provider.status",
+            json!({"provider":"claude"}),
+        ))
+        .await
+        .unwrap();
+    let valid_value = decode_frames(valid, &outbound)
+        .into_iter()
+        .find(|value| value["kind"] == "response")
+        .unwrap();
+    assert_eq!(valid_value["type"], "provider.status.result");
+}
+
+#[tokio::test]
 async fn busy_provider_session_returns_session_busy_without_starting_writer() {
     let state = state();
     let adapter = Arc::new(MockAdapter::new(ProviderId::Claude));

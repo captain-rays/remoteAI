@@ -194,6 +194,102 @@ async fn indexes_unarchived_claude_desktop_sessions_as_daily() {
 }
 
 #[tokio::test]
+async fn desktop_catalog_does_not_hide_cli_project_sessions() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+    use remote_ai_agent::catalog::project_id_for_path;
+
+    let temp = tempfile::tempdir().unwrap();
+    let cli_project = temp.path().join("cli-project");
+    std::fs::create_dir_all(&cli_project).unwrap();
+
+    // A desktop metadata root is present on real installations. Its presence
+    // must not make the adapter return before scanning the CLI project index.
+    let desktop_root = temp
+        .path()
+        .join("Library/Application Support/Claude/claude-code-sessions/account/session");
+    std::fs::create_dir_all(&desktop_root).unwrap();
+    std::fs::write(
+        desktop_root.join("local_desktop.json"),
+        r#"{"sessionId":"desktop-1","cliSessionId":"desktop-cli-1","title":"Desktop","cwd":"/tmp/desktop-project","createdAt":1725400000000,"lastActivityAt":1725400060000,"isArchived":false}"#,
+    )
+    .unwrap();
+
+    let cli_session = temp.path().join(".claude/projects/cli-project/cli-1.jsonl");
+    std::fs::create_dir_all(cli_session.parent().unwrap()).unwrap();
+    std::fs::write(
+        &cli_session,
+        format!(
+            r#"{{"type":"user","session_id":"cli-1","cwd":"{}","message":{{"content":[{{"type":"text","text":"project query"}}]}}}}"#,
+            cli_project.display()
+        ),
+    )
+    .unwrap();
+
+    let adapter = ClaudeAdapter::new("claude", temp.path());
+    let projects = adapter.list_projects().await.unwrap();
+    let canonical = cli_project.canonicalize().unwrap().to_string_lossy().into_owned();
+    let project_id = project_id_for_path(ProviderId::Claude, &canonical);
+    assert!(
+        projects.iter().any(|project| project.id == project_id),
+        "CLI project metadata must remain visible when Desktop metadata also exists: {projects:?}"
+    );
+
+    let conversations = adapter
+        .list_project_conversations(&project_id)
+        .await
+        .unwrap();
+    assert!(
+        conversations.iter().any(|conversation| conversation.id == "cli-1"),
+        "the CLI project session must be addressable from its project: {conversations:?}"
+    );
+}
+
+#[tokio::test]
+async fn sends_claude_stream_json_user_input_as_a_text_block() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let temp = tempfile::tempdir().unwrap();
+    let stub = temp.path().join("fake-claude.sh");
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\nprintf '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"real-input-session\",\"cwd\":\"%s\"}\\n' \"$PWD\"\nIFS= read -r line\nprintf '%s\\n' \"$line\" > \"$0.input\"\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    let adapter = ClaudeAdapter::new(&stub, temp.path());
+    let id = adapter
+        .start(ConversationKind::Project, Some(temp.path().to_path_buf()))
+        .await
+        .unwrap();
+    adapter
+        .send(&id, "fixed harmless probe".into(), Vec::new())
+        .await
+        .unwrap();
+
+    let input_path = stub.with_extension("sh.input");
+    let input = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if let Ok(input) = std::fs::read_to_string(&input_path) {
+                break input;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the stub should receive one stream-json user record");
+    let value: serde_json::Value = serde_json::from_str(input.trim()).unwrap();
+    assert_eq!(value["type"], "user");
+    assert_eq!(value["message"]["role"], "user");
+    assert_eq!(value["message"]["content"][0]["type"], "text");
+    assert_eq!(value["message"]["content"][0]["text"], "fixed harmless probe");
+}
+
+#[tokio::test]
 async fn a_started_project_session_runs_in_that_project_and_adopts_its_real_id() {
     use remote_ai_agent::adapters::ProviderAdapter;
     use remote_ai_agent::protocol::{ConversationEvent, ConversationKind};
