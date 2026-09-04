@@ -278,7 +278,10 @@ impl CodexMapper {
                 .and_then(Value::as_str)
                 .unwrap_or("Untitled Codex thread")
                 .to_owned(),
-            project_id: project_path.as_deref().map(project_id),
+            // The authoritative Codex project identity comes from
+            // state_5.sqlite. A thread/list row only carries cwd, so it must
+            // not invent a path-derived project ID.
+            project_id: None,
             project_path,
             updated_at: parse_time(thread.get("updatedAt")),
             status: thread

@@ -156,7 +156,6 @@ pub struct ClaudeAdapter {
 struct DesktopSessionTarget {
     cli_id: Option<String>,
     cwd: PathBuf,
-    user_selected_folders: Vec<PathBuf>,
     transcript_path: Option<PathBuf>,
 }
 
@@ -317,7 +316,6 @@ impl ClaudeAdapter {
                 DesktopSessionTarget {
                     cli_id: desktop.cli_id.clone(),
                     cwd: desktop.cwd.clone(),
-                    user_selected_folders: desktop.user_selected_folders.clone(),
                     transcript_path: desktop.transcript_path.clone(),
                 },
             );
@@ -438,7 +436,6 @@ impl ProviderAdapter for ClaudeAdapter {
                 DesktopSessionTarget {
                     cli_id: desktop.cli_id.clone(),
                     cwd: desktop.cwd.clone(),
-                    user_selected_folders: desktop.user_selected_folders.clone(),
                     transcript_path: desktop.transcript_path.clone(),
                 },
             );

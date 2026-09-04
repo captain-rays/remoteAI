@@ -16,6 +16,10 @@ fn maps_sanitized_codex_v2_transcript_without_losing_unknown_events() {
     assert_eq!(conversations[0].provider, ProviderId::Codex);
     assert_eq!(conversations[0].kind, ConversationKind::Daily);
     assert_eq!(conversations[1].kind, ConversationKind::Project);
+    assert!(
+        conversations[1].project_id.is_none(),
+        "thread/list must not invent a path-derived project identity"
+    );
 
     let events: Vec<_> = include_str!("fixtures/codex/events.jsonl")
         .lines()
