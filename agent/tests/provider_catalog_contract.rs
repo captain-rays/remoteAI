@@ -345,7 +345,14 @@ async fn claude_session_is_in_global_chats_and_its_project_view_and_uses_cli_ses
     let args = tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
             if let Ok(args) = std::fs::read_to_string(&args_path) {
-                break args;
+                let has_resume = args
+                    .lines()
+                    .collect::<Vec<_>>()
+                    .windows(2)
+                    .any(|pair| pair == ["--resume", "cli-01"]);
+                if has_resume {
+                    break args;
+                }
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
