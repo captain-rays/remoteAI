@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 use crate::protocol::{
-    ApprovalDecision, ConversationEvent, ConversationKind, ConversationSummary, ProviderStatus,
-    WriteState,
+    ApprovalDecision, ConversationEvent, ConversationKind, ConversationSummary, ProjectSummary,
+    ProviderStatus, WriteState,
 };
 
 pub mod claude;
@@ -25,6 +25,12 @@ pub struct ConversationPage {
 pub trait ProviderAdapter: Send + Sync {
     async fn status(&self) -> ProviderStatus;
     async fn list_conversations(&self) -> anyhow::Result<Vec<ConversationSummary>>;
+    /// List provider-native projects when available. Providers without a
+    /// separate project index may return an empty list and let the gateway
+    /// derive projects from conversation metadata.
+    async fn list_projects(&self) -> anyhow::Result<Vec<ProjectSummary>> {
+        Ok(Vec::new())
+    }
     async fn load_conversation(
         &self,
         id: &str,

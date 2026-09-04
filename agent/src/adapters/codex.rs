@@ -12,6 +12,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use sqlx::Row;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{Mutex, RwLock, broadcast, oneshot};
@@ -20,8 +22,8 @@ static INDEX_TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 use super::{ConversationPage, ProviderAdapter};
 use crate::protocol::{
-    ApprovalDecision, ConversationEvent, ConversationKind, ConversationSummary, ProviderId,
-    ProviderStatus, WriteState,
+    ApprovalDecision, ConversationEvent, ConversationKind, ConversationSummary, ProjectSummary,
+    ProviderId, ProviderStatus, WriteState,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -449,6 +451,67 @@ impl ProviderAdapter for CodexAdapter {
         Ok(conversations)
     }
 
+    async fn list_projects(&self) -> anyhow::Result<Vec<ProjectSummary>> {
+        let database = self.mapper.home.join(".codex/state_5.sqlite");
+        if !database.is_file() {
+            return Ok(Vec::new());
+        }
+        let options = SqliteConnectOptions::new()
+            .filename(database)
+            .read_only(true)
+            .create_if_missing(false);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await?;
+        let rows = sqlx::query(
+            "SELECT p.id, p.name, p.updated_at_ms, r.path
+             FROM projects p
+             LEFT JOIN project_roots r ON r.project_id = p.id
+             ORDER BY p.position ASC, r.position ASC",
+        )
+        .fetch_all(&pool)
+        .await?;
+        pool.close().await;
+
+        let mut projects = Vec::new();
+        let mut seen_paths = HashSet::new();
+        for row in rows {
+            let Some(path) = row.try_get::<Option<String>, _>("path")? else {
+                continue;
+            };
+            let canonical_path = canonical_or_normalized(Path::new(&path));
+            if !seen_paths.insert(canonical_path.clone()) {
+                continue;
+            }
+            let name = row.try_get::<String, _>("name")?;
+            let updated_at_ms = row.try_get::<i64, _>("updated_at_ms")?;
+            let display_path = display_path(&canonical_path, &self.mapper.home);
+            projects.push(ProjectSummary {
+                id: project_id(&canonical_path),
+                provider: ProviderId::Codex,
+                canonical_path: canonical_path.clone(),
+                display_path,
+                title: if name.trim().is_empty() {
+                    Path::new(&canonical_path)
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("Untitled Codex project")
+                        .to_owned()
+                } else {
+                    name
+                },
+                updated_at: Utc
+                    .timestamp_millis_opt(updated_at_ms)
+                    .single()
+                    .unwrap_or_else(Utc::now),
+                available: Path::new(&canonical_path).is_dir(),
+            });
+        }
+        projects.sort_by_key(|project| Reverse(project.updated_at));
+        Ok(projects)
+    }
+
     async fn load_conversation(
         &self,
         id: &str,
@@ -804,6 +867,22 @@ fn required_string(value: &Value, key: &str) -> anyhow::Result<String> {
 
 fn same_path(left: &Path, right: &Path) -> bool {
     left.components().eq(right.components())
+}
+
+fn canonical_or_normalized(path: &Path) -> String {
+    path.canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn display_path(path: &str, home: &Path) -> String {
+    let path = Path::new(path);
+    match path.strip_prefix(home) {
+        Ok(relative) if relative.as_os_str().is_empty() => "~".to_owned(),
+        Ok(relative) => format!("~/{}", relative.to_string_lossy()),
+        Err(_) => path.to_string_lossy().into_owned(),
+    }
 }
 
 fn project_id(path: &str) -> String {

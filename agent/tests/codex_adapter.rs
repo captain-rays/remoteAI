@@ -235,6 +235,56 @@ done
 }
 
 #[tokio::test]
+async fn lists_codex_projects_from_state_database_without_needing_threads() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+
+    let root = tempfile::tempdir().unwrap();
+    let codex_dir = root.path().join(".codex");
+    std::fs::create_dir_all(&codex_dir).unwrap();
+    let db_path = codex_dir.join("state_5.sqlite");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&db_path)
+                .create_if_missing(true),
+        )
+        .await
+        .unwrap();
+    sqlx::query(
+        "CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, updated_at_ms INTEGER NOT NULL, position INTEGER NOT NULL)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TABLE project_roots (project_id TEXT NOT NULL, position INTEGER NOT NULL, path TEXT NOT NULL)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO projects VALUES ('p1','remoteAICli',2000,0),('p2','cockpit',1000,1)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO project_roots VALUES ('p1',0,'/tmp/remoteAICli'),('p2',0,'/tmp/cockpit')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+
+    let adapter = CodexAdapter::new("codex", root.path());
+    let projects = adapter.list_projects().await.unwrap();
+    assert_eq!(projects.len(), 2);
+    assert_eq!(projects[0].title, "remoteAICli");
+    assert_eq!(projects[0].canonical_path, "/tmp/remoteAICli");
+    assert!(projects[0].id.starts_with("codex:"));
+}
+
+#[tokio::test]
 #[ignore = "read-only smoke test requires a locally authenticated Codex CLI"]
 async fn lists_real_codex_threads_without_modifying_them() {
     use remote_ai_agent::adapters::ProviderAdapter;

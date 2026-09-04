@@ -273,6 +273,17 @@ async fn projects(
     // This read is what the phone asked for, so index the provider now. A
     // failure keeps whatever was indexed before rather than emptying the list.
     state.refresh_provider(provider).await;
+    let adapters = state.provider_adapters.read().await.clone();
+    for adapter in adapters {
+        if adapter.status().await.provider != provider {
+            continue;
+        }
+        if let Ok(projects) = adapter.list_projects().await
+            && !projects.is_empty()
+        {
+            return Json(projects).into_response();
+        }
+    }
     let sessions = state
         .sessions
         .read()
