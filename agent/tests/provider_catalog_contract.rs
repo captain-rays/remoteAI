@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -180,7 +179,11 @@ fn write_claude_desktop_fixture(root: &std::path::Path) {
         ),
     ];
     for (name, content) in fixtures {
-        std::fs::write(metadata_root.join(name), content).unwrap();
+        std::fs::write(
+            metadata_root.join(name),
+            content.replace("/Users/test", root.to_str().unwrap()),
+        )
+        .unwrap();
     }
 }
 
@@ -188,6 +191,7 @@ fn write_claude_desktop_fixture(root: &std::path::Path) {
 async fn claude_prefers_new_desktop_root_excludes_archived_and_groups_six_projects() {
     let temp = tempfile::tempdir().unwrap();
     write_claude_desktop_fixture(temp.path());
+    std::fs::create_dir_all(temp.path().join("药盒")).unwrap();
     let legacy_root = temp
         .path()
         .join("Library/Application Support/Claude/local-agent-mode-sessions");
@@ -208,23 +212,67 @@ async fn claude_prefers_new_desktop_root_excludes_archived_and_groups_six_projec
     assert!(!chats.iter().any(|chat| chat.id == "legacy"));
     assert!(chats.iter().all(|chat| chat.kind == ConversationKind::Daily));
     assert!(projects.iter().all(|project| project.provider == ProviderId::Claude));
-    assert_eq!(projects.iter().map(|project| project.title.as_str()).collect::<Vec<_>>(), [
-        "药盒", "beem-agent-data-server", "beem-ai-data-server", "new-agent", "pi-agent", "remoteAICli"
+    let mut titles = projects
+        .iter()
+        .map(|project| project.title.as_str())
+        .collect::<Vec<_>>();
+    titles.sort_unstable();
+    assert_eq!(titles, [
+        "beem-agent-data-server",
+        "beem-ai-data-server",
+        "new-agent",
+        "pi-agent",
+        "remoteAICli",
+        "药盒",
     ]);
+}
+
+#[tokio::test]
+async fn claude_falls_back_to_legacy_desktop_root_when_new_root_is_absent() {
+    let temp = tempfile::tempdir().unwrap();
+    let legacy_root = temp
+        .path()
+        .join("Library/Application Support/Claude/local-agent-mode-sessions");
+    std::fs::create_dir_all(&legacy_root).unwrap();
+    std::fs::write(
+        legacy_root.join("local_legacy.json"),
+        include_str!("fixtures/claude/desktop/catalog/local_legacy.json")
+            .replace("/Users/test", temp.path().to_str().unwrap()),
+    )
+    .unwrap();
+
+    let adapter = remote_ai_agent::adapters::claude::ClaudeAdapter::new("claude", temp.path());
+    let chats = adapter.list_daily_conversations().await.unwrap();
+
+    assert_eq!(chats.len(), 1);
+    assert_eq!(chats[0].id, "legacy");
 }
 
 #[tokio::test]
 async fn claude_session_is_in_global_chats_and_its_project_view_and_uses_cli_session_id() {
     let temp = tempfile::tempdir().unwrap();
     write_claude_desktop_fixture(temp.path());
+    std::fs::create_dir_all(temp.path().join("药盒")).unwrap();
     let transcript_root = temp.path().join(".claude/projects/project");
     std::fs::create_dir_all(&transcript_root).unwrap();
     std::fs::write(
         transcript_root.join("cli-01.jsonl"),
-        include_str!("fixtures/claude/projects/desktop-cli-01.jsonl"),
+        include_str!("fixtures/claude/projects/desktop-cli-01.jsonl")
+            .replace("/Users/test", temp.path().to_str().unwrap()),
     )
     .unwrap();
-    let adapter = remote_ai_agent::adapters::claude::ClaudeAdapter::new("claude", temp.path());
+    let stub = temp.path().join("fake-claude.sh");
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$PWD/claude-args.txt\"\ncat >/dev/null\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let adapter = remote_ai_agent::adapters::claude::ClaudeAdapter::new(&stub, temp.path());
 
     let chats = adapter.list_daily_conversations().await.unwrap();
     let project = adapter
@@ -246,14 +294,24 @@ async fn claude_session_is_in_global_chats_and_its_project_view_and_uses_cli_ses
     assert_eq!(project_chats[0].project_id.as_deref(), Some(project.id.as_str()));
     let history = adapter.load_conversation("desktop-01", None).await.unwrap();
     assert_eq!(history.events[0]["payload"]["text"], "history through cli id");
+
+    adapter.resume("desktop-01").await.unwrap();
+    adapter
+        .send("desktop-01", "send through cli id".into(), Vec::new())
+        .await
+        .unwrap();
+    let args = std::fs::read_to_string(temp.path().join("药盒/claude-args.txt")).unwrap();
+    assert!(args.lines().collect::<Vec<_>>().windows(2).any(|pair| pair == ["--resume", "cli-01"]));
 }
 
 #[test]
 fn fixture_metadata_contains_only_the_desktop_allowlist() {
     let raw: Value = serde_json::from_str(include_str!("fixtures/claude/desktop/catalog/local_01_project.json")).unwrap();
-    let keys = raw.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+    let mut keys = raw.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+    keys.sort_unstable();
     assert_eq!(keys, vec![
-        "sessionId", "cliSessionId", "title", "cwd", "createdAt", "lastActivityAt", "isArchived", "userSelectedFolders"
+        "cliSessionId", "createdAt", "cwd", "isArchived", "lastActivityAt", "sessionId",
+        "title", "userSelectedFolders"
     ]);
 }
 

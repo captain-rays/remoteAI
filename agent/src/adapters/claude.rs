@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader as StdBufReader};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 
@@ -156,6 +156,7 @@ pub struct ClaudeAdapter {
 struct DesktopSessionTarget {
     cli_id: Option<String>,
     cwd: PathBuf,
+    user_selected_folders: Vec<PathBuf>,
     transcript_path: Option<PathBuf>,
 }
 
@@ -167,6 +168,7 @@ struct DesktopSessionMeta {
     title: String,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    user_selected_folders: Vec<PathBuf>,
     transcript_path: Option<PathBuf>,
 }
 
@@ -305,6 +307,52 @@ impl ClaudeAdapter {
         stdin.flush().await?;
         Ok(())
     }
+
+    async fn refresh_desktop_index(&self) -> anyhow::Result<Vec<DesktopSessionMeta>> {
+        let desktop_sessions = collect_desktop_sessions(&self.mapper.home)?;
+        let mut targets = HashMap::new();
+        for desktop in &desktop_sessions {
+            targets.insert(
+                desktop.desktop_id.clone(),
+                DesktopSessionTarget {
+                    cli_id: desktop.cli_id.clone(),
+                    cwd: desktop.cwd.clone(),
+                    user_selected_folders: desktop.user_selected_folders.clone(),
+                    transcript_path: desktop.transcript_path.clone(),
+                },
+            );
+        }
+        *self.desktop_sessions.write().await = targets;
+        Ok(desktop_sessions)
+    }
+
+    fn desktop_summary(
+        &self,
+        desktop: &DesktopSessionMeta,
+        kind: ConversationKind,
+        project_id: Option<String>,
+        project_path: Option<String>,
+    ) -> ConversationSummary {
+        ConversationSummary {
+            id: desktop.desktop_id.clone(),
+            provider: ProviderId::Claude,
+            kind,
+            title: desktop.title.clone(),
+            project_id,
+            project_path,
+            updated_at: desktop.updated_at.max(desktop.created_at),
+            status: "idle".into(),
+            write_state: Some(if desktop.cli_id.is_some() {
+                WriteState::Available
+            } else {
+                WriteState::Unavailable
+            }),
+            write_block_code: desktop
+                .cli_id
+                .is_none()
+                .then(|| "claude_cli_session_unavailable".into()),
+        }
+    }
 }
 
 #[async_trait]
@@ -314,6 +362,33 @@ impl ProviderAdapter for ClaudeAdapter {
     }
 
     async fn list_conversations(&self) -> anyhow::Result<Vec<ConversationSummary>> {
+        let desktop_root = self
+            .mapper
+            .home
+            .join("Library/Application Support/Claude/claude-code-sessions");
+        let legacy_desktop_root = self
+            .mapper
+            .home
+            .join("Library/Application Support/Claude/local-agent-mode-sessions");
+        if desktop_root.exists() || legacy_desktop_root.exists() {
+            let desktop_sessions = self.refresh_desktop_index().await?;
+            let mut conversations = desktop_sessions
+                .iter()
+                .map(|desktop| {
+                    let kind = self.mapper.classify(desktop.cwd.clone());
+                    let project_path = (kind == ConversationKind::Project)
+                        .then(|| desktop.cwd.to_string_lossy().into_owned());
+                    self.desktop_summary(desktop, kind, None, project_path)
+                })
+                .collect::<Vec<_>>();
+            conversations.sort_by(|left, right| {
+                right
+                    .updated_at
+                    .cmp(&left.updated_at)
+                    .then_with(|| left.id.cmp(&right.id))
+            });
+            return Ok(conversations);
+        }
         // Claude's supported project/session files are metadata indexes. We intentionally do not
         // copy transcript bodies or credentials into Agent storage.
         let projects = self.mapper.home.join(".claude/projects");
@@ -363,6 +438,7 @@ impl ProviderAdapter for ClaudeAdapter {
                 DesktopSessionTarget {
                     cli_id: desktop.cli_id.clone(),
                     cwd: desktop.cwd.clone(),
+                    user_selected_folders: desktop.user_selected_folders.clone(),
                     transcript_path: desktop.transcript_path.clone(),
                 },
             );
@@ -391,6 +467,102 @@ impl ProviderAdapter for ClaudeAdapter {
         });
         *self.session_paths.write().await = session_paths;
         *self.desktop_sessions.write().await = desktop_sessions;
+        Ok(conversations)
+    }
+
+    async fn list_daily_conversations(&self) -> anyhow::Result<Vec<ConversationSummary>> {
+        let desktop_sessions = self.refresh_desktop_index().await?;
+        let mut conversations = desktop_sessions
+            .iter()
+            .map(|desktop| self.desktop_summary(desktop, ConversationKind::Daily, None, None))
+            .collect::<Vec<_>>();
+        conversations.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(conversations)
+    }
+
+    async fn list_projects(&self) -> anyhow::Result<Vec<crate::protocol::ProjectSummary>> {
+        let desktop_sessions = self.refresh_desktop_index().await?;
+        let mut projects = HashMap::new();
+        for desktop in &desktop_sessions {
+            let mut paths = vec![desktop.cwd.clone()];
+            paths.extend(desktop.user_selected_folders.iter().cloned());
+            for path in paths {
+                let canonical_path = canonical_or_normalized(&path);
+                let id = crate::catalog::project_id_for_path(
+                    ProviderId::Claude,
+                    &canonical_path,
+                );
+                let updated_at = desktop.updated_at.max(desktop.created_at);
+                let display_path = display_path(&canonical_path, &self.mapper.home);
+                let title = Path::new(&canonical_path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(&display_path)
+                    .to_owned();
+                projects
+                    .entry(canonical_path.clone())
+                    .and_modify(|project: &mut crate::protocol::ProjectSummary| {
+                        if updated_at > project.updated_at {
+                            project.updated_at = updated_at;
+                        }
+                        project.available |= Path::new(&canonical_path).is_dir();
+                    })
+                    .or_insert(crate::protocol::ProjectSummary {
+                        id,
+                        provider: ProviderId::Claude,
+                        canonical_path: canonical_path.clone(),
+                        display_path,
+                        title,
+                        updated_at,
+                        available: Path::new(&canonical_path).is_dir(),
+                    });
+            }
+        }
+        let mut projects = projects.into_values().collect::<Vec<_>>();
+        projects.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(projects)
+    }
+
+    async fn list_project_conversations(
+        &self,
+        project_id: &str,
+    ) -> anyhow::Result<Vec<ConversationSummary>> {
+        let desktop_sessions = self.refresh_desktop_index().await?;
+        let project = self
+            .list_projects()
+            .await?
+            .into_iter()
+            .find(|project| project.id == project_id);
+        let Some(project) = project else {
+            return Ok(Vec::new());
+        };
+        let mut conversations = Vec::new();
+        for desktop in desktop_sessions {
+            let mut paths = vec![desktop.cwd.clone()];
+            paths.extend(desktop.user_selected_folders.iter().cloned());
+            if paths
+                .iter()
+                .map(|path| canonical_or_normalized(path))
+                .any(|path| path == project.canonical_path)
+            {
+                conversations.push(self.desktop_summary(
+                    &desktop,
+                    ConversationKind::Project,
+                    Some(project.id.clone()),
+                    Some(desktop.cwd.to_string_lossy().into_owned()),
+                ));
+            }
+        }
         Ok(conversations)
     }
 
@@ -574,6 +746,32 @@ fn same_path(left: &Path, right: &Path) -> bool {
     left.components().eq(right.components())
 }
 
+fn canonical_or_normalized(path: &Path) -> String {
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical.to_string_lossy().into_owned();
+    }
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized.to_string_lossy().into_owned()
+}
+
+fn display_path(path: &str, home: &Path) -> String {
+    let path = Path::new(path);
+    match path.strip_prefix(home) {
+        Ok(relative) if relative.as_os_str().is_empty() => "~".to_owned(),
+        Ok(relative) => format!("~/{}", relative.to_string_lossy()),
+        Err(_) => path.to_string_lossy().into_owned(),
+    }
+}
+
 fn remap_event_session_id(event: ConversationEvent, public_id: &str) -> ConversationEvent {
     fn set_id(mut payload: Value, public_id: &str) -> Value {
         if let Some(object) = payload.as_object_mut() {
@@ -603,11 +801,19 @@ fn remap_event_session_id(event: ConversationEvent, public_id: &str) -> Conversa
 }
 
 fn collect_desktop_sessions(home: &Path) -> anyhow::Result<Vec<DesktopSessionMeta>> {
-    let root = home
+    let current_root = home
         .join("Library")
         .join("Application Support")
         .join("Claude")
-        .join("local-agent-mode-sessions");
+        .join("claude-code-sessions");
+    let root = if current_root.exists() {
+        current_root
+    } else {
+        home.join("Library")
+            .join("Application Support")
+            .join("Claude")
+            .join("local-agent-mode-sessions")
+    };
     let mut metadata_paths = Vec::new();
     collect_desktop_metadata_paths(&root, 0, &mut metadata_paths)?;
     let mut sessions = Vec::new();
@@ -644,11 +850,19 @@ fn collect_desktop_sessions(home: &Path) -> anyhow::Result<Vec<DesktopSessionMet
             .map(str::to_owned);
         let transcript_path = cli_id
             .as_ref()
-            .and_then(|cli_id| {
-                path.parent()
-                    .map(|parent| parent.join(format!("{cli_id}.jsonl")))
+            .and_then(|cli_id| find_cli_transcript(home, cli_id));
+        let user_selected_folders = value
+            .get("userSelectedFolders")
+            .and_then(Value::as_array)
+            .map(|folders| {
+                folders
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter(|folder| !folder.is_empty())
+                    .map(PathBuf::from)
+                    .collect::<Vec<_>>()
             })
-            .filter(|candidate| candidate.is_file());
+            .unwrap_or_default();
         sessions.push(DesktopSessionMeta {
             desktop_id: desktop_id.to_owned(),
             cli_id,
@@ -656,10 +870,35 @@ fn collect_desktop_sessions(home: &Path) -> anyhow::Result<Vec<DesktopSessionMet
             title: title.chars().take(512).collect(),
             created_at: desktop_timestamp(value.get("createdAt")),
             updated_at: desktop_timestamp(value.get("lastActivityAt")),
+            user_selected_folders,
             transcript_path,
         });
     }
     Ok(sessions)
+}
+
+fn find_cli_transcript(home: &Path, cli_id: &str) -> Option<PathBuf> {
+    let root = home.join(".claude/projects");
+    let mut pending = vec![(root, 0_usize)];
+    while let Some((directory, depth)) = pending.pop() {
+        if depth > MAX_DESKTOP_DEPTH {
+            continue;
+        }
+        let entries = fs::read_dir(directory).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let file_type = entry.file_type().ok()?;
+            if file_type.is_dir() {
+                pending.push((path, depth + 1));
+            } else if file_type.is_file()
+                && path.extension().and_then(|ext| ext.to_str()) == Some("jsonl")
+                && path.file_stem().and_then(|stem| stem.to_str()) == Some(cli_id)
+            {
+                return Some(path);
+            }
+        }
+    }
+    None
 }
 
 fn collect_desktop_metadata_paths(
