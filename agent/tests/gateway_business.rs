@@ -211,13 +211,25 @@ async fn plaintext_unknown_and_wrong_device_frames_are_rejected() {
             .is_err()
     );
 
+    // An unknown request *type* is a version mismatch, not an attack. It must
+    // come back as an encrypted rejection: tearing the socket down would cost
+    // the phone its realtime feed for the rest of the session.
     let unknown = request_frame(
         &inbound,
         2,
         "provider.unknown",
         json!({"provider":"claude"}),
     );
-    assert!(session.handle_frame(&unknown).await.is_err());
+    let rejection = session
+        .handle_frame(&unknown)
+        .await
+        .expect("an unknown request type must not close the websocket");
+    let value = decode_frames(rejection, &outbound)
+        .into_iter()
+        .next()
+        .unwrap();
+    assert_eq!(value["type"], "error");
+    assert_eq!(value["payload"]["code"], "unsupported_request");
 }
 
 #[tokio::test]
@@ -414,12 +426,7 @@ async fn decrypted_business_rejection_returns_safe_error_and_keeps_session_alive
     // invalid. This must be a safe encrypted response, not a socket-fatal
     // error, so the client can correct its request without reconnecting.
     let invalid = session
-        .handle_frame(&request_frame(
-            &inbound,
-            1,
-            "provider.status",
-            json!({}),
-        ))
+        .handle_frame(&request_frame(&inbound, 1, "provider.status", json!({})))
         .await
         .expect("decrypted business errors must stay on the websocket");
     let invalid_value = decode_frames(invalid, &outbound)

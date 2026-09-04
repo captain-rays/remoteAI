@@ -19,6 +19,11 @@ use tokio::sync::{Mutex, RwLock, broadcast, oneshot};
 
 static INDEX_TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
+/// Upper bound on `thread/list` pages read in one catalog refresh. The list is
+/// newest-first, so this bounds the cost of a read while still reaching far
+/// enough back to cover every project that has recent work.
+const MAX_THREAD_LIST_PAGES: usize = 20;
+
 use super::{ConversationPage, ProviderAdapter};
 use crate::protocol::{
     ApprovalDecision, ConversationEvent, ConversationKind, ConversationSummary, ProjectSummary,
@@ -329,7 +334,24 @@ impl CodexMapper {
             },
             "thread/started" => ConversationEvent::Started(params),
             "turn/started" => ConversationEvent::ToolStarted(params),
-            "turn/completed" => ConversationEvent::TurnCompleted(params),
+            // A turn that ends in `failed` still arrives as `turn/completed`.
+            // Reporting it as a completion leaves the phone showing a finished
+            // turn with no answer and no reason, so the provider's own message
+            // is forwarded as a failure instead.
+            "turn/completed" => match turn_failure_message(&params) {
+                Some(message) => ConversationEvent::TurnFailed(turn_failure(&params, message)),
+                None => ConversationEvent::TurnCompleted(params),
+            },
+            // The app-server reports quota and upstream problems out of band.
+            "error" => ConversationEvent::TurnFailed(turn_failure(
+                &params,
+                params
+                    .pointer("/error/message")
+                    .and_then(Value::as_str)
+                    .or_else(|| params.get("message").and_then(Value::as_str))
+                    .unwrap_or("Codex reported an error")
+                    .to_owned(),
+            )),
             "item/completed" => ConversationEvent::ToolCompleted(params),
             "item/commandExecution/requestApproval" => {
                 ConversationEvent::ApprovalRequested(normalize_approval(value, "command"))
@@ -477,30 +499,65 @@ impl ProviderAdapter for CodexAdapter {
     }
 
     async fn list_conversations(&self) -> anyhow::Result<Vec<ConversationSummary>> {
-        let result = self
-            .client()
-            .await?
-            .call("thread/list", json!({"sortDirection":"desc"}))
-            .await?;
-        let mut conversations = self.mapper.map_thread_list_value(&result)?;
+        // `thread/list` answers one fixed-size page at a time. Reading only the
+        // first page hides every older thread, which makes most projects look
+        // as though they have no sessions at all.
+        let client = self.client().await?;
+        let mut conversations = Vec::new();
+        let mut seen = HashSet::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..MAX_THREAD_LIST_PAGES {
+            let mut params = json!({"sortDirection":"desc"});
+            if let Some(cursor) = cursor.as_deref() {
+                params["cursor"] = json!(cursor);
+            }
+            let result = client.call("thread/list", params).await?;
+            for summary in self.mapper.map_thread_list_value(&result)? {
+                if seen.insert(summary.id.clone()) {
+                    conversations.push(summary);
+                }
+            }
+            let next = result
+                .get("nextCursor")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            match next {
+                Some(next) if Some(&next) != cursor.as_ref() => cursor = Some(next),
+                _ => break,
+            }
+        }
         conversations.sort_by_key(|summary| Reverse(summary.updated_at));
         Ok(conversations)
     }
 
     async fn list_daily_conversations(&self) -> anyhow::Result<Vec<ConversationSummary>> {
-        let Some(bridge) = self.host_bridge.as_ref() else {
-            return Ok(Vec::new());
-        };
-        Ok(bridge
-            .list_chatgpt_conversations()
+        if let Some(bridge) = self.host_bridge.as_ref() {
+            return Ok(bridge
+                .list_chatgpt_conversations()
+                .await?
+                .into_iter()
+                .filter(|conversation| {
+                    conversation.provider == ProviderId::Codex
+                        && conversation.kind == ConversationKind::Daily
+                        && conversation.project_id.is_none()
+                })
+                .map(|mut conversation| {
+                    conversation.project_path = None;
+                    conversation
+                })
+                .collect());
+        }
+        // Without an injected host catalog, Codex's own thread list is the
+        // provider's global conversation view — the same role Claude's desktop
+        // session index plays. Returning an empty list here would leave the
+        // Chats tab permanently unreadable and unwritable.
+        Ok(self
+            .list_conversations()
             .await?
             .into_iter()
-            .filter(|conversation| {
-                conversation.provider == ProviderId::Codex
-                    && conversation.kind == ConversationKind::Daily
-                    && conversation.project_id.is_none()
-            })
             .map(|mut conversation| {
+                conversation.kind = ConversationKind::Daily;
+                conversation.project_id = None;
                 conversation.project_path = None;
                 conversation
             })
@@ -508,9 +565,10 @@ impl ProviderAdapter for CodexAdapter {
     }
 
     fn daily_catalog_diagnostic_code(&self) -> Option<&'static str> {
-        self.host_bridge
-            .is_none()
-            .then_some("codex_chats_host_bridge_unavailable")
+        // The Chats view now has a local source, so an empty list is a real
+        // empty catalog. A provider that cannot be reached at all still
+        // surfaces through the read error the gateway reports.
+        None
     }
 
     async fn list_projects(&self) -> anyhow::Result<Vec<ProjectSummary>> {
@@ -621,15 +679,19 @@ impl ProviderAdapter for CodexAdapter {
     }
 
     async fn start(&self, kind: ConversationKind, cwd: Option<PathBuf>) -> anyhow::Result<String> {
-        if kind == ConversationKind::Daily {
-            let Some(bridge) = self.host_bridge.as_ref() else {
-                return Err(anyhow::anyhow!("codex_chats_host_bridge_unavailable"));
-            };
+        if kind == ConversationKind::Daily
+            && let Some(bridge) = self.host_bridge.as_ref()
+        {
             return bridge.start_chatgpt_conversation(cwd).await;
         }
-        let result = self
-            .client()
-            .await?
+        // A Chat is not bound to a project directory, so it runs in the paired
+        // user's HOME rather than wherever the agent process happens to live.
+        let cwd = match kind {
+            ConversationKind::Daily => cwd.or_else(|| Some(self.mapper.home.clone())),
+            ConversationKind::Project => cwd,
+        };
+        let client = self.client().await?;
+        let result = client
             .call(
                 "thread/start",
                 json!({
@@ -640,6 +702,7 @@ impl ProviderAdapter for CodexAdapter {
             )
             .await?;
         let id = required_string(result.get("thread").unwrap_or(&result), "id")?;
+        client.mark_loaded(&id).await;
         if kind == ConversationKind::Daily {
             self.touch_recent_session(&id)?;
         }
@@ -650,17 +713,8 @@ impl ProviderAdapter for CodexAdapter {
         if let Some(bridge) = self.host_chat_bridge_for(id).await? {
             return bridge.resume_chatgpt_conversation(id).await;
         }
-        self.client()
-            .await?
-            .call(
-                "thread/resume",
-                json!({
-                    "threadId": id,
-                    "approvalPolicy": "on-request",
-                    "approvalsReviewer": "user"
-                }),
-            )
-            .await?;
+        let client = self.client().await?;
+        client.load_thread(id).await?;
         Ok(())
     }
 
@@ -683,6 +737,16 @@ impl ProviderAdapter for CodexAdapter {
                 return Err(error);
             }
         };
+        // `turn/start` only accepts a thread this app-server process has
+        // loaded. The phone is writing to a conversation that already exists on
+        // the Mac, so resuming it here is exactly what pressing send asked for;
+        // the gateway has already checked that no other writer holds it.
+        if !client.is_loaded(id).await
+            && let Err(error) = client.load_thread(id).await
+        {
+            self.active_turns.write().await.remove(id);
+            return Err(error);
+        }
         let result = match client
             .call("turn/start", json!({"threadId": id, "input": input}))
             .await
@@ -756,6 +820,10 @@ struct RpcClient {
     _child: Mutex<Child>,
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<anyhow::Result<Value>>>>>,
     next_id: AtomicU64,
+    /// Threads this app-server process has started or resumed. `turn/start`
+    /// answers "thread not found" for anything else, and the set has to live
+    /// with the process because a restart loses every loaded thread.
+    loaded_threads: Mutex<HashSet<String>>,
 }
 
 impl RpcClient {
@@ -818,7 +886,31 @@ impl RpcClient {
             _child: Mutex::new(child),
             pending,
             next_id: AtomicU64::new(1),
+            loaded_threads: Mutex::new(HashSet::new()),
         })
+    }
+
+    async fn mark_loaded(&self, id: &str) {
+        self.loaded_threads.lock().await.insert(id.to_owned());
+    }
+
+    async fn is_loaded(&self, id: &str) -> bool {
+        self.loaded_threads.lock().await.contains(id)
+    }
+
+    /// Resume a thread into this process and remember that it is loaded.
+    async fn load_thread(&self, id: &str) -> anyhow::Result<()> {
+        self.call(
+            "thread/resume",
+            json!({
+                "threadId": id,
+                "approvalPolicy": "on-request",
+                "approvalsReviewer": "user"
+            }),
+        )
+        .await?;
+        self.mark_loaded(id).await;
+        Ok(())
     }
 
     async fn call(&self, method: &str, params: Value) -> anyhow::Result<Value> {
@@ -948,6 +1040,35 @@ fn normalize_codex_item(
         }
         _ => Vec::new(),
     }
+}
+
+/// The provider message for a turn that ended in failure, if it did.
+fn turn_failure_message(params: &Value) -> Option<String> {
+    let status = params
+        .pointer("/turn/status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !matches!(status, "failed" | "error") {
+        return None;
+    }
+    Some(
+        params
+            .pointer("/turn/error/message")
+            .and_then(Value::as_str)
+            .unwrap_or("the Codex turn failed")
+            .to_owned(),
+    )
+}
+
+/// Shape a failure the phone can render: a stable code plus the provider's
+/// own wording, so the user always learns why a turn produced no answer.
+fn turn_failure(params: &Value, message: String) -> Value {
+    json!({
+        "conversationId": params.get("threadId"),
+        "turnId": params.pointer("/turn/id"),
+        "code": "turn_failed",
+        "message": message,
+    })
 }
 
 fn normalize_approval(value: &Value, category: &str) -> Value {

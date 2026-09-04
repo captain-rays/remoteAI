@@ -179,8 +179,12 @@ fn adapters_from_statuses(
                 match status.provider {
                     ProviderId::Codex => Arc::new(CodexAdapter::new(executable, home.clone()))
                         as Arc<dyn ProviderAdapter>,
-                    ProviderId::Claude => Arc::new(ClaudeAdapter::new(executable, home.clone()))
-                        as Arc<dyn ProviderAdapter>,
+                    ProviderId::Claude => Arc::new(
+                        ClaudeAdapter::new(executable, home.clone())
+                            // Opt-in override for a Mac whose configured
+                            // default model the account cannot use.
+                            .with_model(std::env::var("REMOTEAI_CLAUDE_MODEL").ok()),
+                    ) as Arc<dyn ProviderAdapter>,
                 }
             });
             Arc::new(ReportedAdapter::new(status, inner)) as Arc<dyn ProviderAdapter>

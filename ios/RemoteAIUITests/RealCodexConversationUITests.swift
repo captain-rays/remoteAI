@@ -69,7 +69,11 @@ final class RealCodexConversationUITests: XCTestCase {
         XCTAssertTrue(sessionRow.waitForExistence(timeout: 30), "no session to open")
         sessionRow.tap()
 
-        let composer = app.textViews["composer"]
+        // Xcode 26 classifies a vertical SwiftUI TextField as a TextField from
+        // legacy attributes and a TextView from modern ones, so neither typed
+        // query matches reliably. Address the composer by identifier instead.
+        let composer = app.descendants(matching: .any)
+            .matching(identifier: "composer").firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 15))
         composer.tap()
         composer.typeText("Reply with exactly: PONG. Do not use any tools.")

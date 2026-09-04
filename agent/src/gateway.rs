@@ -926,13 +926,17 @@ impl GatewaySession {
         let request_id = request
             .request_id
             .ok_or(GatewayBusinessError::InvalidPayload)?;
+        // The frame is authenticated and decrypted from here on. Everything
+        // that can still go wrong is a business rejection, so it must travel
+        // back as an encrypted error the client can act on — never as a socket
+        // teardown that costs the phone its realtime feed.
         let provider = request
             .payload
             .get("provider")
             .and_then(Value::as_str)
-            .and_then(parse_provider)
-            .ok_or(GatewayBusinessError::InvalidPayload)?;
+            .and_then(parse_provider);
         let operation: Result<(&str, Value), GatewayBusinessError> = async {
+            let provider = provider.ok_or(GatewayBusinessError::InvalidPayload)?;
             let adapters = self.state.provider_adapters.read().await.clone();
             let mut adapter = None;
             for candidate in adapters {
@@ -1072,13 +1076,11 @@ impl GatewaySession {
         let (response_type, payload) = match operation {
             Ok(result) => result,
             Err(error) => {
-                if matches!(error, GatewayBusinessError::UnsupportedRequest) {
-                    return Err(error);
-                }
                 let error_kind = match error {
                     GatewayBusinessError::Provider(_) => "provider_operation_failed",
                     GatewayBusinessError::ProviderUnavailable => "provider_unavailable",
                     GatewayBusinessError::SessionBusy => "session_busy",
+                    GatewayBusinessError::UnsupportedRequest => "unsupported_request",
                     _ => "invalid_request",
                 };
                 return Ok(vec![self.encrypt_json(
@@ -1094,15 +1096,16 @@ impl GatewaySession {
                 )?]);
             }
         };
-        if let Some(conversation_id) = payload
-            .get("conversationId")
-            .and_then(Value::as_str)
-            .or_else(|| {
-                request
-                    .payload
-                    .get("conversationId")
-                    .and_then(Value::as_str)
-            })
+        if let Some(provider) = provider
+            && let Some(conversation_id) = payload
+                .get("conversationId")
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    request
+                        .payload
+                        .get("conversationId")
+                        .and_then(Value::as_str)
+                })
         {
             self.active_conversations
                 .insert(provider, conversation_id.to_owned());

@@ -58,7 +58,11 @@ final class RealAgentSessionSyncUITests: XCTestCase {
 
         // One real turn, so the provider writes the transcript that makes the
         // session real.
-        let composer = app.textViews["composer"]
+        // Xcode 26 classifies a vertical SwiftUI TextField as a TextField from
+        // legacy attributes and a TextView from modern ones, so neither typed
+        // query matches reliably. Address the composer by identifier instead.
+        let composer = app.descendants(matching: .any)
+            .matching(identifier: "composer").firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 15))
         composer.tap()
         composer.typeText("Reply with one word.")

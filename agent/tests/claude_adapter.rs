@@ -227,7 +227,11 @@ async fn desktop_catalog_does_not_hide_cli_project_sessions() {
 
     let adapter = ClaudeAdapter::new("claude", temp.path());
     let projects = adapter.list_projects().await.unwrap();
-    let canonical = cli_project.canonicalize().unwrap().to_string_lossy().into_owned();
+    let canonical = cli_project
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
     let project_id = project_id_for_path(ProviderId::Claude, &canonical);
     assert!(
         projects.iter().any(|project| project.id == project_id),
@@ -239,7 +243,9 @@ async fn desktop_catalog_does_not_hide_cli_project_sessions() {
         .await
         .unwrap();
     assert!(
-        conversations.iter().any(|conversation| conversation.id == "cli-1"),
+        conversations
+            .iter()
+            .any(|conversation| conversation.id == "cli-1"),
         "the CLI project session must be addressable from its project: {conversations:?}"
     );
 }
@@ -286,7 +292,10 @@ async fn sends_claude_stream_json_user_input_as_a_text_block() {
     assert_eq!(value["type"], "user");
     assert_eq!(value["message"]["role"], "user");
     assert_eq!(value["message"]["content"][0]["type"], "text");
-    assert_eq!(value["message"]["content"][0]["text"], "fixed harmless probe");
+    assert_eq!(
+        value["message"]["content"][0]["text"],
+        "fixed harmless probe"
+    );
 }
 
 #[tokio::test]
@@ -412,7 +421,7 @@ async fn sending_to_an_indexed_session_resumes_it_instead_of_failing() {
 }
 
 #[tokio::test]
-async fn an_agent_started_session_is_busy_after_the_first_send() {
+async fn a_session_this_agent_holds_for_the_phone_stays_writable() {
     use remote_ai_agent::adapters::ProviderAdapter;
 
     let temp = tempfile::tempdir().unwrap();
@@ -437,11 +446,19 @@ async fn an_agent_started_session_is_busy_after_the_first_send() {
         .await
         .unwrap();
 
+    // The gateway refuses `conversation.send` whenever the adapter answers
+    // Busy, so a writer this agent opened *on the phone's behalf* must stay
+    // Available — otherwise the phone could never send a second message.
+    // Busy is reserved for a writer the phone does not own.
     assert_eq!(
         adapter.write_availability(&id).await.unwrap(),
-        WriteState::Busy,
-        "a session with an Agent-owned live writer must reject a second send"
+        WriteState::Available,
+        "the phone's own live session must accept a follow-up message"
     );
+    adapter
+        .send(&id, "second-probe".into(), Vec::new())
+        .await
+        .expect("a second message to the same session must be accepted");
 }
 
 #[tokio::test]
@@ -482,14 +499,21 @@ async fn started_claude_session_emits_delta_and_terminal_for_first_send() {
             .await
             .expect("first send should produce a bounded event")
             .expect("event stream should remain open");
-        saw_delta |= matches!(event, ConversationEvent::Delta { ref text } if text == "fixed-reply");
+        saw_delta |=
+            matches!(event, ConversationEvent::Delta { ref text } if text == "fixed-reply");
         saw_terminal |= matches!(event, ConversationEvent::TurnCompleted(_));
         if saw_delta && saw_terminal {
             break;
         }
     }
-    assert!(saw_delta, "the first Claude send must emit an assistant delta");
-    assert!(saw_terminal, "the first Claude send must emit a terminal event");
+    assert!(
+        saw_delta,
+        "the first Claude send must emit an assistant delta"
+    );
+    assert!(
+        saw_terminal,
+        "the first Claude send must emit a terminal event"
+    );
 }
 
 #[tokio::test]

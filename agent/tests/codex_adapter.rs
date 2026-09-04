@@ -184,18 +184,20 @@ fn recent_session_index_writer_is_atomic_and_owner_only() {
 }
 
 #[tokio::test]
-async fn daily_start_without_host_bridge_is_unavailable_without_index_fallback() {
+async fn a_daily_start_that_cannot_reach_the_cli_writes_no_recent_entry() {
     use remote_ai_agent::adapters::ProviderAdapter;
 
     let root = tempfile::tempdir().unwrap();
     let adapter = CodexAdapter::new("/definitely/missing/codex", root.path());
-    let error = adapter
+    adapter
         .start(ConversationKind::Daily, None)
         .await
-        .unwrap_err();
-    assert_eq!(error.to_string(), "codex_chats_host_bridge_unavailable");
+        .expect_err("an unreachable CLI cannot start a chat");
     let index = root.path().join(".codex/session_index.jsonl");
-    assert!(!index.exists());
+    assert!(
+        !index.exists(),
+        "a failed start must not leave a recent-session entry behind"
+    );
 }
 
 #[tokio::test]
@@ -268,4 +270,360 @@ async fn lists_real_codex_recent_daily_sessions() {
             .iter()
             .any(|conversation| conversation.kind == ConversationKind::Daily)
     );
+}
+
+/// Write an executable stub that speaks the subset of the Codex app-server
+/// JSON-RPC protocol this adapter uses. `script` is Python appended to a
+/// dispatcher that already parsed one request into `method`, `params` and `id`.
+fn write_app_server_stub(path: &std::path::Path, script: &str) {
+    let stub = format!(
+        r#"#!/usr/bin/env python3
+import json, sys
+
+def reply(request_id, result):
+    sys.stdout.write(json.dumps({{"jsonrpc": "2.0", "id": request_id, "result": result}}) + "\n")
+    sys.stdout.flush()
+
+def fail(request_id, message):
+    sys.stdout.write(
+        json.dumps({{"jsonrpc": "2.0", "id": request_id, "error": {{"code": -32600, "message": message}}}})
+        + "\n"
+    )
+    sys.stdout.flush()
+
+def notify(method, params):
+    sys.stdout.write(json.dumps({{"jsonrpc": "2.0", "method": method, "params": params}}) + "\n")
+    sys.stdout.flush()
+
+state = {{}}
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    request = json.loads(line)
+    method = request.get("method")
+    params = request.get("params") or {{}}
+    request_id = request.get("id")
+    if method == "initialize":
+        reply(request_id, {{"userAgent": "stub"}})
+        continue
+    if method == "initialized":
+        continue
+{script}
+"#,
+        script = script
+            .lines()
+            .map(|line| format!("    {line}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    std::fs::write(path, stub).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[tokio::test]
+async fn sending_to_an_existing_thread_resumes_it_before_starting_a_turn() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let root = tempfile::tempdir().unwrap();
+    let stub = root.path().join("stub-app-server.py");
+    // The real app-server answers `turn/start` with "thread not found" until
+    // the thread has been resumed in this same process, so a send that does
+    // not resume first can never reach the model.
+    write_app_server_stub(
+        &stub,
+        r#"if method == "thread/resume":
+    state[params["threadId"]] = True
+    reply(request_id, {"thread": {"id": params["threadId"]}})
+    continue
+if method == "turn/start":
+    if not state.get(params["threadId"]):
+        fail(request_id, "thread not found: " + params["threadId"])
+        continue
+    reply(request_id, {"turn": {"id": "turn-1"}})
+    continue
+if request_id is not None:
+    fail(request_id, "unexpected method " + str(method))
+"#,
+    );
+
+    let adapter = CodexAdapter::new(&stub, root.path());
+    adapter
+        .send("thread-1", "fixed probe".into(), Vec::new())
+        .await
+        .expect("a send to an existing thread must resume it instead of failing");
+}
+
+#[tokio::test]
+async fn a_thread_is_resumed_once_across_repeated_sends() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let root = tempfile::tempdir().unwrap();
+    let stub = root.path().join("stub-app-server.py");
+    let resumes = root.path().join("resumes.txt");
+    write_app_server_stub(
+        &stub,
+        &format!(
+            r#"if method == "thread/resume":
+    state[params["threadId"]] = True
+    with open({path:?}, "a") as handle:
+        handle.write(params["threadId"] + "\n")
+    reply(request_id, {{"thread": {{"id": params["threadId"]}}}})
+    continue
+if method == "turn/start":
+    if not state.get(params["threadId"]):
+        fail(request_id, "thread not found")
+        continue
+    reply(request_id, {{"turn": {{"id": "turn-1"}}}})
+    notify("turn/completed", {{"threadId": params["threadId"], "turn": {{"status": "completed"}}}})
+    continue
+if request_id is not None:
+    fail(request_id, "unexpected method")
+"#,
+            path = resumes.to_str().unwrap(),
+        ),
+    );
+
+    let adapter = CodexAdapter::new(&stub, root.path());
+    adapter
+        .send("thread-1", "first".into(), Vec::new())
+        .await
+        .unwrap();
+    // Wait for the completion notification so the turn lease is released.
+    for _ in 0..50 {
+        if adapter.write_availability("thread-1").await.unwrap()
+            == remote_ai_agent::protocol::WriteState::Available
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    adapter
+        .send("thread-1", "second".into(), Vec::new())
+        .await
+        .unwrap();
+
+    let recorded = std::fs::read_to_string(&resumes).unwrap_or_default();
+    assert_eq!(
+        recorded.lines().count(),
+        1,
+        "a thread already loaded in this process must not be resumed again: {recorded:?}"
+    );
+}
+
+#[test]
+fn a_failed_codex_turn_is_reported_as_a_failure_with_the_provider_message() {
+    let mapper = CodexMapper::new(PathBuf::from("/Users/test"));
+    let event = mapper
+        .map_notification(
+            r#"{"method":"turn/completed","params":{"threadId":"t1","turn":{"id":"turn-1","status":"failed","error":{"message":"You've hit your usage limit."}}}}"#,
+        )
+        .unwrap();
+    match event {
+        ConversationEvent::TurnFailed(payload) => {
+            assert_eq!(payload["message"], "You've hit your usage limit.");
+            assert_eq!(payload["conversationId"], "t1");
+        }
+        other => panic!("a failed turn must not be reported as completed: {other:?}"),
+    }
+}
+
+#[test]
+fn a_codex_error_notification_reaches_the_phone_as_a_turn_failure() {
+    let mapper = CodexMapper::new(PathBuf::from("/Users/test"));
+    let event = mapper
+        .map_notification(
+            r#"{"method":"error","params":{"threadId":"t1","error":{"message":"upstream refused"}}}"#,
+        )
+        .unwrap();
+    match event {
+        ConversationEvent::TurnFailed(payload) => {
+            assert_eq!(payload["message"], "upstream refused");
+        }
+        other => panic!("a provider error must surface as a failure: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn codex_chats_come_from_the_local_thread_catalog_without_a_host_bridge() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let root = tempfile::tempdir().unwrap();
+    let stub = root.path().join("stub-app-server.py");
+    write_app_server_stub(
+        &stub,
+        r#"if method == "thread/list":
+    reply(request_id, {"data": [
+        {"id": "chat-1", "name": "A chat", "cwd": "/tmp/anywhere", "updatedAt": 20},
+    ], "nextCursor": None})
+    continue
+if request_id is not None:
+    fail(request_id, "unexpected method")
+"#,
+    );
+
+    let adapter = CodexAdapter::new(&stub, root.path());
+    let chats = adapter.list_daily_conversations().await.unwrap();
+
+    assert_eq!(
+        chats
+            .iter()
+            .map(|chat| chat.id.as_str())
+            .collect::<Vec<_>>(),
+        ["chat-1"],
+        "Codex Chats must list the provider's own threads, not an empty catalog"
+    );
+    assert!(
+        chats
+            .iter()
+            .all(|chat| chat.kind == ConversationKind::Daily && chat.project_id.is_none())
+    );
+    assert_eq!(adapter.daily_catalog_diagnostic_code(), None);
+}
+
+#[tokio::test]
+async fn codex_project_conversations_follow_every_thread_list_page() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+
+    let root = tempfile::tempdir().unwrap();
+    let project_dir = root.path().join("project");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    let codex_dir = root.path().join(".codex");
+    std::fs::create_dir_all(&codex_dir).unwrap();
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(codex_dir.join("state_5.sqlite"))
+                .create_if_missing(true),
+        )
+        .await
+        .unwrap();
+    sqlx::query(
+        "CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, updated_at_ms INTEGER NOT NULL, position INTEGER NOT NULL)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TABLE project_roots (project_id TEXT NOT NULL, position INTEGER NOT NULL, path TEXT NOT NULL)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO projects VALUES ('p1','project',2000,0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(&format!(
+        "INSERT INTO project_roots VALUES ('p1',0,'{}')",
+        project_dir.canonicalize().unwrap().display()
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+
+    let stub = root.path().join("stub-app-server.py");
+    // The project's only thread sits on the second page. A single-page read
+    // reports the project as having no sessions at all.
+    write_app_server_stub(
+        &stub,
+        &format!(
+            r#"if method == "thread/list":
+    if params.get("cursor") is None:
+        reply(request_id, {{"data": [
+            {{"id": "other", "name": "Elsewhere", "cwd": "/tmp/elsewhere", "updatedAt": 30}},
+        ], "nextCursor": "page-2"}})
+    else:
+        reply(request_id, {{"data": [
+            {{"id": "wanted", "name": "In project", "cwd": {path:?}, "updatedAt": 20}},
+        ], "nextCursor": None}})
+    continue
+if request_id is not None:
+    fail(request_id, "unexpected method")
+"#,
+            path = project_dir.canonicalize().unwrap().to_str().unwrap(),
+        ),
+    );
+
+    let adapter = CodexAdapter::new(&stub, root.path());
+    let conversations = adapter.list_project_conversations("p1").await.unwrap();
+
+    assert_eq!(
+        conversations
+            .iter()
+            .map(|conversation| conversation.id.as_str())
+            .collect::<Vec<_>>(),
+        ["wanted"],
+        "a project session must stay reachable when it is not on the first page"
+    );
+}
+
+#[tokio::test]
+async fn a_new_chat_runs_in_the_paired_home_not_the_agent_directory() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let root = tempfile::tempdir().unwrap();
+    let stub = root.path().join("stub-app-server.py");
+    let recorded = root.path().join("start-cwd.txt");
+    write_app_server_stub(
+        &stub,
+        &format!(
+            r#"if method == "thread/start":
+    with open({path:?}, "w") as handle:
+        handle.write(str(params.get("cwd")))
+    reply(request_id, {{"thread": {{"id": "chat-new"}}}})
+    continue
+if request_id is not None:
+    fail(request_id, "unexpected method")
+"#,
+            path = recorded.to_str().unwrap(),
+        ),
+    );
+
+    let adapter = CodexAdapter::new(&stub, root.path());
+    let id = adapter.start(ConversationKind::Daily, None).await.unwrap();
+
+    assert_eq!(id, "chat-new");
+    assert_eq!(
+        std::fs::read_to_string(&recorded).unwrap(),
+        root.path().to_str().unwrap(),
+        "a chat is not bound to a project, so it runs in the paired user's HOME"
+    );
+}
+
+#[tokio::test]
+async fn a_chat_started_here_can_be_written_without_resuming_it_again() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let root = tempfile::tempdir().unwrap();
+    let stub = root.path().join("stub-app-server.py");
+    write_app_server_stub(
+        &stub,
+        r#"if method == "thread/start":
+    state["chat-new"] = True
+    reply(request_id, {"thread": {"id": "chat-new"}})
+    continue
+if method == "thread/resume":
+    fail(request_id, "a thread started in this process must not be resumed")
+    continue
+if method == "turn/start":
+    if not state.get(params["threadId"]):
+        fail(request_id, "thread not found")
+        continue
+    reply(request_id, {"turn": {"id": "turn-1"}})
+    continue
+if request_id is not None:
+    fail(request_id, "unexpected method")
+"#,
+    );
+
+    let adapter = CodexAdapter::new(&stub, root.path());
+    let id = adapter.start(ConversationKind::Daily, None).await.unwrap();
+    adapter
+        .send(&id, "fixed probe".into(), Vec::new())
+        .await
+        .expect("the first send after a start must not need a resume");
 }

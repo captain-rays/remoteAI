@@ -62,7 +62,11 @@ final class PairingAndRevocationUITests: XCTestCase {
         XCTAssertTrue(dailyChat.waitForExistence(timeout: 5))
         dailyChat.tap()
 
-        let composer = app.textViews["composer"]
+        // Xcode 26 classifies a vertical SwiftUI TextField as a TextField from
+        // legacy attributes and a TextView from modern ones, so neither typed
+        // query matches reliably. Address the composer by identifier instead.
+        let composer = app.descendants(matching: .any)
+            .matching(identifier: "composer").firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         composer.tap()
         composer.typeText("please run something that needs approval")

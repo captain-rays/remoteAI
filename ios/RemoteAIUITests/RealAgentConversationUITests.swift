@@ -80,7 +80,11 @@ final class RealAgentConversationUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 20), "no Claude session was created")
         row.tap()
 
-        let composer = app.textViews["composer"]
+        // Xcode 26 classifies a vertical SwiftUI TextField as a TextField from
+        // legacy attributes and a TextView from modern ones, so neither typed
+        // query matches reliably. Address the composer by identifier instead.
+        let composer = app.descendants(matching: .any)
+            .matching(identifier: "composer").firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 15))
         composer.tap()
         composer.typeText("What is 2+2? Answer with one word.")

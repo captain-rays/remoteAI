@@ -1,3 +1,4 @@
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -84,7 +85,7 @@ impl CodexHostBridge for FixtureCodexHostBridge {
 }
 
 #[tokio::test]
-async fn codex_chats_without_host_bridge_are_empty_and_diagnosable() {
+async fn codex_chats_never_come_from_the_recent_session_index() {
     let temp = tempfile::tempdir().unwrap();
     let codex_dir = temp.path().join(".codex");
     std::fs::create_dir_all(&codex_dir).unwrap();
@@ -94,18 +95,42 @@ async fn codex_chats_without_host_bridge_are_empty_and_diagnosable() {
     )
     .unwrap();
 
-    let adapter = CodexAdapter::new("codex", temp.path());
+    // Stand in for the app-server with an empty thread list. The recent-session
+    // index is a local convenience file, not the provider's conversation
+    // catalog, so nothing in it may appear in Chats.
+    let stub = temp.path().join("stub-app-server.py");
+    std::fs::write(
+        &stub,
+        r#"#!/usr/bin/env python3
+import json, sys
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    request = json.loads(line)
+    if request.get("id") is None:
+        continue
+    result = {"data": [], "nextCursor": None}
+    if request.get("method") == "initialize":
+        result = {"userAgent": "stub"}
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}) + "\n")
+    sys.stdout.flush()
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    let adapter = CodexAdapter::new(&stub, temp.path());
     let chats = adapter.list_daily_conversations().await.unwrap();
 
-    assert!(chats.is_empty());
-    assert_eq!(
-        adapter.daily_catalog_diagnostic_code(),
-        Some("codex_chats_host_bridge_unavailable")
+    assert!(
+        chats.is_empty(),
+        "recent-index entries must not become Chats"
     );
-    assert_eq!(
-        adapter.status().await.reason.as_deref(),
-        Some("codex_chats_host_bridge_unavailable")
-    );
+    // The Chats view now has a local source, so an empty list is a real empty
+    // catalog rather than a missing bridge.
+    assert_eq!(adapter.daily_catalog_diagnostic_code(), None);
+    assert_eq!(adapter.status().await.reason, None);
 }
 
 #[tokio::test]

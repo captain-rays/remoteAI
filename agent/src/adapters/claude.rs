@@ -150,6 +150,10 @@ pub struct ClaudeAdapter {
     /// Placeholder id handed to the phone -> the id Claude itself assigned.
     adopted_ids: Arc<RwLock<HashMap<String, String>>>,
     history_page_size: usize,
+    /// Model passed to the CLI. `None` leaves the Mac's own default in place;
+    /// an operator sets it when that default is not usable for phone-started
+    /// turns.
+    model: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -169,6 +173,62 @@ struct DesktopSessionMeta {
     updated_at: DateTime<Utc>,
     user_selected_folders: Vec<PathBuf>,
     transcript_path: Option<PathBuf>,
+}
+
+impl DesktopSessionMeta {
+    /// Every directory this desktop session is associated with, canonicalized.
+    fn project_paths(&self) -> impl Iterator<Item = String> + '_ {
+        std::iter::once(&self.cwd)
+            .chain(self.user_selected_folders.iter())
+            .map(|path| canonical_or_normalized(path))
+    }
+
+    fn recency(&self) -> DateTime<Utc> {
+        self.updated_at.max(self.created_at)
+    }
+}
+
+/// One session indexed from `~/.claude/projects`, with the transcript file it
+/// was read from.
+#[derive(Debug, Clone)]
+struct CliSession {
+    summary: ConversationSummary,
+    canonical_project_path: Option<String>,
+}
+
+/// A single read of everything Claude records locally: the desktop app's
+/// session metadata and the CLI's own project transcripts. Both are indexes,
+/// never copies of transcript bodies or credentials.
+struct ClaudeIndex {
+    desktop: Vec<DesktopSessionMeta>,
+    /// CLI sessions the desktop catalog does not already represent.
+    cli: Vec<CliSession>,
+}
+
+impl ClaudeIndex {
+    /// Every project directory either index points at, with its recency.
+    fn project_paths(&self) -> Vec<(String, DateTime<Utc>)> {
+        let mut paths = Vec::new();
+        for desktop in &self.desktop {
+            let recency = desktop.recency();
+            paths.extend(desktop.project_paths().map(|path| (path, recency)));
+        }
+        for session in &self.cli {
+            if let Some(path) = session.canonical_project_path.clone() {
+                paths.push((path, session.summary.updated_at));
+            }
+        }
+        paths
+    }
+}
+
+fn sort_by_recency(conversations: &mut [ConversationSummary]) {
+    conversations.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
 }
 
 struct ClaudeSession {
@@ -196,7 +256,18 @@ impl ClaudeAdapter {
             desktop_sessions: RwLock::new(HashMap::new()),
             adopted_ids: Arc::new(RwLock::new(HashMap::new())),
             history_page_size: DEFAULT_HISTORY_PAGE_SIZE,
+            model: None,
         }
+    }
+
+    /// Run every session this adapter starts on an explicit model.
+    ///
+    /// The CLI otherwise inherits the Mac's configured default, which can be a
+    /// model the account cannot actually use — the turn then fails with the
+    /// provider's own credit error and the phone gets no answer.
+    pub fn with_model(mut self, model: Option<String>) -> Self {
+        self.model = model.filter(|model| !model.trim().is_empty());
+        self
     }
 
     /// The id Claude assigned to a session this agent started, once its first
@@ -230,6 +301,9 @@ impl ClaudeAdapter {
         .into_iter()
         .map(str::to_owned)
         .collect::<Vec<_>>();
+        if let Some(model) = self.model.as_deref() {
+            args.extend(["--model".into(), model.into()]);
+        }
         if let Some(session) = resume {
             args.extend(["--resume".into(), session.into()]);
         }
@@ -307,21 +381,80 @@ impl ClaudeAdapter {
         Ok(())
     }
 
-    async fn refresh_desktop_index(&self) -> anyhow::Result<Vec<DesktopSessionMeta>> {
-        let desktop_sessions = collect_desktop_sessions(&self.mapper.home)?;
+    /// Read both local Claude indexes in one pass and publish the lookup maps
+    /// the write and history paths depend on.
+    ///
+    /// The desktop catalog and the CLI's own `~/.claude/projects` index are
+    /// separate views of the same machine. Reading only one of them — which is
+    /// what returning early on the desktop root did — leaves every session the
+    /// other view owns unlistable, and therefore unwritable, because nothing
+    /// can resolve its transcript.
+    async fn refresh_index(&self) -> anyhow::Result<ClaudeIndex> {
+        let desktop = collect_desktop_sessions(&self.mapper.home)?;
         let mut targets = HashMap::new();
-        for desktop in &desktop_sessions {
+        let mut wrapped_cli_ids = HashSet::new();
+        for session in &desktop {
+            if let Some(cli_id) = session.cli_id.as_ref() {
+                wrapped_cli_ids.insert(cli_id.clone());
+            }
             targets.insert(
-                desktop.desktop_id.clone(),
+                session.desktop_id.clone(),
                 DesktopSessionTarget {
-                    cli_id: desktop.cli_id.clone(),
-                    cwd: desktop.cwd.clone(),
-                    transcript_path: desktop.transcript_path.clone(),
+                    cli_id: session.cli_id.clone(),
+                    cwd: session.cwd.clone(),
+                    transcript_path: session.transcript_path.clone(),
                 },
             );
         }
+
+        let mut session_paths = HashMap::new();
+        let mut cli = Vec::new();
+        let mut pending = vec![self.mapper.home.join(".claude/projects")];
+        while let Some(directory) = pending.pop() {
+            let entries = match fs::read_dir(&directory) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
+            };
+            for entry in entries {
+                let entry = entry?;
+                let path = entry.path();
+                let file_type = entry.file_type()?;
+                if file_type.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                if !file_type.is_file()
+                    || path.extension().and_then(|extension| extension.to_str()) != Some("jsonl")
+                {
+                    continue;
+                }
+                let Some(summary) = read_conversation_metadata(&self.mapper, &path)? else {
+                    continue;
+                };
+                session_paths
+                    .entry(summary.id.clone())
+                    .or_insert_with(|| path.clone());
+                // The desktop app addresses this session by its own id, and
+                // that entry carries the title the user chose. Listing the CLI
+                // record too would show the same conversation twice.
+                if wrapped_cli_ids.contains(&summary.id) {
+                    continue;
+                }
+                let canonical_project_path = summary
+                    .project_path
+                    .as_deref()
+                    .map(|path| canonical_or_normalized(Path::new(path)));
+                cli.push(CliSession {
+                    summary,
+                    canonical_project_path,
+                });
+            }
+        }
+
         *self.desktop_sessions.write().await = targets;
-        Ok(desktop_sessions)
+        *self.session_paths.write().await = session_paths;
+        Ok(ClaudeIndex { desktop, cli })
     }
 
     fn desktop_summary(
@@ -338,7 +471,7 @@ impl ClaudeAdapter {
             title: desktop.title.clone(),
             project_id,
             project_path,
-            updated_at: desktop.updated_at.max(desktop.created_at),
+            updated_at: desktop.recency(),
             status: "idle".into(),
             write_state: Some(if desktop.cli_id.is_some() {
                 WriteState::Available
@@ -360,157 +493,65 @@ impl ProviderAdapter for ClaudeAdapter {
     }
 
     async fn list_conversations(&self) -> anyhow::Result<Vec<ConversationSummary>> {
-        let desktop_root = self
-            .mapper
-            .home
-            .join("Library/Application Support/Claude/claude-code-sessions");
-        let legacy_desktop_root = self
-            .mapper
-            .home
-            .join("Library/Application Support/Claude/local-agent-mode-sessions");
-        if desktop_root.exists() || legacy_desktop_root.exists() {
-            let desktop_sessions = self.refresh_desktop_index().await?;
-            let mut conversations = desktop_sessions
-                .iter()
-                .map(|desktop| self.desktop_summary(desktop, ConversationKind::Daily, None, None))
-                .collect::<Vec<_>>();
-            conversations.sort_by(|left, right| {
-                right
-                    .updated_at
-                    .cmp(&left.updated_at)
-                    .then_with(|| left.id.cmp(&right.id))
-            });
-            return Ok(conversations);
-        }
-        // Claude's supported project/session files are metadata indexes. We intentionally do not
-        // copy transcript bodies or credentials into Agent storage.
-        let projects = self.mapper.home.join(".claude/projects");
-        let mut pending = vec![projects];
-        let mut conversations = Vec::new();
-        let mut session_paths = HashMap::new();
-        while let Some(directory) = pending.pop() {
-            let entries = match fs::read_dir(&directory) {
-                Ok(entries) => entries,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(error.into()),
-            };
-            for entry in entries {
-                let entry = entry?;
-                let path = entry.path();
-                let file_type = entry.file_type()?;
-                if file_type.is_dir() {
-                    pending.push(path);
-                } else if file_type.is_file()
-                    && path.extension().and_then(|extension| extension.to_str()) == Some("jsonl")
-                    && let Some(conversation) = read_conversation_metadata(&self.mapper, &path)?
-                {
-                    session_paths.entry(conversation.id.clone()).or_insert(path);
-                    conversations.push(conversation);
-                }
-            }
-        }
-        let mut known_cli_ids = session_paths.keys().cloned().collect::<HashSet<_>>();
-        let mut desktop_sessions = HashMap::new();
-        for desktop in collect_desktop_sessions(&self.mapper.home)? {
-            if conversations
-                .iter()
-                .any(|conversation| conversation.id == desktop.desktop_id)
-                || desktop
-                    .cli_id
-                    .as_ref()
-                    .is_some_and(|cli_id| known_cli_ids.contains(cli_id))
-            {
-                continue;
-            }
-            if let Some(cli_id) = desktop.cli_id.as_ref() {
-                known_cli_ids.insert(cli_id.clone());
-            }
-            let writable = desktop.cli_id.is_some();
-            desktop_sessions.insert(
-                desktop.desktop_id.clone(),
-                DesktopSessionTarget {
-                    cli_id: desktop.cli_id.clone(),
-                    cwd: desktop.cwd.clone(),
-                    transcript_path: desktop.transcript_path.clone(),
-                },
-            );
-            conversations.push(ConversationSummary {
-                id: desktop.desktop_id,
-                provider: ProviderId::Claude,
-                kind: ConversationKind::Daily,
-                title: desktop.title,
-                project_id: None,
-                project_path: None,
-                updated_at: desktop.updated_at.max(desktop.created_at),
-                status: "idle".into(),
-                write_state: Some(if writable {
-                    WriteState::Available
-                } else {
-                    WriteState::Unavailable
-                }),
-                write_block_code: (!writable).then(|| "claude_cli_session_unavailable".into()),
-            });
-        }
-        conversations.sort_by(|left, right| {
-            right
-                .updated_at
-                .cmp(&left.updated_at)
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        *self.session_paths.write().await = session_paths;
-        *self.desktop_sessions.write().await = desktop_sessions;
+        let index = self.refresh_index().await?;
+        let mut conversations = index
+            .desktop
+            .iter()
+            .map(|desktop| self.desktop_summary(desktop, ConversationKind::Daily, None, None))
+            .collect::<Vec<_>>();
+        conversations.extend(index.cli.iter().map(|session| session.summary.clone()));
+        sort_by_recency(&mut conversations);
         Ok(conversations)
     }
 
     async fn list_daily_conversations(&self) -> anyhow::Result<Vec<ConversationSummary>> {
-        let desktop_sessions = self.refresh_desktop_index().await?;
-        let mut conversations = desktop_sessions
+        let index = self.refresh_index().await?;
+        let mut conversations = index
+            .desktop
             .iter()
             .map(|desktop| self.desktop_summary(desktop, ConversationKind::Daily, None, None))
             .collect::<Vec<_>>();
-        conversations.sort_by(|left, right| {
-            right
-                .updated_at
-                .cmp(&left.updated_at)
-                .then_with(|| left.id.cmp(&right.id))
-        });
+        // A CLI session the desktop app never wrapped still belongs in the
+        // global Chats view; it is the only place it can be reached from.
+        conversations.extend(index.cli.iter().map(|session| {
+            let mut summary = session.summary.clone();
+            summary.kind = ConversationKind::Daily;
+            summary.project_id = None;
+            summary.project_path = None;
+            summary
+        }));
+        sort_by_recency(&mut conversations);
         Ok(conversations)
     }
 
     async fn list_projects(&self) -> anyhow::Result<Vec<crate::protocol::ProjectSummary>> {
-        let desktop_sessions = self.refresh_desktop_index().await?;
+        let index = self.refresh_index().await?;
         let mut projects = HashMap::new();
-        for desktop in &desktop_sessions {
-            let mut paths = vec![desktop.cwd.clone()];
-            paths.extend(desktop.user_selected_folders.iter().cloned());
-            for path in paths {
-                let canonical_path = canonical_or_normalized(&path);
-                let id = crate::catalog::project_id_for_path(ProviderId::Claude, &canonical_path);
-                let updated_at = desktop.updated_at.max(desktop.created_at);
-                let display_path = display_path(&canonical_path, &self.mapper.home);
-                let title = Path::new(&canonical_path)
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or(&display_path)
-                    .to_owned();
-                projects
-                    .entry(canonical_path.clone())
-                    .and_modify(|project: &mut crate::protocol::ProjectSummary| {
-                        if updated_at > project.updated_at {
-                            project.updated_at = updated_at;
-                        }
-                        project.available |= Path::new(&canonical_path).is_dir();
-                    })
-                    .or_insert(crate::protocol::ProjectSummary {
-                        id,
-                        provider: ProviderId::Claude,
-                        canonical_path: canonical_path.clone(),
-                        display_path,
-                        title,
-                        updated_at,
-                        available: Path::new(&canonical_path).is_dir(),
-                    });
-            }
+        for (canonical_path, updated_at) in index.project_paths() {
+            let display_path = display_path(&canonical_path, &self.mapper.home);
+            let title = Path::new(&canonical_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(&display_path)
+                .to_owned();
+            let available = Path::new(&canonical_path).is_dir();
+            projects
+                .entry(canonical_path.clone())
+                .and_modify(|project: &mut crate::protocol::ProjectSummary| {
+                    if updated_at > project.updated_at {
+                        project.updated_at = updated_at;
+                    }
+                    project.available |= available;
+                })
+                .or_insert(crate::protocol::ProjectSummary {
+                    id: crate::catalog::project_id_for_path(ProviderId::Claude, &canonical_path),
+                    provider: ProviderId::Claude,
+                    canonical_path: canonical_path.clone(),
+                    display_path,
+                    title,
+                    updated_at,
+                    available,
+                });
         }
         let mut projects = projects.into_values().collect::<Vec<_>>();
         projects.sort_by(|left, right| {
@@ -526,7 +567,7 @@ impl ProviderAdapter for ClaudeAdapter {
         &self,
         project_id: &str,
     ) -> anyhow::Result<Vec<ConversationSummary>> {
-        let desktop_sessions = self.refresh_desktop_index().await?;
+        let index = self.refresh_index().await?;
         let project = self
             .list_projects()
             .await?
@@ -536,23 +577,29 @@ impl ProviderAdapter for ClaudeAdapter {
             return Ok(Vec::new());
         };
         let mut conversations = Vec::new();
-        for desktop in desktop_sessions {
-            let mut paths = vec![desktop.cwd.clone()];
-            paths.extend(desktop.user_selected_folders.iter().cloned());
-            if paths
-                .iter()
-                .map(|path| canonical_or_normalized(path))
-                .find(|path| path == &project.canonical_path)
-                .is_some()
+        for desktop in &index.desktop {
+            if desktop
+                .project_paths()
+                .any(|path| path == project.canonical_path)
             {
                 conversations.push(self.desktop_summary(
-                    &desktop,
+                    desktop,
                     ConversationKind::Project,
                     Some(project.id.clone()),
                     Some(project.canonical_path.clone()),
                 ));
             }
         }
+        for session in &index.cli {
+            if session.canonical_project_path.as_deref() == Some(project.canonical_path.as_str()) {
+                let mut summary = session.summary.clone();
+                summary.kind = ConversationKind::Project;
+                summary.project_id = Some(project.id.clone());
+                summary.project_path = Some(project.canonical_path.clone());
+                conversations.push(summary);
+            }
+        }
+        sort_by_recency(&mut conversations);
         Ok(conversations)
     }
 
@@ -683,7 +730,13 @@ impl ProviderAdapter for ClaudeAdapter {
         }
         Self::write(
             &session,
-            json!({"type":"user","message":{"role":"user","content":content}}),
+            json!({
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": content}]
+                }
+            }),
         )
         .await
     }
