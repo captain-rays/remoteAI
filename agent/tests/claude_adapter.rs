@@ -931,3 +931,187 @@ async fn a_dead_claude_process_is_replaced_on_the_next_send() {
     .await
     .expect("the adapter kept writing to the dead process instead of replacing it");
 }
+
+/// Build a HOME with a desktop catalog that designates one project, plus CLI
+/// sessions in a worktree under it, in an undesignated directory inside HOME,
+/// and in a directory outside HOME entirely.
+struct NestedFixture {
+    designated: PathBuf,
+    nested: PathBuf,
+    undesignated: PathBuf,
+    outside: PathBuf,
+    _outside_root: tempfile::TempDir,
+}
+
+fn write_nested_cli_sessions(root: &std::path::Path) -> NestedFixture {
+    let designated = root.join("designated");
+    let nested = designated.join("worktrees/one");
+    let undesignated = root.join("terminal-only");
+    let outside_root = tempfile::tempdir().unwrap();
+    let outside = outside_root.path().join("scratch");
+    for path in [&designated, &nested, &undesignated, &outside] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+
+    let desktop = root.join("Library/Application Support/Claude/claude-code-sessions/acct/s");
+    std::fs::create_dir_all(&desktop).unwrap();
+    std::fs::write(
+        desktop.join("local_designated.json"),
+        format!(
+            r#"{{"sessionId":"desktop-1","cliSessionId":"cli-desktop","title":"Designated","cwd":"{}","createdAt":1725400000000,"lastActivityAt":1725400060000,"isArchived":false}}"#,
+            designated.display()
+        ),
+    )
+    .unwrap();
+
+    let sessions = root.join(".claude/projects/slug");
+    std::fs::create_dir_all(&sessions).unwrap();
+    for (id, cwd) in [
+        ("nested-session", &nested),
+        ("terminal-session", &undesignated),
+        ("outside-session", &outside),
+    ] {
+        std::fs::write(
+            sessions.join(format!("{id}.jsonl")),
+            format!(
+                r#"{{"type":"user","session_id":"{id}","cwd":"{}","message":{{"content":[{{"type":"text","text":"{id}"}}]}}}}"#,
+                cwd.display()
+            ),
+        )
+        .unwrap();
+    }
+    NestedFixture {
+        designated,
+        nested,
+        undesignated,
+        outside,
+        _outside_root: outside_root,
+    }
+}
+
+fn canonical(path: &std::path::Path) -> String {
+    path.canonicalize().unwrap().to_string_lossy().into_owned()
+}
+
+#[tokio::test]
+async fn a_subdirectory_of_a_project_is_not_a_separate_project() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = write_nested_cli_sessions(temp.path());
+    let adapter = ClaudeAdapter::new("claude", temp.path());
+
+    let projects = adapter.list_projects().await.unwrap();
+    let paths = projects
+        .iter()
+        .map(|project| project.canonical_path.clone())
+        .collect::<Vec<_>>();
+
+    assert!(
+        !paths.contains(&canonical(&fixture.nested)),
+        "a worktree inside a project is not a project of its own: {paths:?}"
+    );
+    assert!(
+        !paths.contains(&canonical(&fixture.outside)),
+        "a directory outside the paired user's HOME cannot be browsed, so it          is not offered as a project: {paths:?}"
+    );
+    assert!(
+        paths.contains(&canonical(&fixture.designated)),
+        "the designated directory is a project: {paths:?}"
+    );
+    assert!(
+        paths.contains(&canonical(&fixture.undesignated)),
+        "a directory only the terminal has worked in is still a project, or          that work would be unreachable from the Projects tab: {paths:?}"
+    );
+    assert_eq!(
+        paths.len(),
+        2,
+        "no other directory became a project: {paths:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_session_inside_a_project_is_listed_under_that_project() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+    use remote_ai_agent::catalog::project_id_for_path;
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = write_nested_cli_sessions(temp.path());
+    let adapter = ClaudeAdapter::new("claude", temp.path());
+
+    let conversations = adapter
+        .list_project_conversations(&project_id_for_path(
+            ProviderId::Claude,
+            &canonical(&fixture.designated),
+        ))
+        .await
+        .unwrap();
+
+    let ids = conversations
+        .iter()
+        .map(|conversation| conversation.id.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        ids.contains(&"nested-session"),
+        "a session in a worktree belongs to the project that encloses it: {ids:?}"
+    );
+    assert!(ids.contains(&"desktop-1"), "{ids:?}");
+    assert!(!ids.contains(&"terminal-session"), "{ids:?}");
+}
+
+#[tokio::test]
+async fn a_session_no_project_encloses_is_still_reachable_from_chats() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let temp = tempfile::tempdir().unwrap();
+    write_nested_cli_sessions(temp.path());
+    let adapter = ClaudeAdapter::new("claude", temp.path());
+
+    let chats = adapter.list_daily_conversations().await.unwrap();
+    let ids = chats
+        .iter()
+        .map(|chat| chat.id.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        ids.contains(&"outside-session"),
+        "a session no project encloses has no project view, so Chats is the \
+         only place it can be reached from: {ids:?}"
+    );
+    for owned in ["nested-session", "terminal-session"] {
+        assert!(
+            !ids.contains(&owned),
+            "{owned} has a project view and must not also crowd Chats: {ids:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn without_a_desktop_catalog_cli_session_directories_are_the_projects() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    // A Mac that only ever used the CLI has no designated directories at all.
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("cli-only");
+    std::fs::create_dir_all(&project).unwrap();
+    let sessions = temp.path().join(".claude/projects/slug");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(
+        sessions.join("only.jsonl"),
+        format!(
+            r#"{{"type":"user","session_id":"only","cwd":"{}","message":{{"content":[{{"type":"text","text":"work"}}]}}}}"#,
+            project.display()
+        ),
+    )
+    .unwrap();
+
+    let adapter = ClaudeAdapter::new("claude", temp.path());
+    let projects = adapter.list_projects().await.unwrap();
+
+    assert_eq!(
+        projects
+            .iter()
+            .map(|project| project.canonical_path.as_str())
+            .collect::<Vec<_>>(),
+        [canonical(&project).as_str()]
+    );
+}

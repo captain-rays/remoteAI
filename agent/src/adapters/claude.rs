@@ -195,12 +195,16 @@ impl DesktopSessionMeta {
     }
 }
 
-/// One session indexed from `~/.claude/projects`, with the transcript file it
-/// was read from.
+/// One session indexed from `~/.claude/projects`.
 #[derive(Debug, Clone)]
 struct CliSession {
     summary: ConversationSummary,
-    canonical_project_path: Option<String>,
+    /// Directory the session ran in.
+    cwd: String,
+    /// The designated project that encloses `cwd`, if any. A session in a
+    /// worktree or a subdirectory belongs to the project above it; one that no
+    /// project encloses has no project view and lives in Chats.
+    project: Option<String>,
 }
 
 /// A single read of everything Claude records locally: the desktop app's
@@ -213,20 +217,96 @@ struct ClaudeIndex {
 }
 
 impl ClaudeIndex {
-    /// Every project directory either index points at, with its recency.
+    /// Each project directory with its recency.
     fn project_paths(&self) -> Vec<(String, DateTime<Utc>)> {
         let mut paths = Vec::new();
         for desktop in &self.desktop {
             let recency = desktop.recency();
             paths.extend(desktop.project_paths().map(|path| (path, recency)));
         }
+        // A session's own directory only becomes a project when it has a
+        // project to belong to; otherwise every worktree and temporary
+        // directory a session ran in would show up as its own project.
         for session in &self.cli {
-            if let Some(path) = session.canonical_project_path.clone() {
+            if let Some(path) = session.project.clone() {
                 paths.push((path, session.summary.updated_at));
             }
         }
         paths
     }
+}
+
+/// Whether `path` is `parent` or sits underneath it.
+fn is_within(path: &str, parent: &str) -> bool {
+    let path = Path::new(path);
+    let parent = Path::new(parent);
+    path == parent || path.starts_with(parent)
+}
+
+/// The project that encloses `cwd`, preferring the closest one when projects
+/// nest.
+fn enclosing_project(cwd: &str, projects: &[String]) -> Option<String> {
+    projects
+        .iter()
+        .filter(|candidate| is_within(cwd, candidate))
+        .max_by_key(|candidate| Path::new(candidate).components().count())
+        .cloned()
+}
+
+/// The directories that are Claude projects on this Mac.
+///
+/// A directory the user designated in the desktop app — its `cwd` or one of
+/// its selected folders — is always a project, however it nests. A directory
+/// only the CLI has seen becomes one too, so a project worked on from the
+/// terminal is not invisible, but only when it is inside the paired user's
+/// HOME and no other project already covers it. Without that last rule every
+/// worktree, subdirectory and temporary directory a session happened to run in
+/// showed up as a project of its own.
+fn project_directories(
+    home: &str,
+    desktop: &[DesktopSessionMeta],
+    cli: &[CliSession],
+) -> Vec<String> {
+    let mut designated = desktop
+        .iter()
+        .flat_map(DesktopSessionMeta::project_paths)
+        .filter(|path| path != home)
+        .collect::<Vec<_>>();
+    designated.sort_unstable();
+    designated.dedup();
+
+    let mut candidates = cli
+        .iter()
+        .map(|session| session.cwd.clone())
+        .filter(|path| path != home && is_within(path, home))
+        .filter(|path| {
+            !designated
+                .iter()
+                .any(|project| is_within(path, project) && path != project)
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_unstable();
+    candidates.dedup();
+    // Among the CLI's own directories, the outermost one wins: a session in a
+    // subdirectory of another session's directory belongs to it.
+    let nested = candidates
+        .iter()
+        .filter(|path| {
+            candidates
+                .iter()
+                .any(|other| other != *path && is_within(path, other))
+        })
+        .cloned()
+        .collect::<HashSet<_>>();
+
+    let mut projects = designated;
+    let known = projects.iter().cloned().collect::<HashSet<_>>();
+    projects.extend(
+        candidates
+            .into_iter()
+            .filter(|path| !nested.contains(path) && !known.contains(path)),
+    );
+    projects
 }
 
 fn sort_by_recency(conversations: &mut [ConversationSummary]) {
@@ -454,15 +534,23 @@ impl ClaudeAdapter {
                 if wrapped_cli_ids.contains(&summary.id) {
                     continue;
                 }
-                let canonical_project_path = summary
+                let cwd = summary
                     .project_path
                     .as_deref()
-                    .map(|path| canonical_or_normalized(Path::new(path)));
+                    .map(|path| canonical_or_normalized(Path::new(path)))
+                    .unwrap_or_else(|| canonical_or_normalized(&self.mapper.home));
                 cli.push(CliSession {
                     summary,
-                    canonical_project_path,
+                    cwd,
+                    project: None,
                 });
             }
+        }
+
+        let home = canonical_or_normalized(&self.mapper.home);
+        let projects = project_directories(&home, &desktop, &cli);
+        for session in &mut cli {
+            session.project = enclosing_project(&session.cwd, &projects);
         }
 
         *self.desktop_sessions.write().await = targets;
@@ -525,16 +613,21 @@ impl ProviderAdapter for ClaudeAdapter {
             .iter()
             .map(|desktop| self.desktop_summary(desktop, ConversationKind::Daily, None, None))
             .collect::<Vec<_>>();
-        // A CLI session that is not bound to a project directory has no
-        // project view to appear in, so Chats is the only place it can be
-        // reached from. One that *is* bound to a directory belongs to that
-        // project instead of crowding the global list.
+        // A CLI session no project encloses has no project view to appear in,
+        // so Chats is the only place it can be reached from. One that does
+        // belong to a project is listed there instead of crowding this list.
         conversations.extend(
             index
                 .cli
                 .iter()
-                .filter(|session| session.summary.kind == ConversationKind::Daily)
-                .map(|session| session.summary.clone()),
+                .filter(|session| session.project.is_none())
+                .map(|session| {
+                    let mut summary = session.summary.clone();
+                    summary.kind = ConversationKind::Daily;
+                    summary.project_id = None;
+                    summary.project_path = None;
+                    summary
+                }),
         );
         sort_by_recency(&mut conversations);
         Ok(conversations)
@@ -607,7 +700,7 @@ impl ProviderAdapter for ClaudeAdapter {
             }
         }
         for session in &index.cli {
-            if session.canonical_project_path.as_deref() == Some(project.canonical_path.as_str()) {
+            if session.project.as_deref() == Some(project.canonical_path.as_str()) {
                 let mut summary = session.summary.clone();
                 summary.kind = ConversationKind::Project;
                 summary.project_id = Some(project.id.clone());
