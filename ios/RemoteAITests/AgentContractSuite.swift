@@ -63,6 +63,28 @@ public enum AgentContractSuite {
                 }
             },
 
+            TestCase("a turn.failed with no wording at all still names the failure") {
+                // Verbatim shape from claude 2.1.210 when `--resume` cannot
+                // find the session: a result with a subtype and nothing else.
+                let payload = """
+                    {"type":"result","subtype":"error_during_execution","is_error":true}
+                    """
+                let envelope = try ProtocolCoding.decodeEvent(
+                    from: eventData("turn.failed", payload)
+                )
+                guard case let .turnFailed(failure) = envelope.event else {
+                    throw ExpectationFailure(
+                        message: "expected .turnFailed, got \(envelope.event)",
+                        file: #filePath, line: #line
+                    )
+                }
+                try expectEqual(failure.code, "error_during_execution")
+                try expectFalse(
+                    failure.message.isEmpty,
+                    "an empty row tells the user nothing; name the failure"
+                )
+            },
+
             TestCase("turn.failed carrying the CLI error result is recognised") {
                 let payload = """
                 {"type":"result","subtype":"success","is_error":true,

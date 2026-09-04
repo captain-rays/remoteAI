@@ -627,3 +627,60 @@ if request_id is not None:
         .await
         .expect("the first send after a start must not need a resume");
 }
+
+#[tokio::test]
+async fn a_thread_with_no_first_message_yet_has_an_empty_history_not_an_error() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let root = tempfile::tempdir().unwrap();
+    let stub = root.path().join("stub-app-server.py");
+    // Verbatim from codex-cli 0.144.4: a thread that exists but has not
+    // received a user message yet refuses `includeTurns`. The phone opens the
+    // transcript before the first turn exists, so this is an empty history.
+    write_app_server_stub(
+        &stub,
+        r#"if method == "thread/read":
+    fail(
+        request_id,
+        "thread " + params["threadId"]
+        + " is not materialized yet; includeTurns is unavailable before first user message",
+    )
+    continue
+if request_id is not None:
+    fail(request_id, "unexpected method")
+"#,
+    );
+
+    let adapter = CodexAdapter::new(&stub, root.path());
+    let page = adapter
+        .load_conversation("brand-new-thread", None)
+        .await
+        .expect("an unmaterialized thread must read as an empty history");
+
+    assert_eq!(page.conversation_id, "brand-new-thread");
+    assert!(page.events.is_empty());
+    assert_eq!(page.next_cursor, None);
+}
+
+#[tokio::test]
+async fn a_real_thread_read_failure_is_still_reported() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let root = tempfile::tempdir().unwrap();
+    let stub = root.path().join("stub-app-server.py");
+    write_app_server_stub(
+        &stub,
+        r#"if method == "thread/read":
+    fail(request_id, "thread not found: " + params["threadId"])
+    continue
+if request_id is not None:
+    fail(request_id, "unexpected method")
+"#,
+    );
+
+    let adapter = CodexAdapter::new(&stub, root.path());
+    adapter
+        .load_conversation("missing-thread", None)
+        .await
+        .expect_err("a genuine read failure must not be hidden as empty history");
+}

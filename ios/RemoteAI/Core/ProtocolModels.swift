@@ -480,11 +480,12 @@ public struct TurnFailure: Codable, Sendable, Hashable {
             self.code = try container.decodeIfPresent(String.self, forKey: .subtype) ?? "turn_failed"
         }
 
-        if let message = try container.decodeIfPresent(String.self, forKey: .message) {
-            self.message = message
-        } else {
-            self.message = try container.decodeIfPresent(String.self, forKey: .result) ?? ""
-        }
+        let stated =
+            try container.decodeIfPresent(String.self, forKey: .message)
+            ?? container.decodeIfPresent(String.self, forKey: .result)
+        // Some CLI failures carry only a subtype — `error_during_execution`,
+        // for example. Showing the code beats showing an empty row.
+        self.message = stated?.isEmpty == false ? stated! : self.code
     }
 
     public func encode(to encoder: Encoder) throws {

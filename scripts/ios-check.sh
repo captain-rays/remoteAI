@@ -63,6 +63,8 @@ if [ "$have_xcodegen" -eq 1 ] && [ "$have_xcodebuild" -eq 1 ]; then
         -derivedDataPath ios/.derivedData \
         -skip-testing:RemoteAIUITests/RealAgentConversationUITests \
         -skip-testing:RemoteAIUITests/RealCodexConversationUITests \
+        -skip-testing:RemoteAIUITests/RealCodexChatUITests \
+        -skip-testing:RemoteAIUITests/RealClaudeChatWriteUITests \
         -skip-testing:RemoteAIUITests/RealAgentTranscriptUITests \
         -skip-testing:RemoteAIUITests/RealAgentSessionSyncUITests \
         -skip-testing:RemoteAIUITests/RealFileTransferUITests \

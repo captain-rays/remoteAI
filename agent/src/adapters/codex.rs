@@ -674,7 +674,22 @@ impl ProviderAdapter for CodexAdapter {
             .client()
             .await?
             .call("thread/read", json!({"threadId": id, "includeTurns": true}))
-            .await?;
+            .await;
+        let result = match result {
+            Ok(result) => result,
+            // A thread that exists but has not received its first user message
+            // yet refuses `includeTurns`. The phone opens the transcript before
+            // that first turn exists, so this is an empty history, not a
+            // failure the user should see.
+            Err(error) if is_unmaterialized_thread(&error) => {
+                return Ok(ConversationPage {
+                    conversation_id: id.to_owned(),
+                    events: Vec::new(),
+                    next_cursor: None,
+                });
+            }
+            Err(error) => return Err(error),
+        };
         self.mapper.map_thread_read_value(&result, id, cursor)
     }
 
@@ -1083,6 +1098,13 @@ fn normalize_approval(value: &Value, category: &str) -> Value {
         "cwd": params.get("cwd"),
         "createdAt": params.get("startedAtMs")
     })
+}
+
+/// Recognize the app-server's "no first user message yet" rejection. The
+/// wording is the only signal it gives; every other read failure stays an
+/// error the phone is told about.
+fn is_unmaterialized_thread(error: &anyhow::Error) -> bool {
+    error.to_string().contains("not materialized")
 }
 
 fn required_string(value: &Value, key: &str) -> anyhow::Result<String> {

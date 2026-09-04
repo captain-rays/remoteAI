@@ -146,6 +146,10 @@ pub struct ClaudeAdapter {
     events: broadcast::Sender<ConversationEvent>,
     sessions: RwLock<HashMap<String, Arc<ClaudeSession>>>,
     session_paths: RwLock<HashMap<String, PathBuf>>,
+    /// Directory each indexed CLI session was recorded in. `--resume` only
+    /// resolves a session id inside its own project directory, so a resume
+    /// launched anywhere else exits with "No conversation found".
+    session_cwds: RwLock<HashMap<String, PathBuf>>,
     desktop_sessions: RwLock<HashMap<String, DesktopSessionTarget>>,
     /// Placeholder id handed to the phone -> the id Claude itself assigned.
     adopted_ids: Arc<RwLock<HashMap<String, String>>>,
@@ -253,6 +257,7 @@ impl ClaudeAdapter {
             events,
             sessions: RwLock::new(HashMap::new()),
             session_paths: RwLock::new(HashMap::new()),
+            session_cwds: RwLock::new(HashMap::new()),
             desktop_sessions: RwLock::new(HashMap::new()),
             adopted_ids: Arc::new(RwLock::new(HashMap::new())),
             history_page_size: DEFAULT_HISTORY_PAGE_SIZE,
@@ -408,6 +413,7 @@ impl ClaudeAdapter {
         }
 
         let mut session_paths = HashMap::new();
+        let mut session_cwds = HashMap::new();
         let mut cli = Vec::new();
         let mut pending = vec![self.mapper.home.join(".claude/projects")];
         while let Some(directory) = pending.pop() {
@@ -435,6 +441,9 @@ impl ClaudeAdapter {
                 session_paths
                     .entry(summary.id.clone())
                     .or_insert_with(|| path.clone());
+                session_cwds
+                    .entry(summary.id.clone())
+                    .or_insert_with(|| session_cwd(&self.mapper, &path));
                 // The desktop app addresses this session by its own id, and
                 // that entry carries the title the user chose. Listing the CLI
                 // record too would show the same conversation twice.
@@ -454,6 +463,7 @@ impl ClaudeAdapter {
 
         *self.desktop_sessions.write().await = targets;
         *self.session_paths.write().await = session_paths;
+        *self.session_cwds.write().await = session_cwds;
         Ok(ClaudeIndex { desktop, cli })
     }
 
@@ -511,15 +521,17 @@ impl ProviderAdapter for ClaudeAdapter {
             .iter()
             .map(|desktop| self.desktop_summary(desktop, ConversationKind::Daily, None, None))
             .collect::<Vec<_>>();
-        // A CLI session the desktop app never wrapped still belongs in the
-        // global Chats view; it is the only place it can be reached from.
-        conversations.extend(index.cli.iter().map(|session| {
-            let mut summary = session.summary.clone();
-            summary.kind = ConversationKind::Daily;
-            summary.project_id = None;
-            summary.project_path = None;
-            summary
-        }));
+        // A CLI session that is not bound to a project directory has no
+        // project view to appear in, so Chats is the only place it can be
+        // reached from. One that *is* bound to a directory belongs to that
+        // project instead of crowding the global list.
+        conversations.extend(
+            index
+                .cli
+                .iter()
+                .filter(|session| session.summary.kind == ConversationKind::Daily)
+                .map(|session| session.summary.clone()),
+        );
         sort_by_recency(&mut conversations);
         Ok(conversations)
     }
@@ -650,7 +662,16 @@ impl ProviderAdapter for ClaudeAdapter {
         })
     }
 
-    async fn start(&self, _kind: ConversationKind, cwd: Option<PathBuf>) -> anyhow::Result<String> {
+    async fn start(&self, kind: ConversationKind, cwd: Option<PathBuf>) -> anyhow::Result<String> {
+        // Claude files a session under the directory its process runs in, and
+        // that directory is what makes the session a chat or a project session.
+        // Without an explicit one, a chat has to run in the paired user's HOME
+        // — inheriting the agent's own working directory filed phone-started
+        // chats as sessions of whatever project the agent was launched from.
+        let cwd = match kind {
+            ConversationKind::Daily => cwd.or_else(|| Some(self.mapper.home.clone())),
+            ConversationKind::Project => cwd,
+        };
         if let Some(cwd) = cwd.as_deref() {
             anyhow::ensure!(cwd.is_dir(), "project directory is not available");
         }
@@ -678,21 +699,28 @@ impl ProviderAdapter for ClaudeAdapter {
         }
         // Only a session this agent knows may be resumed: an id from the phone
         // must never turn into a CLI spawned for an arbitrary string.
+        if !self.session_paths.read().await.contains_key(id) {
+            // The index may predate this session, so read it once more before
+            // refusing.
+            let _ = self.refresh_index().await;
+        }
         anyhow::ensure!(
             self.session_paths.read().await.contains_key(id)
                 || self.sessions.read().await.contains_key(id),
             "session is not indexed"
         );
-        // Resume in the session's own project, so the resumed turns are stored
-        // where the rest of that session lives.
+        // `--resume` resolves a session id only inside the directory the
+        // session was recorded in: run it anywhere else and the CLI exits with
+        // "No conversation found with session ID". Resuming there also keeps
+        // the new turns in the same transcript as the rest of the session.
         let cwd = self
-            .list_conversations()
+            .session_cwds
+            .read()
             .await
-            .unwrap_or_default()
-            .into_iter()
-            .find(|summary| summary.id == id)
-            .and_then(|summary| summary.project_path)
-            .map(PathBuf::from)
+            .get(id)
+            .cloned()
+            .filter(|path| path.is_dir())
+            .or_else(|| Some(self.mapper.home.clone()))
             .filter(|path| path.is_dir());
         let session = self.spawn_session(Some(id), cwd.as_deref(), id).await?;
         self.sessions.write().await.insert(id.to_owned(), session);
@@ -984,6 +1012,28 @@ fn desktop_timestamp(value: Option<&Value>) -> DateTime<Utc> {
         .and_then(Value::as_i64)
         .and_then(DateTime::<Utc>::from_timestamp_millis)
         .unwrap_or_else(|| DateTime::<Utc>::from(std::time::SystemTime::UNIX_EPOCH))
+}
+
+/// The directory a CLI session was recorded in. The transcript states it; the
+/// enclosing `~/.claude/projects/<slug>` directory is a lossy encoding of the
+/// same path, so the transcript wins and HOME is the fallback.
+fn session_cwd(mapper: &ClaudeMapper, transcript: &Path) -> PathBuf {
+    let Ok(file) = File::open(transcript) else {
+        return mapper.home.clone();
+    };
+    for line in StdBufReader::new(file).lines() {
+        let Ok(line) = line else { continue };
+        if line.len() > MAX_METADATA_LINE_BYTES {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if let Some(cwd) = string_field(&value, &["cwd"]) {
+            return PathBuf::from(cwd);
+        }
+    }
+    mapper.home.clone()
 }
 
 fn read_conversation_metadata(

@@ -682,3 +682,192 @@ async fn loads_paged_claude_history_with_normalized_events() {
             .all(|event| !second.events.contains(event))
     );
 }
+
+#[tokio::test]
+async fn a_cli_session_is_reachable_from_chats_or_from_its_project() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+    use remote_ai_agent::catalog::project_id_for_path;
+
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("cli-project");
+    std::fs::create_dir_all(&project).unwrap();
+    // A desktop root exists on every real installation.
+    std::fs::create_dir_all(
+        temp.path()
+            .join("Library/Application Support/Claude/claude-code-sessions"),
+    )
+    .unwrap();
+
+    let sessions = temp.path().join(".claude/projects/scan");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(
+        sessions.join("home-session.jsonl"),
+        format!(
+            r#"{{"type":"user","session_id":"home-session","cwd":"{}","message":{{"content":[{{"type":"text","text":"a chat"}}]}}}}"#,
+            temp.path().display()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        sessions.join("project-session.jsonl"),
+        format!(
+            r#"{{"type":"user","session_id":"project-session","cwd":"{}","message":{{"content":[{{"type":"text","text":"project work"}}]}}}}"#,
+            project.display()
+        ),
+    )
+    .unwrap();
+
+    let adapter = ClaudeAdapter::new("claude", temp.path());
+    let chats = adapter.list_daily_conversations().await.unwrap();
+    let canonical = project
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let project_conversations = adapter
+        .list_project_conversations(&project_id_for_path(ProviderId::Claude, &canonical))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        chats
+            .iter()
+            .map(|chat| chat.id.as_str())
+            .collect::<Vec<_>>(),
+        ["home-session"],
+        "Chats holds the sessions that are not bound to a project directory"
+    );
+    assert_eq!(
+        project_conversations
+            .iter()
+            .map(|conversation| conversation.id.as_str())
+            .collect::<Vec<_>>(),
+        ["project-session"],
+        "a directory-bound CLI session is reachable from its project"
+    );
+}
+
+#[tokio::test]
+async fn a_new_chat_runs_in_the_paired_home_not_the_agent_directory() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let stub = home.join("fake-claude.sh");
+    // Record the directory the CLI was launched in. Claude files a session
+    // under its process cwd, which is what decides whether it is a chat or a
+    // project session.
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\nprintf '%s\\n' \"$PWD\" > \"$HOME_PROBE\"\ncat >/dev/null\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let probe = temp.path().join("cwd.txt");
+    // SAFETY: the stub reads this once, before any other thread in the test
+    // process touches the environment.
+    unsafe { std::env::set_var("HOME_PROBE", &probe) };
+
+    let adapter = ClaudeAdapter::new(&stub, &home);
+    adapter.start(ConversationKind::Daily, None).await.unwrap();
+
+    let recorded = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if let Ok(recorded) = std::fs::read_to_string(&probe)
+                && !recorded.trim().is_empty()
+            {
+                break recorded;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the stub should record the directory it ran in");
+    assert_eq!(
+        std::fs::canonicalize(recorded.trim()).unwrap(),
+        std::fs::canonicalize(&home).unwrap(),
+        "a chat is not bound to a project, so it runs in the paired user's HOME"
+    );
+}
+
+#[tokio::test]
+async fn resuming_an_indexed_session_runs_in_the_directory_it_was_recorded_in() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let temp = tempfile::tempdir().unwrap();
+    let recorded_cwd = temp.path().join("recorded");
+    std::fs::create_dir_all(&recorded_cwd).unwrap();
+    // A desktop root exists on every real installation, and the agent process
+    // itself runs somewhere else entirely.
+    std::fs::create_dir_all(
+        temp.path()
+            .join("Library/Application Support/Claude/claude-code-sessions"),
+    )
+    .unwrap();
+
+    let sessions = temp.path().join(".claude/projects/slug");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(
+        sessions.join("indexed.jsonl"),
+        format!(
+            r#"{{"type":"user","session_id":"indexed","cwd":"{}","message":{{"content":[{{"type":"text","text":"earlier work"}}]}}}}"#,
+            recorded_cwd.display()
+        ),
+    )
+    .unwrap();
+
+    let stub = temp.path().join("fake-claude.sh");
+    // `--resume` resolves a session id only inside the directory the session
+    // was recorded in, so record both the arguments and the launch directory.
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\nprintf '%s\\n' \"$PWD\" \"$@\" > \"$RESUME_PROBE\"\ncat >/dev/null\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let probe = temp.path().join("resume.txt");
+    // SAFETY: the stub reads this once, before any other thread in the test
+    // process touches the environment.
+    unsafe { std::env::set_var("RESUME_PROBE", &probe) };
+
+    let adapter = ClaudeAdapter::new(&stub, temp.path());
+    adapter.list_conversations().await.unwrap();
+    adapter
+        .send("indexed", "a follow-up from the phone".into(), Vec::new())
+        .await
+        .unwrap();
+
+    let recorded = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if let Ok(recorded) = std::fs::read_to_string(&probe)
+                && recorded.lines().count() > 1
+            {
+                break recorded;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the stub should record how it was launched");
+
+    let lines = recorded.lines().collect::<Vec<_>>();
+    assert_eq!(
+        std::fs::canonicalize(lines[0]).unwrap(),
+        std::fs::canonicalize(&recorded_cwd).unwrap(),
+        "resuming outside the session's own directory makes the CLI exit with \
+         \"No conversation found with session ID\""
+    );
+    assert!(
+        lines.windows(2).any(|pair| pair == ["--resume", "indexed"]),
+        "the session must be resumed by its own id: {lines:?}"
+    );
+}

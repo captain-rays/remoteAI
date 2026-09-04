@@ -77,14 +77,53 @@ final class RealCodexConversationUITests: XCTestCase {
         XCTAssertTrue(composer.waitForExistence(timeout: 15))
         composer.tap()
         composer.typeText("Reply with exactly: PONG. Do not use any tools.")
+        // Assert on an assistant bubble, not on text: the prompt itself would
+        // match any token we asked the model to echo, so a text search passes
+        // on the user's own message even when nothing came back. Count them
+        // before the write so the assertion requires a *new* one.
+        let assistantBubbles = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "assistant-message-"))
+        let baseline = assistantBubbles.count
         app.buttons["send"].tap()
-
-        let reply = app.staticTexts.containing(
-            NSPredicate(format: "label CONTAINS[c] %@", "PONG")
+        // A refusal the provider itself reports — out of quota, for example —
+        // is a real outcome the phone must show. Match its wording rather than
+        // "any error row", so an unrelated failure elsewhere in the screen
+        // cannot stand in for the turn resolving.
+        let refusal = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS[c] %@ OR label CONTAINS[c] %@", "turn_failed", "usage limit")
         ).firstMatch
+
+        // A turn must always resolve visibly. Silence — the bug this covers —
+        // is neither of these.
+        let resolved = expectation(description: "the Codex turn resolves visibly")
+        let deadline = Date().addingTimeInterval(180)
+        DispatchQueue.global().async {
+            while Date() < deadline {
+                if assistantBubbles.count > baseline || refusal.exists {
+                    resolved.fulfill()
+                    return
+                }
+                Thread.sleep(forTimeInterval: 1)
+            }
+        }
+        wait(for: [resolved], timeout: 190)
+
+        let transcript = app.descendants(matching: .staticText)
+            .allElementsBoundByIndex
+            .map(\.label)
+            .joined(separator: " | ")
         XCTAssertTrue(
-            reply.waitForExistence(timeout: 180),
-            "no assistant reply arrived from Codex"
+            assistantBubbles.count > baseline || refusal.exists,
+            "the Codex turn produced neither an answer nor a reason: \(transcript)"
         )
+        XCTAssertFalse(
+            transcript.contains("history_failed"),
+            "opening a session started here must not report a history failure: \(transcript)"
+        )
+        if assistantBubbles.count > baseline {
+            print("CODEX_ASSISTANT_REPLY bubbles \(baseline) -> \(assistantBubbles.count)")
+        } else {
+            print("CODEX_TURN_FAILED \(transcript)")
+        }
     }
 }
