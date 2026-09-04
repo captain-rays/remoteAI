@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use remote_ai_agent::adapters::claude::{ClaudeAdapter, ClaudeMapper};
-use remote_ai_agent::protocol::{ConversationEvent, ConversationKind, ProviderId};
+use remote_ai_agent::protocol::{ConversationEvent, ConversationKind, ProviderId, WriteState};
 
 #[test]
 fn maps_stream_json_lifecycle_and_unknown_events() {
@@ -312,6 +312,39 @@ async fn sending_to_an_indexed_session_resumes_it_instead_of_failing() {
             .await
             .is_err(),
         "an unknown conversation is still an error"
+    );
+}
+
+#[tokio::test]
+async fn an_agent_started_session_is_busy_after_the_first_send() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project-active");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let stub = temp.path().join("fake-claude.sh");
+    std::fs::write(&stub, "#!/bin/sh\ncat > /dev/null\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    let adapter = ClaudeAdapter::new(&stub, temp.path());
+    let id = adapter
+        .start(ConversationKind::Project, Some(project))
+        .await
+        .unwrap();
+    adapter
+        .send(&id, "fixed-probe".into(), Vec::new())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        adapter.write_availability(&id).await.unwrap(),
+        WriteState::Busy,
+        "a session with an Agent-owned live writer must reject a second send"
     );
 }
 
