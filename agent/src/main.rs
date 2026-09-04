@@ -17,7 +17,8 @@ use remote_ai_agent::discovery::discover_provider;
 use remote_ai_agent::gateway::{GatewayState, router};
 use remote_ai_agent::pairing::{PairingPayload, PairingRegistry};
 use remote_ai_agent::protocol::{
-    ApprovalDecision, ConversationEvent, ConversationKind, ProviderId, ProviderStatus,
+    ApprovalDecision, ConversationEvent, ConversationKind, ProjectSummary, ProviderId,
+    ProviderStatus, WriteState,
 };
 use remote_ai_agent::store::Store;
 use tokio::sync::broadcast;
@@ -62,6 +63,38 @@ impl ProviderAdapter for ReportedAdapter {
     ) -> anyhow::Result<Vec<remote_ai_agent::protocol::ConversationSummary>> {
         match &self.inner {
             Some(inner) => inner.list_conversations().await,
+            None => self.unavailable(),
+        }
+    }
+
+    async fn list_daily_conversations(
+        &self,
+    ) -> anyhow::Result<Vec<remote_ai_agent::protocol::ConversationSummary>> {
+        match &self.inner {
+            Some(inner) => inner.list_daily_conversations().await,
+            None => self.unavailable(),
+        }
+    }
+
+    fn daily_catalog_diagnostic_code(&self) -> Option<&'static str> {
+        self.inner
+            .as_ref()
+            .and_then(|inner| inner.daily_catalog_diagnostic_code())
+    }
+
+    async fn list_projects(&self) -> anyhow::Result<Vec<ProjectSummary>> {
+        match &self.inner {
+            Some(inner) => inner.list_projects().await,
+            None => self.unavailable(),
+        }
+    }
+
+    async fn list_project_conversations(
+        &self,
+        project_id: &str,
+    ) -> anyhow::Result<Vec<remote_ai_agent::protocol::ConversationSummary>> {
+        match &self.inner {
+            Some(inner) => inner.list_project_conversations(project_id).await,
             None => self.unavailable(),
         }
     }
@@ -112,6 +145,13 @@ impl ProviderAdapter for ReportedAdapter {
     async fn interrupt(&self, id: &str) -> anyhow::Result<()> {
         match &self.inner {
             Some(inner) => inner.interrupt(id).await,
+            None => self.unavailable(),
+        }
+    }
+
+    async fn write_availability(&self, id: &str) -> anyhow::Result<WriteState> {
+        match &self.inner {
+            Some(inner) => inner.write_availability(id).await,
             None => self.unavailable(),
         }
     }
@@ -231,6 +271,205 @@ fn write_pairing_file(path: &Path, payload: &PairingPayload) -> anyhow::Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    use remote_ai_agent::adapters::ConversationPage;
+    use remote_ai_agent::protocol::{ConversationSummary, ProjectSummary, WriteState};
+
+    struct ReportingProbe {
+        status: ProviderStatus,
+        daily: Vec<ConversationSummary>,
+        projects: Vec<ProjectSummary>,
+        project_conversations: Vec<ConversationSummary>,
+        write_state: WriteState,
+        calls: Arc<Mutex<Vec<String>>>,
+        events: broadcast::Sender<ConversationEvent>,
+    }
+
+    impl ReportingProbe {
+        fn record(&self, call: impl Into<String>) {
+            self.calls.lock().unwrap().push(call.into());
+        }
+    }
+
+    #[async_trait]
+    impl ProviderAdapter for ReportingProbe {
+        async fn status(&self) -> ProviderStatus {
+            self.status.clone()
+        }
+
+        async fn list_conversations(&self) -> anyhow::Result<Vec<ConversationSummary>> {
+            self.record("list_conversations");
+            Ok(self.project_conversations.clone())
+        }
+
+        async fn list_daily_conversations(&self) -> anyhow::Result<Vec<ConversationSummary>> {
+            self.record("list_daily_conversations");
+            Ok(self.daily.clone())
+        }
+
+        fn daily_catalog_diagnostic_code(&self) -> Option<&'static str> {
+            Some("probe_daily_catalog")
+        }
+
+        async fn list_projects(&self) -> anyhow::Result<Vec<ProjectSummary>> {
+            self.record("list_projects");
+            Ok(self.projects.clone())
+        }
+
+        async fn list_project_conversations(
+            &self,
+            project_id: &str,
+        ) -> anyhow::Result<Vec<ConversationSummary>> {
+            self.record(format!("list_project_conversations:{project_id}"));
+            Ok(self.project_conversations.clone())
+        }
+
+        async fn load_conversation(
+            &self,
+            _id: &str,
+            _cursor: Option<String>,
+        ) -> anyhow::Result<ConversationPage> {
+            anyhow::bail!("not part of this probe")
+        }
+
+        async fn start(
+            &self,
+            _kind: ConversationKind,
+            _cwd: Option<PathBuf>,
+        ) -> anyhow::Result<String> {
+            anyhow::bail!("not part of this probe")
+        }
+
+        async fn resume(&self, _id: &str) -> anyhow::Result<()> {
+            anyhow::bail!("not part of this probe")
+        }
+
+        async fn send(
+            &self,
+            _id: &str,
+            _text: String,
+            _attachments: Vec<PathBuf>,
+        ) -> anyhow::Result<()> {
+            anyhow::bail!("not part of this probe")
+        }
+
+        async fn decide_approval(
+            &self,
+            _request_id: &str,
+            _decision: ApprovalDecision,
+        ) -> anyhow::Result<()> {
+            anyhow::bail!("not part of this probe")
+        }
+
+        async fn interrupt(&self, _id: &str) -> anyhow::Result<()> {
+            anyhow::bail!("not part of this probe")
+        }
+
+        async fn write_availability(&self, id: &str) -> anyhow::Result<WriteState> {
+            self.record(format!("write_availability:{id}"));
+            Ok(self.write_state)
+        }
+
+        fn subscribe(&self) -> broadcast::Receiver<ConversationEvent> {
+            self.events.subscribe()
+        }
+    }
+
+    fn reporting_probe(
+        provider: ProviderId,
+        calls: Arc<Mutex<Vec<String>>>,
+    ) -> (
+        ProviderStatus,
+        ReportingProbe,
+        ProjectSummary,
+        ConversationSummary,
+    ) {
+        let (events, _) = broadcast::channel(4);
+        let project = ProjectSummary {
+            id: format!("{provider:?}-project"),
+            provider,
+            canonical_path: "/workspace/project".into(),
+            display_path: "project".into(),
+            title: "Project".into(),
+            updated_at: Utc::now(),
+            available: true,
+        };
+        let conversation = ConversationSummary {
+            id: format!("{provider:?}-conversation"),
+            provider,
+            kind: ConversationKind::Project,
+            title: "Project conversation".into(),
+            project_id: Some(project.id.clone()),
+            project_path: Some(project.canonical_path.clone()),
+            updated_at: Utc::now(),
+            status: "idle".into(),
+            write_state: Some(WriteState::Busy),
+            write_block_code: Some("probe_busy".into()),
+        };
+        let status = ProviderStatus {
+            provider,
+            available: true,
+            executable_path: Some("probe".into()),
+            version: Some("1.0.0".into()),
+            reason: None,
+        };
+        let probe = ReportingProbe {
+            status: status.clone(),
+            daily: vec![ConversationSummary {
+                id: format!("{provider:?}-daily"),
+                kind: ConversationKind::Daily,
+                project_id: None,
+                project_path: None,
+                ..conversation.clone()
+            }],
+            projects: vec![project.clone()],
+            project_conversations: vec![conversation.clone()],
+            write_state: WriteState::Busy,
+            calls,
+            events,
+        };
+        (status, probe, project, conversation)
+    }
+
+    #[tokio::test]
+    async fn reported_adapter_forwards_catalog_and_capability_views_for_both_providers() {
+        for provider in [ProviderId::Codex, ProviderId::Claude] {
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let (status, probe, project, conversation) = reporting_probe(provider, calls.clone());
+            let reported = ReportedAdapter::new(status, Some(Arc::new(probe)));
+
+            assert_eq!(reported.list_daily_conversations().await.unwrap().len(), 1);
+            assert_eq!(
+                reported.daily_catalog_diagnostic_code(),
+                Some("probe_daily_catalog")
+            );
+            assert_eq!(
+                reported.list_projects().await.unwrap(),
+                vec![project.clone()]
+            );
+            assert_eq!(
+                reported
+                    .list_project_conversations(&project.id)
+                    .await
+                    .unwrap(),
+                vec![conversation.clone()]
+            );
+            assert_eq!(
+                reported.write_availability(&conversation.id).await.unwrap(),
+                WriteState::Busy
+            );
+            assert_eq!(
+                *calls.lock().unwrap(),
+                vec![
+                    "list_daily_conversations".to_owned(),
+                    "list_projects".to_owned(),
+                    format!("list_project_conversations:{}", project.id),
+                    format!("write_availability:{}", conversation.id),
+                ]
+            );
+        }
+    }
 
     #[tokio::test]
     async fn unavailable_provider_is_reported_without_startup_failure() {
