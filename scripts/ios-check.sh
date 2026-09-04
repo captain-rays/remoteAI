@@ -62,6 +62,7 @@ if [ "$have_xcodegen" -eq 1 ] && [ "$have_xcodebuild" -eq 1 ]; then
         -destination "platform=iOS Simulator,name=$simulator" \
         -derivedDataPath ios/.derivedData \
         -skip-testing:RemoteAIUITests/RealAgentConversationUITests \
+        -skip-testing:RemoteAIUITests/RealCodexConversationUITests \
         -skip-testing:RemoteAIUITests/RealAgentTranscriptUITests \
         -skip-testing:RemoteAIUITests/RealAgentSessionSyncUITests \
         test
