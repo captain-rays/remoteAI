@@ -43,7 +43,8 @@ public struct RootView: View {
                 FileBrowserView(
                     model: dependencies.files,
                     transfers: dependencies.transfers,
-                    uploadFixture: dependencies.uploadFixture
+                    uploadFixture: dependencies.uploadFixture,
+                    uiTestFileProbePath: dependencies.uiTestFileProbePath
                 )
                     .tabItem { Label("Files", systemImage: "externaldrive") }
                     .tag(Tab.files)

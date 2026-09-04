@@ -257,6 +257,22 @@ public enum AppDependenciesSuite {
                 }
                 try expectEqual(await dependencies.uploadFixture?.name, "README.md")
             },
+
+            TestCase("file boundary probe is available only by explicit UI test argument") {
+                let dependencies = await MainActor.run {
+                    AppDependencies.live(
+                        arguments: [
+                            "RemoteAI", "-UseMockAgent", "-UITestFileProbePath", "/outside/root"
+                        ]
+                    )
+                }
+                try expectEqual(await dependencies.uiTestFileProbePath, "/outside/root")
+
+                let production = await MainActor.run {
+                    AppDependencies.live(arguments: ["RemoteAI"])
+                }
+                try expectNil(await production.uiTestFileProbePath)
+            },
         ]
     )
 }

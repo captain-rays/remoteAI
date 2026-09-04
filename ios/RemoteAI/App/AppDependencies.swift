@@ -24,6 +24,9 @@ public final class AppDependencies {
     public let settings: SettingsViewModel
     public let pairing: PairingViewModel
     public let uploadFixture: UploadFixture?
+    /// Opt-in UI-test hook for exercising the Agent's authoritative path boundary.
+    /// Production launches never set this value.
+    public let uiTestFileProbePath: String?
     public let publicOrigin: String
     public private(set) var connectionState: ConnectionState = .disconnected
     /// Explicit pairing bootstrap is a simulator/development flow. Its
@@ -41,6 +44,7 @@ public final class AppDependencies {
         store: SecretStore,
         pairingService: PairingService,
         uploadFixture: UploadFixture? = nil,
+        uiTestFileProbePath: String? = nil,
         publicOrigin: String = AppDependencies.defaultPublicOrigin,
         usesEphemeralPairingStore: Bool = false
     ) {
@@ -52,6 +56,7 @@ public final class AppDependencies {
             store: store, registry: UsedSecretRegistry(), service: pairingService
         )
         self.uploadFixture = uploadFixture
+        self.uiTestFileProbePath = uiTestFileProbePath
         self.publicOrigin = publicOrigin
         self.usesEphemeralPairingStore = usesEphemeralPairingStore
     }
@@ -70,6 +75,9 @@ public final class AppDependencies {
         let uploadFixture = arguments.contains("-UITestMockDocumentPicker")
             ? UploadFixture(name: "README.md", data: Data("# UI test fixture\n".utf8))
             : nil
+        let uiTestFileProbePath = argumentValue(
+            named: "-UITestFileProbePath", arguments: arguments
+        )
 
         // Lane B ships against the mock agent by design. Integration replaces
         // this with a WebSocket-backed AgentClient driven by
@@ -87,6 +95,7 @@ public final class AppDependencies {
             store: store,
             pairingService: pairingService,
             uploadFixture: uploadFixture,
+            uiTestFileProbePath: uiTestFileProbePath,
             publicOrigin: publicOrigin,
             usesEphemeralPairingStore: explicitPairing
         )
@@ -178,6 +187,17 @@ public final class AppDependencies {
         let path = arguments[arguments.index(after: index)]
         guard !path.isEmpty, !path.hasPrefix("-") else { return nil }
         return URL(fileURLWithPath: path)
+    }
+
+    nonisolated private static func argumentValue(
+        named name: String, arguments: [String]
+    ) -> String? {
+        guard let index = arguments.firstIndex(of: name),
+            arguments.indices.contains(arguments.index(after: index))
+        else { return nil }
+        let value = arguments[arguments.index(after: index)]
+        guard !value.isEmpty, !value.hasPrefix("-") else { return nil }
+        return value
     }
 
     /// Resolves a tunnel/agent origin without accepting credentials or a

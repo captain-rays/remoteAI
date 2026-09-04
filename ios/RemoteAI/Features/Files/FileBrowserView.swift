@@ -14,15 +14,18 @@ public struct FileBrowserView: View {
     @State private var isConfirmingReveal = false
     @State private var previewEntry: FileEntry?
     private let uploadFixture: UploadFixture?
+    private let uiTestFileProbePath: String?
 
     public init(
         model: FileBrowserViewModel,
         transfers: TransferCoordinator,
-        uploadFixture: UploadFixture? = nil
+        uploadFixture: UploadFixture? = nil,
+        uiTestFileProbePath: String? = nil
     ) {
         self.model = model
         self.transfers = transfers
         self.uploadFixture = uploadFixture
+        self.uiTestFileProbePath = uiTestFileProbePath
     }
 
     public var body: some View {
@@ -143,6 +146,13 @@ public struct FileBrowserView: View {
             }
             .disabled(model.currentPath == nil || !transfers.isOnline)
             .accessibilityIdentifier("upload-button")
+
+            if let uiTestFileProbePath {
+                Button("Probe file boundary") {
+                    Task { await model.open(uiTestFileProbePath) }
+                }
+                .accessibilityIdentifier("uitest-file-probe")
+            }
         }
     }
 
