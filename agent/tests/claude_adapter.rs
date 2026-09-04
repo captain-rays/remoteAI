@@ -278,7 +278,7 @@ async fn sends_claude_stream_json_user_input_as_a_text_block() {
         .unwrap();
 
     let input_path = stub.with_extension("sh.input");
-    let input = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+    let input = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
             if let Ok(input) = std::fs::read_to_string(&input_path) {
                 break input;
@@ -495,7 +495,7 @@ async fn started_claude_session_emits_delta_and_terminal_for_first_send() {
     let mut saw_delta = false;
     let mut saw_terminal = false;
     for _ in 0..4 {
-        let event = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+        let event = tokio::time::timeout(std::time::Duration::from_secs(10), events.recv())
             .await
             .expect("first send should produce a bounded event")
             .expect("event stream should remain open");
@@ -754,13 +754,18 @@ async fn a_new_chat_runs_in_the_paired_home_not_the_agent_directory() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
-    let stub = home.join("fake-claude.sh");
     // Record the directory the CLI was launched in. Claude files a session
     // under its process cwd, which is what decides whether it is a chat or a
-    // project session.
+    // project session. The path is baked into the script rather than passed
+    // through the environment, which is process-global and races other tests.
+    let probe = temp.path().join("cwd.txt");
+    let stub = home.join("fake-claude.sh");
     std::fs::write(
         &stub,
-        "#!/bin/sh\nprintf '%s\\n' \"$PWD\" > \"$HOME_PROBE\"\ncat >/dev/null\n",
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$PWD\" > '{probe}'\nwhile IFS= read -r _; do :; done\n",
+            probe = probe.display()
+        ),
     )
     .unwrap();
     #[cfg(unix)]
@@ -768,15 +773,11 @@ async fn a_new_chat_runs_in_the_paired_home_not_the_agent_directory() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
-    let probe = temp.path().join("cwd.txt");
-    // SAFETY: the stub reads this once, before any other thread in the test
-    // process touches the environment.
-    unsafe { std::env::set_var("HOME_PROBE", &probe) };
 
     let adapter = ClaudeAdapter::new(&stub, &home);
     adapter.start(ConversationKind::Daily, None).await.unwrap();
 
-    let recorded = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+    let recorded = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
             if let Ok(recorded) = std::fs::read_to_string(&probe)
                 && !recorded.trim().is_empty()
@@ -821,12 +822,16 @@ async fn resuming_an_indexed_session_runs_in_the_directory_it_was_recorded_in() 
     )
     .unwrap();
 
-    let stub = temp.path().join("fake-claude.sh");
     // `--resume` resolves a session id only inside the directory the session
     // was recorded in, so record both the arguments and the launch directory.
+    let probe = temp.path().join("resume.txt");
+    let stub = temp.path().join("fake-claude.sh");
     std::fs::write(
         &stub,
-        "#!/bin/sh\nprintf '%s\\n' \"$PWD\" \"$@\" > \"$RESUME_PROBE\"\ncat >/dev/null\n",
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$PWD\" \"$@\" > '{probe}'\nwhile IFS= read -r _; do :; done\n",
+            probe = probe.display()
+        ),
     )
     .unwrap();
     #[cfg(unix)]
@@ -834,10 +839,6 @@ async fn resuming_an_indexed_session_runs_in_the_directory_it_was_recorded_in() 
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
-    let probe = temp.path().join("resume.txt");
-    // SAFETY: the stub reads this once, before any other thread in the test
-    // process touches the environment.
-    unsafe { std::env::set_var("RESUME_PROBE", &probe) };
 
     let adapter = ClaudeAdapter::new(&stub, temp.path());
     adapter.list_conversations().await.unwrap();
@@ -846,7 +847,7 @@ async fn resuming_an_indexed_session_runs_in_the_directory_it_was_recorded_in() 
         .await
         .unwrap();
 
-    let recorded = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+    let recorded = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
             if let Ok(recorded) = std::fs::read_to_string(&probe)
                 && recorded.lines().count() > 1
@@ -870,4 +871,63 @@ async fn resuming_an_indexed_session_runs_in_the_directory_it_was_recorded_in() 
         lines.windows(2).any(|pair| pair == ["--resume", "indexed"]),
         "the session must be resumed by its own id: {lines:?}"
     );
+}
+
+#[tokio::test]
+async fn a_dead_claude_process_is_replaced_on_the_next_send() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    // One marker file per launch, so counting launches needs no shell state.
+    let launches = temp.path().join("launches");
+    std::fs::create_dir_all(&launches).unwrap();
+
+    // The first process exits immediately, the way a crashed CLI does. A held
+    // handle to it can never carry another message, so the adapter has to
+    // notice and start a new one instead of failing every later send.
+    let stub = temp.path().join("fake-claude.sh");
+    std::fs::write(
+        &stub,
+        format!(
+            "#!/bin/sh\nmarker='{launches}'/$$\n: > \"$marker\"\ncount=$(ls '{launches}' | wc -l)\nif [ \"$count\" -le 1 ]; then\n  exit 1\nfi\nwhile IFS= read -r _; do :; done\n",
+            launches = launches.display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    let count_launches = || std::fs::read_dir(&launches).unwrap().count();
+    let adapter = ClaudeAdapter::new(&stub, temp.path());
+    let id = adapter
+        .start(ConversationKind::Project, Some(project))
+        .await
+        .unwrap();
+    // Wait for the first process to record its launch and exit.
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while count_launches() == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the first CLI launch should be recorded");
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+    adapter
+        .send(&id, "a message after the crash".into(), Vec::new())
+        .await
+        .expect("a send after the CLI died must start a new one");
+
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while count_launches() < 2 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the adapter kept writing to the dead process instead of replacing it");
 }

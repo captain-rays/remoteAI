@@ -6,7 +6,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
@@ -446,7 +446,13 @@ impl CodexAdapter {
     async fn client(&self) -> anyhow::Result<Arc<RpcClient>> {
         let mut slot = self.rpc.lock().await;
         if let Some(client) = slot.as_ref() {
-            return Ok(client.clone());
+            if client.is_alive() {
+                return Ok(client.clone());
+            }
+            // The CLI went away. Drop it and start a new one, so a crash costs
+            // one failed turn rather than every turn until the agent restarts.
+            *slot = None;
+            self.active_turns.write().await.clear();
         }
         let client = Arc::new(
             RpcClient::connect(
@@ -839,6 +845,10 @@ struct RpcClient {
     /// answers "thread not found" for anything else, and the set has to live
     /// with the process because a restart loses every loaded thread.
     loaded_threads: Mutex<HashSet<String>>,
+    /// Cleared when the process goes away or a write to it fails. A cached
+    /// handle to a dead CLI can never carry another turn, so every later send
+    /// would fail with a broken pipe until the agent itself was restarted.
+    alive: Arc<AtomicBool>,
 }
 
 impl RpcClient {
@@ -871,6 +881,8 @@ impl RpcClient {
         let pending: Arc<Mutex<HashMap<String, oneshot::Sender<anyhow::Result<Value>>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let reader_pending = pending.clone();
+        let alive = Arc::new(AtomicBool::new(true));
+        let reader_alive = alive.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
@@ -895,6 +907,12 @@ impl RpcClient {
                 track_turns(&value, &active_turns).await;
                 let _ = events.send(mapper.map_notification_value(&value));
             }
+            // stdout closed: the process is gone. Fail the calls waiting on it
+            // instead of letting each one burn its own timeout.
+            reader_alive.store(false, Ordering::Relaxed);
+            for (_, sender) in reader_pending.lock().await.drain() {
+                let _ = sender.send(Err(anyhow::anyhow!("Codex app-server exited")));
+            }
         });
         Ok(Self {
             stdin: Mutex::new(stdin),
@@ -902,7 +920,12 @@ impl RpcClient {
             pending,
             next_id: AtomicU64::new(1),
             loaded_threads: Mutex::new(HashSet::new()),
+            alive,
         })
+    }
+
+    fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::Relaxed)
     }
 
     async fn mark_loaded(&self, id: &str) {
@@ -951,13 +974,19 @@ impl RpcClient {
     }
 
     async fn write(&self, value: &Value) -> anyhow::Result<()> {
+        let payload = serde_json::to_string(value)?;
         let mut stdin = self.stdin.lock().await;
-        stdin
-            .write_all(serde_json::to_string(value)?.as_bytes())
-            .await?;
-        stdin.write_all(b"\n").await?;
-        stdin.flush().await?;
-        Ok(())
+        let result = async {
+            stdin.write_all(payload.as_bytes()).await?;
+            stdin.write_all(b"\n").await?;
+            stdin.flush().await?;
+            Ok::<(), std::io::Error>(())
+        }
+        .await;
+        if result.is_err() {
+            self.alive.store(false, Ordering::Relaxed);
+        }
+        Ok(result?)
     }
 }
 

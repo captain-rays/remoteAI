@@ -684,3 +684,76 @@ if request_id is not None:
         .await
         .expect_err("a genuine read failure must not be hidden as empty history");
 }
+
+#[tokio::test]
+async fn a_dead_app_server_is_replaced_on_the_next_write() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let root = tempfile::tempdir().unwrap();
+    let stub = root.path().join("stub-app-server.py");
+    let runs = root.path().join("runs.txt");
+    // The first process answers `initialize` and then exits, the way a crashed
+    // or killed CLI does. A cached handle to it can never carry another turn,
+    // so the adapter has to notice and start a new one.
+    std::fs::write(
+        &stub,
+        format!(
+            r#"#!/usr/bin/env python3
+import json, os, sys
+
+runs_path = {path:?}
+with open(runs_path, "a") as handle:
+    handle.write("run\n")
+with open(runs_path) as handle:
+    run = len(handle.readlines())
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    request = json.loads(line)
+    method = request.get("method")
+    request_id = request.get("id")
+    if method == "initialize":
+        sys.stdout.write(
+            json.dumps({{"jsonrpc": "2.0", "id": request_id, "result": {{"userAgent": "stub"}}}}) + "\n"
+        )
+        sys.stdout.flush()
+        if run == 1:
+            os._exit(1)
+        continue
+    if method == "initialized":
+        continue
+    if method == "thread/resume":
+        sys.stdout.write(
+            json.dumps({{"jsonrpc": "2.0", "id": request_id, "result": {{"thread": {{"id": request["params"]["threadId"]}}}}}}) + "\n"
+        )
+        sys.stdout.flush()
+        continue
+    if method == "turn/start":
+        sys.stdout.write(
+            json.dumps({{"jsonrpc": "2.0", "id": request_id, "result": {{"turn": {{"id": "turn-1"}}}}}}) + "\n"
+        )
+        sys.stdout.flush()
+        continue
+"#,
+            path = runs.to_str().unwrap(),
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    let adapter = CodexAdapter::new(&stub, root.path());
+    // The first write lands on the process that exits. It is allowed to fail.
+    let _ = adapter.send("thread-1", "first".into(), Vec::new()).await;
+    adapter.write_availability("thread-1").await.unwrap();
+
+    adapter
+        .send("thread-1", "second".into(), Vec::new())
+        .await
+        .expect("a write after the CLI died must start a new app-server");
+    assert!(
+        std::fs::read_to_string(&runs).unwrap().lines().count() >= 2,
+        "the adapter kept using the dead process instead of replacing it"
+    );
+}

@@ -150,6 +150,9 @@ pub struct ClaudeAdapter {
     /// resolves a session id inside its own project directory, so a resume
     /// launched anywhere else exits with "No conversation found".
     session_cwds: RwLock<HashMap<String, PathBuf>>,
+    /// Directory each session this agent started runs in. Kept separately from
+    /// the index, which is replaced wholesale on every refresh.
+    started_cwds: RwLock<HashMap<String, PathBuf>>,
     desktop_sessions: RwLock<HashMap<String, DesktopSessionTarget>>,
     /// Placeholder id handed to the phone -> the id Claude itself assigned.
     adopted_ids: Arc<RwLock<HashMap<String, String>>>,
@@ -258,6 +261,7 @@ impl ClaudeAdapter {
             sessions: RwLock::new(HashMap::new()),
             session_paths: RwLock::new(HashMap::new()),
             session_cwds: RwLock::new(HashMap::new()),
+            started_cwds: RwLock::new(HashMap::new()),
             desktop_sessions: RwLock::new(HashMap::new()),
             adopted_ids: Arc::new(RwLock::new(HashMap::new())),
             history_page_size: DEFAULT_HISTORY_PAGE_SIZE,
@@ -677,6 +681,9 @@ impl ProviderAdapter for ClaudeAdapter {
         }
         let id = format!("pending-{}", uuid::Uuid::new_v4());
         let session = self.spawn_session(None, cwd.as_deref(), &id).await?;
+        if let Some(cwd) = cwd {
+            self.started_cwds.write().await.insert(id.clone(), cwd);
+        }
         self.sessions.write().await.insert(id.clone(), session);
         Ok(id)
     }
@@ -697,54 +704,48 @@ impl ProviderAdapter for ClaudeAdapter {
             self.sessions.write().await.insert(id.to_owned(), session);
             return Ok(());
         }
-        // Only a session this agent knows may be resumed: an id from the phone
-        // must never turn into a CLI spawned for an arbitrary string.
-        if !self.session_paths.read().await.contains_key(id) {
+        // A session this agent started is addressed by its placeholder until a
+        // refresh; the CLI only knows the id it assigned itself.
+        let cli_id = self
+            .resolved_session_id(id)
+            .await
+            .unwrap_or_else(|| id.to_owned());
+        let known = |paths: &HashMap<String, PathBuf>| {
+            paths.contains_key(id) || paths.contains_key(&cli_id)
+        };
+        if !known(&*self.session_paths.read().await) {
             // The index may predate this session, so read it once more before
             // refusing.
             let _ = self.refresh_index().await;
         }
+        // Only a session this agent knows may be resumed: an id from the phone
+        // must never turn into a CLI spawned for an arbitrary string.
         anyhow::ensure!(
-            self.session_paths.read().await.contains_key(id)
-                || self.sessions.read().await.contains_key(id),
+            known(&*self.session_paths.read().await) || self.sessions.read().await.contains_key(id),
             "session is not indexed"
         );
         // `--resume` resolves a session id only inside the directory the
         // session was recorded in: run it anywhere else and the CLI exits with
         // "No conversation found with session ID". Resuming there also keeps
         // the new turns in the same transcript as the rest of the session.
-        let cwd = self
-            .session_cwds
-            .read()
-            .await
-            .get(id)
+        let cwds = self.session_cwds.read().await;
+        let cwd = cwds
+            .get(&cli_id)
+            .or_else(|| cwds.get(id))
             .cloned()
-            .filter(|path| path.is_dir())
             .or_else(|| Some(self.mapper.home.clone()))
             .filter(|path| path.is_dir());
-        let session = self.spawn_session(Some(id), cwd.as_deref(), id).await?;
+        drop(cwds);
+        // The phone keeps addressing the session by the id it was given, so
+        // the events stay labelled with that id.
+        let session = self
+            .spawn_session(Some(&cli_id), cwd.as_deref(), id)
+            .await?;
         self.sessions.write().await.insert(id.to_owned(), session);
         Ok(())
     }
 
     async fn send(&self, id: &str, text: String, attachments: Vec<PathBuf>) -> anyhow::Result<()> {
-        let existing = self.sessions.read().await.get(id).cloned();
-        let session = match existing {
-            Some(session) => session,
-            None => {
-                // The phone is writing to a conversation that already existed
-                // on the Mac. Resuming it here is what the user asked for by
-                // pressing send; the gateway has already checked that no other
-                // writer holds it.
-                self.resume(id).await?;
-                self.sessions
-                    .read()
-                    .await
-                    .get(id)
-                    .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("session is not active"))?
-            }
-        };
         let mut content = text;
         if !attachments.is_empty() {
             content.push_str("\nExplicit attachments:\n");
@@ -756,17 +757,57 @@ impl ProviderAdapter for ClaudeAdapter {
                     .join("\n"),
             );
         }
-        Self::write(
-            &session,
-            json!({
-                "type": "user",
-                "message": {
-                    "role": "user",
-                    "content": [{"type": "text", "text": content}]
+        let payload = json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": content}]
+            }
+        });
+        // A writer this agent already holds is tried first. If the CLI behind
+        // it has gone away the write fails with a broken pipe, and keeping the
+        // dead handle would fail every later message too — so it is dropped
+        // and the session is resumed once.
+        // Bind the handle in its own statement: a guard created inside an
+        // `if let` scrutinee is held for the whole block, and the write below
+        // needs the same lock.
+        let held = self.sessions.read().await.get(id).cloned();
+        if let Some(session) = held {
+            match Self::write(&session, payload.clone()).await {
+                Ok(()) => return Ok(()),
+                Err(_) => {
+                    self.sessions.write().await.remove(id);
                 }
-            }),
-        )
-        .await
+            }
+        }
+        // The phone is writing to a conversation that already existed on the
+        // Mac, or to one whose CLI died. Resuming it here is what the user
+        // asked for by pressing send; the gateway has already checked that no
+        // other writer holds it.
+        if let Err(error) = self.resume(id).await {
+            // There is nothing to resume: a session this agent started can
+            // crash before it writes its first record. Opening a fresh writer
+            // in the same directory loses no history and keeps the id the
+            // phone is using, where refusing would fail every later message.
+            let cwd = self
+                .started_cwds
+                .read()
+                .await
+                .get(id)
+                .cloned()
+                .filter(|path| path.is_dir());
+            let Some(cwd) = cwd else { return Err(error) };
+            let session = self.spawn_session(None, Some(&cwd), id).await?;
+            self.sessions.write().await.insert(id.to_owned(), session);
+        }
+        let session = self
+            .sessions
+            .read()
+            .await
+            .get(id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("session is not active"))?;
+        Self::write(&session, payload).await
     }
 
     async fn decide_approval(
