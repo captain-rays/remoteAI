@@ -53,3 +53,38 @@ fn hidden_and_sensitive_entries_require_explicit_opt_in_and_permissions_are_chec
     );
     assert!(service.metadata(Path::new("unreadable")).unwrap().is_some());
 }
+
+#[cfg(unix)]
+#[test]
+fn accepts_root_absolute_descendants_but_rejects_sibling_symlink_escape() {
+    let parent = tempdir().unwrap();
+    let root = parent.path().join("root");
+    let sibling = parent.path().join("sibling");
+    fs::create_dir(&root).unwrap();
+    fs::create_dir(&sibling).unwrap();
+    fs::write(root.join("inside.txt"), "inside").unwrap();
+    fs::write(sibling.join("outside.txt"), "outside").unwrap();
+    std::os::unix::fs::symlink(sibling.join("outside.txt"), root.join("escape.txt")).unwrap();
+    let service = FileService::new(&root);
+    let canonical_root = root.canonicalize().unwrap();
+    assert!(service
+        .metadata(&canonical_root.join("inside.txt"))
+        .unwrap()
+        .is_some());
+    assert!(matches!(
+        service.metadata(&canonical_root.join("escape.txt")),
+        Err(FilesError::PathOutsideRoot)
+    ));
+    assert!(service
+        .metadata(&canonical_root.join("missing.txt"))
+        .unwrap()
+        .is_none());
+    assert!(matches!(
+        service.metadata(&parent.path().join("outside-missing.txt")),
+        Err(FilesError::PathOutsideRoot)
+    ));
+    assert!(matches!(
+        service.list(&parent.path().join("sibling"), false),
+        Err(FilesError::PathOutsideRoot)
+    ));
+}

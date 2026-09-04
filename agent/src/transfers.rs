@@ -20,7 +20,10 @@ pub enum ConflictPolicy {
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum TransferError {
     #[error("destination already exists; explicit conflict policy is required")]
-    Conflict { destination: String },
+    Conflict {
+        destination: String,
+        existing_size: u64,
+    },
     #[error("transfer is unknown")]
     UnknownTransfer,
     #[error("chunk offset does not match resumable transfer")]
@@ -73,10 +76,12 @@ impl TransferManager {
     ) -> Result<UploadTransfer, TransferError> {
         let destination = self.resolve_destination(destination)?;
         let destination = if destination.exists() {
+            let existing_size = fs::metadata(&destination).map_err(io_error)?.len();
             match policy {
                 None => {
                     return Err(TransferError::Conflict {
                         destination: destination.display().to_string(),
+                        existing_size,
                     });
                 }
                 Some(ConflictPolicy::KeepBoth) => unique_destination(&destination),
@@ -185,10 +190,15 @@ impl TransferManager {
     }
 
     fn resolve_destination(&self, relative: &Path) -> Result<PathBuf, TransferError> {
-        if relative.is_absolute() {
+        let candidate = if relative.is_absolute() {
+            relative.to_owned()
+        } else {
+            self.root.join(relative)
+        };
+        let path = normalize_path(&candidate);
+        if !path.starts_with(&self.root) {
             return Err(TransferError::PathOutsideRoot);
         }
-        let path = self.root.join(relative);
         let parent = path.parent().ok_or(TransferError::PathOutsideRoot)?;
         let canonical_parent = parent.canonicalize().map_err(io_error)?;
         if !canonical_parent.starts_with(&self.root) {
@@ -198,8 +208,13 @@ impl TransferManager {
     }
 
     fn resolve_existing(&self, relative: &Path) -> Result<PathBuf, TransferError> {
-        let path = self.root.join(relative);
-        if !normalize_path(&path).starts_with(&self.root) {
+        let candidate = if relative.is_absolute() {
+            relative.to_owned()
+        } else {
+            self.root.join(relative)
+        };
+        let path = normalize_path(&candidate);
+        if !path.starts_with(&self.root) {
             return Err(TransferError::PathOutsideRoot);
         }
         let canonical = path.canonicalize().map_err(io_error)?;

@@ -245,6 +245,30 @@ async fn authenticated_files_route_lists_only_explicitly_visible_entries() {
 }
 
 #[tokio::test]
+async fn files_preview_accepts_camel_case_max_bytes_and_legacy_alias() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("preview.txt"), "hello").unwrap();
+    let state = paired_state();
+    state.set_file_root(root.path()).await;
+    let app = router(state);
+    for query in ["maxBytes=2", "max_bytes=3"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/v1/files/preview?path=preview.txt&{query}"))
+                    .header("x-remoteai-device", "phone-1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let expected = if query == "maxBytes=2" { "he" } else { "hel" };
+        assert_eq!(to_bytes(response.into_body(), usize::MAX).await.unwrap(), expected);
+    }
+}
+
+#[tokio::test]
 async fn authenticated_audit_and_diagnostics_routes_are_redacted() {
     let state = paired_state();
     state.audit.record(AuditRecord {
@@ -310,14 +334,17 @@ async fn transfer_upload_requires_authentication_and_explicit_conflict_policy() 
             .status(),
         StatusCode::UNAUTHORIZED
     );
-    assert_eq!(
-        app.clone()
-            .oneshot(create(true, r#"{"path":"same.txt"}"#))
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::CONFLICT
-    );
+    let conflict = app
+        .clone()
+        .oneshot(create(true, r#"{"path":"same.txt"}"#))
+        .await
+        .unwrap();
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    let body = to_bytes(conflict.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["error"], "conflict");
+    assert!(value["existingPath"].as_str().unwrap().ends_with("same.txt"));
+    assert_eq!(value["existingSize"], 3);
 }
 
 #[tokio::test]

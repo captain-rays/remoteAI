@@ -371,7 +371,7 @@ async fn files_metadata(
 #[derive(Debug, Deserialize)]
 struct PreviewQuery {
     path: String,
-    #[serde(default = "default_preview_bytes")]
+    #[serde(rename = "maxBytes", alias = "max_bytes", default = "default_preview_bytes")]
     max_bytes: usize,
 }
 
@@ -531,7 +531,18 @@ async fn transfer_download(
 
 fn transfer_error_response(error: TransferError) -> Response {
     match error {
-        TransferError::Conflict { .. } => StatusCode::CONFLICT.into_response(),
+        TransferError::Conflict {
+            destination,
+            existing_size,
+        } => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "conflict",
+                "existingPath": destination,
+                "existingSize": existing_size,
+            })),
+        )
+            .into_response(),
         TransferError::PathOutsideRoot => StatusCode::FORBIDDEN.into_response(),
         TransferError::UnknownTransfer => StatusCode::NOT_FOUND.into_response(),
         TransferError::InvalidOffset

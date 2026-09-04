@@ -94,3 +94,36 @@ async fn encrypted_chunks_are_authenticated_before_writing() {
         b"secret chunk"
     );
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn accepts_root_absolute_upload_and_rejects_symlink_escape() {
+    let parent = tempdir().unwrap();
+    let root = parent.path().join("root");
+    let sibling = parent.path().join("sibling");
+    fs::create_dir(&root).unwrap();
+    fs::create_dir(&sibling).unwrap();
+    fs::write(sibling.join("outside.txt"), "outside").unwrap();
+    std::os::unix::fs::symlink(&sibling, root.join("link")).unwrap();
+    let manager = TransferManager::new(&root);
+    let absolute = root.canonicalize().unwrap().join("inside.txt");
+    let transfer = manager
+        .create_upload(&absolute, None, None)
+        .await
+        .unwrap();
+    manager.write_chunk(&transfer.id, 0, b"inside").await.unwrap();
+    manager.finish(&transfer.id).await.unwrap();
+    assert_eq!(fs::read(&absolute).unwrap(), b"inside");
+    assert!(matches!(
+        manager
+            .create_upload(Path::new("link/escape.txt"), None, None)
+            .await,
+        Err(TransferError::PathOutsideRoot)
+    ));
+    assert!(matches!(
+        manager
+            .create_upload(&parent.path().join("outside.txt"), None, None)
+            .await,
+        Err(TransferError::PathOutsideRoot)
+    ));
+}

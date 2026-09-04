@@ -85,15 +85,13 @@ impl FileService {
     }
 
     fn resolve_existing(&self, relative: &Path) -> Result<PathBuf, FilesError> {
-        if relative.is_absolute() && relative != self.root {
-            return Err(FilesError::PathOutsideRoot);
-        }
-        let joined = if relative.is_absolute() {
+        let candidate = if relative.is_absolute() {
             relative.to_owned()
         } else {
             self.root.join(relative)
         };
-        if !normalize_path(&joined).starts_with(&self.root) {
+        let joined = normalize_path(&candidate);
+        if !joined.starts_with(&self.root) {
             return Err(FilesError::PathOutsideRoot);
         }
         let canonical = joined.canonicalize().map_err(|error| {
