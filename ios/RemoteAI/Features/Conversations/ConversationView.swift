@@ -11,16 +11,28 @@ public struct ConversationView: View {
     /// content can be pinned there instead of jumping once it is prepended.
     @State private var anchorAboveEarlierPage: String?
     @State private var isLoadingEarlier = false
-    /// Whether the row that asks for earlier messages is on screen. It is
-    /// state rather than a one-shot `onAppear` because the row can stay on
-    /// screen across several pages — a short transcript keeps it in view until
-    /// enough has been loaded to fill the screen.
-    @State private var isEarlierRowOnScreen = false
+    /// Where the reader is in the transcript. Measured, because a row's
+    /// `onAppear` cannot answer it: a one-point marker at the end never
+    /// disappears, and a row rebuilt by a prepended page appears again.
+    @State private var scroll = TranscriptScroll()
+    /// True once the transcript has been measured resting at its newest end.
+    /// Before that a measurement of zero offset only means the opening jump
+    /// has not landed yet, which must not be read as "the reader scrolled up".
+    @State private var hasSettledAtNewest = false
+    /// Whether to keep the newest end in view as content arrives.
+    ///
+    /// It cannot be re-derived from the latest measurement at the moment a
+    /// reply lands: growing the content moves the end away from the reader
+    /// without the reader having moved at all, and reading that as "they
+    /// scrolled up" leaves every reply below the fold. So it is only given up
+    /// when the reader has moved a whole screen away from the end.
+    @State private var isFollowingNewest = true
     private let isOnline: Bool
 
     /// Marks the newest end of the transcript. It is a row of its own so the
     /// jump lands below the last message rather than on top of it.
     private static let newestAnchor = "transcript-newest"
+    private static let scrollSpace = "transcript-scroll"
 
     public init(
         conversation: ConversationSummary,
@@ -92,51 +104,72 @@ public struct ConversationView: View {
     }
 
     private var transcript: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    earlierHistoryRow
-                    ForEach(model.items) { item in
-                        switch item {
-                        case let .message(message):
-                            MessageBubble(item: message)
-                        case let .reasoning(reasoning):
-                            ReasoningRow(item: reasoning)
-                        case let .tool(tool):
-                            ToolRow(item: tool)
-                        case let .error(error):
-                            ErrorRow(item: error)
-                        case .approval:
-                            EmptyView()
+        GeometryReader { viewport in
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        earlierHistoryRow
+                        ForEach(model.items) { item in
+                            switch item {
+                            case let .message(message):
+                                MessageBubble(item: message)
+                            case let .reasoning(reasoning):
+                                ReasoningRow(item: reasoning)
+                            case let .tool(tool):
+                                ToolRow(item: tool)
+                            case let .error(error):
+                                ErrorRow(item: error)
+                            case .approval:
+                                EmptyView()
+                            }
                         }
+                        Color.clear
+                            .frame(height: 1)
+                            .id(Self.newestAnchor)
                     }
-                    Color.clear
-                        .frame(height: 1)
-                        .id(Self.newestAnchor)
+                    .padding()
+                    .background(
+                        GeometryReader { content in
+                            Color.clear.preference(
+                                key: TranscriptScrollKey.self,
+                                value: TranscriptScroll(
+                                    offset: -content.frame(in: .named(Self.scrollSpace)).minY,
+                                    contentHeight: content.size.height,
+                                    viewportHeight: viewport.size.height
+                                )
+                            )
+                        }
+                    )
                 }
-                .padding()
-            }
-            .accessibilityIdentifier("transcript")
-            .refreshable { await model.refreshHistory() }
-            .onChange(of: model.items.count) { _, _ in
-                settle(with: proxy)
-            }
-            .onAppear { settle(with: proxy) }
-            // The row can already be on screen before the opening jump, and it
-            // gets no second `onAppear` for staying there. Re-ask once the
-            // transcript is positioned, and again after each page lands, so a
-            // transcript shorter than the screen fills it instead of stopping
-            // half-loaded.
-            .onChange(of: hasOpenedAtNewest) { _, _ in loadEarlier() }
-            .onChange(of: isLoadingEarlier) { _, loading in
-                if !loading { loadEarlier() }
+                .coordinateSpace(name: Self.scrollSpace)
+                .accessibilityIdentifier("transcript")
+                .refreshable { await model.refreshHistory() }
+                .onPreferenceChange(TranscriptScrollKey.self) { measured in
+                    scroll = measured
+                    if hasOpenedAtNewest, measured.isAtNewestEnd {
+                        hasSettledAtNewest = true
+                    }
+                    if measured.isAtNewestEnd {
+                        isFollowingNewest = true
+                    } else if measured.hasLeftTheNewestEnd {
+                        isFollowingNewest = false
+                    }
+                    if measured.isNearOldestLoaded, !measured.isAtNewestEnd {
+                        loadEarlier()
+                    }
+                }
+                // A streamed reply grows an existing row rather than adding
+                // one, so the row count alone would miss it.
+                .onChange(of: newestRowFingerprint) { _, _ in
+                    settle(with: proxy)
+                }
+                .onAppear { settle(with: proxy) }
             }
         }
     }
 
-    /// Sits above the transcript and asks for the page before it as soon as it
-    /// is scrolled into view. It only exists while there is an earlier page,
-    /// so reaching the start of the conversation ends the paging on its own.
+    /// Sits above the transcript while there is an earlier page, so reaching
+    /// the start of the conversation ends the paging on its own.
     private var earlierHistoryRow: some View {
         Group {
             if model.hasMoreHistory {
@@ -148,33 +181,50 @@ public struct ConversationView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .accessibilityIdentifier("earlier-history")
-                .onAppear {
-                    isEarlierRowOnScreen = true
-                    loadEarlier()
-                }
-                .onDisappear { isEarlierRowOnScreen = false }
             }
         }
     }
 
-    /// Put the transcript at its newest end on open, and keep it pinned to the
-    /// row the user was reading when an earlier page arrives above it.
+    /// What the newest end of the transcript looks like right now. It changes
+    /// both when a row is added and when the last row's text grows, which is
+    /// how a streamed reply arrives.
+    private var newestRowFingerprint: String {
+        guard case let .message(last)? = model.items.last else {
+            return "\(model.items.count)"
+        }
+        return "\(model.items.count):\(last.text.count)"
+    }
+
+    /// Put the transcript at its newest end on open, follow it while the reader
+    /// is there, and pin it to the row they were reading when an earlier page
+    /// arrives above it.
     private func settle(with proxy: ScrollViewProxy) {
-        if let anchor = anchorAboveEarlierPage {
-            anchorAboveEarlierPage = nil
-            proxy.scrollTo(anchor, anchor: .top)
+        guard !model.items.isEmpty else { return }
+        let pinned = anchorAboveEarlierPage
+        anchorAboveEarlierPage = nil
+
+        guard hasOpenedAtNewest else {
+            hasOpenedAtNewest = true
+            proxy.scrollTo(Self.newestAnchor, anchor: .bottom)
             return
         }
-        guard !hasOpenedAtNewest, !model.items.isEmpty else { return }
-        hasOpenedAtNewest = true
-        proxy.scrollTo(Self.newestAnchor, anchor: .bottom)
+        // Still following the newest end: stay there, whatever arrived.
+        if isFollowingNewest {
+            proxy.scrollTo(Self.newestAnchor, anchor: .bottom)
+            return
+        }
+        // Reading further back is deliberate. Keep the row they were on where
+        // it was, and never pull them to the bottom.
+        if let pinned {
+            proxy.scrollTo(pinned, anchor: .top)
+        }
     }
 
     private func loadEarlier() {
-        // Wait for the opening jump: until it happens the row is on screen
-        // simply because the transcript has not been positioned yet.
-        guard hasOpenedAtNewest, isEarlierRowOnScreen, !isLoadingEarlier, model.hasMoreHistory
-        else { return }
+        // A transcript that fits on one screen is both at its newest end and
+        // at its oldest loaded turn, so it never asks for more. Five real
+        // exchanges rarely fit, and pull-to-refresh still reaches the agent.
+        guard hasSettledAtNewest, !isLoadingEarlier, model.hasMoreHistory else { return }
         isLoadingEarlier = true
         anchorAboveEarlierPage = model.items.first?.id
         Task {
@@ -216,5 +266,47 @@ public struct ConversationView: View {
         for await envelope in await model.eventStream() {
             model.handle(envelope)
         }
+    }
+}
+
+/// Where the reader is in a transcript, in points.
+struct TranscriptScroll: Equatable {
+    var offset: CGFloat = 0
+    var contentHeight: CGFloat = 0
+    var viewportHeight: CGFloat = 0
+
+    /// Slack so a resting scroll view, which settles a fraction of a point
+    /// away, still counts as parked at an edge.
+    private static let slack: CGFloat = 24
+
+    /// The reader is at the newest end, so a reply arriving should stay in
+    /// view. A transcript shorter than the screen is always at its end.
+    var isAtNewestEnd: Bool {
+        guard contentHeight > 0 else { return true }
+        if contentHeight <= viewportHeight + Self.slack { return true }
+        return offset + viewportHeight >= contentHeight - Self.slack
+    }
+
+    /// The reader has reached the oldest turn loaded so far, which is the
+    /// request for the page before it.
+    var isNearOldestLoaded: Bool {
+        contentHeight > 0 && offset <= Self.slack
+    }
+
+    /// The reader has moved a whole screen back from the newest end, which no
+    /// amount of arriving content can do on its own.
+    var hasLeftTheNewestEnd: Bool {
+        guard contentHeight > viewportHeight else { return false }
+        return contentHeight - (offset + viewportHeight) > viewportHeight
+    }
+}
+
+private struct TranscriptScrollKey: PreferenceKey {
+    static let defaultValue = TranscriptScroll()
+
+    static func reduce(value: inout TranscriptScroll, nextValue: () -> TranscriptScroll) {
+        let next = nextValue()
+        // Only a real measurement replaces one; the default carries no size.
+        if next.contentHeight > 0 { value = next }
     }
 }

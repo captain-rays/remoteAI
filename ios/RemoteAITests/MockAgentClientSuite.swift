@@ -295,19 +295,22 @@ public enum MockAgentClientSuite {
             },
             TestCase("mock history pages backwards instead of replaying one page") {
                 let client = MockAgentClient()
+                // The requested limit is deliberately larger than a page: the
+                // agent decides how much one read costs.
                 let first = try await client.history(
                     provider: .claude, conversationId: "claude-project-api-1",
-                    cursor: nil, limit: 4
+                    cursor: nil, limit: 100
                 )
                 let second = try await client.history(
                     provider: .claude, conversationId: "claude-project-api-1",
-                    cursor: first.nextCursor, limit: 4
+                    cursor: first.nextCursor, limit: 100
                 )
 
-                try expectTrue(first.hasMore)
-                try expectEqual(first.events.last?.messageId, "mock-assistant-9")
+                try expectTrue(first.hasMore, "a twenty-turn conversation is several pages")
+                try expectEqual(first.events.count, 10, "five exchanges")
+                try expectEqual(first.events.last?.messageId, "mock-assistant-20")
                 try expectEqual(
-                    second.events.last?.messageId, "mock-assistant-7",
+                    second.events.last?.messageId, "mock-assistant-15",
                     "the second page ends just before the first one begins"
                 )
                 try expectTrue(

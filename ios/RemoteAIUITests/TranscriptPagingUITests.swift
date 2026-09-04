@@ -45,16 +45,20 @@ final class TranscriptPagingUITests: XCTestCase {
         // The newest exchange must be the one on screen. The oldest, which is
         // above the fold and outside the first page, must not be.
         let newest = app.staticTexts.containing(
-            NSPredicate(format: "label CONTAINS %@", "answer 9")
+            NSPredicate(format: "label CONTAINS %@", "answer 20")
         ).firstMatch
         XCTAssertTrue(
             newest.waitForExistence(timeout: 20),
             "a transcript must open on its newest turn"
         )
-        XCTAssertFalse(
-            app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "question 1"))
+        // The earlier-turns row is what says an earlier page exists and has
+        // not been fetched. Asserting that the oldest turn is merely absent
+        // from the screen would also pass when the whole transcript is loaded
+        // and simply scrolled out of view.
+        XCTAssertTrue(
+            app.descendants(matching: .any).matching(identifier: "earlier-history")
                 .firstMatch.exists,
-            "the oldest turn belongs to an earlier page and must not be loaded on open"
+            "the turns before this page must still be waiting to be fetched"
         )
     }
 
@@ -62,14 +66,15 @@ final class TranscriptPagingUITests: XCTestCase {
         let app = launchMockedApp()
         let transcript = openLongMockConversation(app)
 
+        // The mock's conversation is twenty exchanges and a page is five, so
+        // the first turn is four pages back. Match its label exactly: a
+        // "contains" match would also hit "question 19".
         let oldest = app.staticTexts.containing(
-            NSPredicate(format: "label CONTAINS %@", "question 1")
+            NSPredicate(format: "label == %@", "question 1")
         ).firstMatch
-        XCTAssertFalse(oldest.exists, "the oldest turn starts out unloaded")
+        XCTAssertFalse(oldest.exists, "the earlier pages start out unfetched")
 
-        // Scrolling towards the start of the conversation asks for the page
-        // before the one on screen, repeatedly, until there is nothing earlier.
-        for _ in 0..<12 where !oldest.exists {
+        for _ in 0..<8 where !oldest.exists {
             transcript.swipeDown()
         }
 
@@ -81,7 +86,7 @@ final class TranscriptPagingUITests: XCTestCase {
         XCTAssertFalse(
             app.descendants(matching: .any).matching(identifier: "earlier-history")
                 .firstMatch.exists,
-            "once the oldest turn is loaded there is no earlier page to offer"
+            "once the first turn is loaded there is no earlier page to offer"
         )
     }
 }

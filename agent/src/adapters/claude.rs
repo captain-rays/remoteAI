@@ -19,6 +19,8 @@ use crate::protocol::{
 };
 
 const MAX_METADATA_LINE_BYTES: usize = 64 * 1024;
+/// Upper bound on how much of the CLI's own complaint is forwarded.
+const MAX_STDERR_REPORT_CHARS: usize = 500;
 const MAX_DESKTOP_DEPTH: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -429,9 +431,23 @@ impl ClaudeAdapter {
             .stdout
             .take()
             .ok_or_else(|| anyhow::anyhow!("missing stdout"))?;
-        if let Some(mut stderr) = child.stderr.take() {
+        // Keep the CLI's own complaint. A session that dies on startup —
+        // "No conversation found with session ID", a bad flag — otherwise
+        // produces no stdout at all, and the phone is left with a message it
+        // sent and no answer and no reason.
+        let stderr_tail = Arc::new(Mutex::new(String::new()));
+        if let Some(stderr) = child.stderr.take() {
+            let tail = stderr_tail.clone();
             tokio::spawn(async move {
-                let _ = tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await;
+                let mut lines = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    let mut tail = tail.lock().await;
+                    // Bounded: only the last complaint is worth reporting.
+                    *tail = line.chars().take(MAX_STDERR_REPORT_CHARS).collect();
+                }
             });
         }
         let events = self.events.clone();
@@ -440,6 +456,7 @@ impl ClaudeAdapter {
         let local_id = local_id.to_owned();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
+            let mut reported_anything = false;
             while let Ok(Some(line)) = lines.next_line().await {
                 if let Some(real) = session_id_from_init(&line)
                     && real != local_id
@@ -447,8 +464,25 @@ impl ClaudeAdapter {
                     adopted.write().await.insert(local_id.clone(), real);
                 }
                 if let Ok(value) = mapper.map_line_for_session(&line, &local_id) {
+                    reported_anything = true;
                     let _ = events.send(value);
                 }
+            }
+            // The CLI is gone. If it never said anything, say why on its
+            // behalf rather than leaving the turn unanswered forever.
+            if !reported_anything {
+                let reason = stderr_tail.lock().await.clone();
+                let reason = if reason.is_empty() {
+                    "the Claude CLI exited without producing any output".to_owned()
+                } else {
+                    reason
+                };
+                eprintln!("claude session {local_id} produced no output: {reason}");
+                let _ = events.send(ConversationEvent::TurnFailed(json!({
+                    "conversationId": local_id,
+                    "code": "cli_produced_no_output",
+                    "message": reason,
+                })));
             }
         });
         Ok(Arc::new(ClaudeSession {

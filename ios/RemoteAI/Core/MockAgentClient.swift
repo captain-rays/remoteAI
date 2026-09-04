@@ -31,6 +31,8 @@ public actor MockAgentClient: AgentClient {
     private var directories: [String: [FileEntry]]
     private var previews: [String: String]
     private var history: [String: [EventEnvelope]] = [:]
+    /// Events per history page: five exchanges, matching what the agent serves.
+    private static let historyPageEvents = 10
     private var pendingApprovals: [String: ApprovalRequest] = [:]
     private var activeTurns: [String: String] = [:]
     /// Conversations whose scripted `fail` rejection has already been served.
@@ -325,10 +327,10 @@ public actor MockAgentClient: AgentClient {
             ],
         ]
 
-        // One conversation long enough to page through, so the transcript's
+        // One conversation several pages deep, so the transcript's
         // "open at the newest end, load earlier on scroll" behaviour can be
         // exercised without a live provider.
-        for turn in 1...9 {
+        for turn in 1...20 {
             history["claude-project-api-1", default: []].append(
                 EventEnvelope(
                     messageId: "mock-user-\(turn)",
@@ -437,11 +439,17 @@ public actor MockAgentClient: AgentClient {
         // The newest page first, then the page before it. The cursor names the
         // oldest event already delivered, so it is read as an upper bound —
         // ignoring it, as this mock used to, replays the same page forever.
+        //
+        // The page size is the agent's to choose, not the caller's: the real
+        // one serves five turns and ignores `limit`. Honouring `limit` here
+        // let a test ask for the whole transcript at once and never exercise
+        // paging at all.
+        _ = limit
         let all = history[conversationId] ?? []
         let end = cursor.flatMap { cursor in
             all.firstIndex { $0.messageId == cursor }
         } ?? all.count
-        let start = end > limit ? end - limit : 0
+        let start = end > Self.historyPageEvents ? end - Self.historyPageEvents : 0
         return HistoryPage(
             events: Array(all[start..<end]),
             hasMore: start > 0,

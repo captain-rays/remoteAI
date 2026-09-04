@@ -86,26 +86,26 @@ final class RealClaudeChatWriteUITests: XCTestCase {
         composer.tap()
         composer.typeText(Self.probe)
 
-        // Snapshot the transcript before the write so the assertion below can
-        // require something new rather than something already on screen.
-        let baseline = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "assistant-message-"))
-            .count
-        let send = app.buttons["send"]
-
-        // Count the assistant bubbles the loaded history already shows, and
-        // require a *new* one. Asserting that any assistant bubble exists
-        // passes on the reply from a previous run when the session is reopened.
+        // Identify the assistant bubbles already on screen. Counting them is
+        // not enough: a LazyVStack drops rows that scroll out of view, so the
+        // count can fall while the transcript grows. Compare identities.
         let assistantBubbles = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier BEGINSWITH %@", "assistant-message-"))
+        let before = Set(assistantBubbles.allElementsBoundByIndex.map(\.identifier))
+
+        let send = app.buttons["send"]
         XCTAssertTrue(send.isEnabled, "the composer refused to enable send")
         send.tap()
 
+        // The transcript follows its newest end while the reader is there, so
+        // the reply has to appear on screen — not merely somewhere in the
+        // model.
         let arrived = expectation(description: "a new assistant reply arrives")
         let deadline = Date().addingTimeInterval(180)
         DispatchQueue.global().async {
             while Date() < deadline {
-                if assistantBubbles.count > baseline {
+                let now = Set(assistantBubbles.allElementsBoundByIndex.map(\.identifier))
+                if !now.subtracting(before).isEmpty {
                     arrived.fulfill()
                     return
                 }
@@ -113,12 +113,14 @@ final class RealClaudeChatWriteUITests: XCTestCase {
             }
         }
         wait(for: [arrived], timeout: 190)
-        XCTAssertGreaterThan(
-            assistantBubbles.count, baseline,
-            "no new assistant reply arrived: "
+
+        let after = Set(assistantBubbles.allElementsBoundByIndex.map(\.identifier))
+        XCTAssertFalse(
+            after.subtracting(before).isEmpty,
+            "no new assistant reply on screen: "
                 + app.descendants(matching: .staticText)
                     .allElementsBoundByIndex.map(\.label).joined(separator: " | ")
         )
-        print("CLAUDE_CHAT_REPLY new assistant bubbles: \(baseline) -> \(assistantBubbles.count)")
+        print("CLAUDE_CHAT_REPLY new bubbles: \(after.subtracting(before).sorted())")
     }
 }
