@@ -50,15 +50,17 @@ printf 'Claude Code CLI: %s\n' "$version_line"
 if [ "$allow_create" -eq 1 ]; then
   stream_output=''
   set +e
+  stream_error=$(mktemp)
   stream_output=$("$claude_path" \
     --print \
+    --verbose \
     --input-format stream-json \
     --output-format stream-json \
     --include-partial-messages \
     --permission-mode manual \
     --tools "" \
     --no-session-persistence \
-    2>/dev/null <<'JSON'
+    2>"$stream_error" <<'JSON'
 {"type":"user","message":{"role":"user","content":"RemoteAI disposable smoke test. Reply with one short confirmation and do not use tools."}}
 JSON
   )
@@ -66,8 +68,15 @@ JSON
   set -e
   if [ "$stream_status" -ne 0 ]; then
     printf 'error: Claude could not complete the disposable session. Check `claude --print` and local CLI health.\n' >&2
+    # Surface the CLI's own reason; swallowing it turns an argv mistake into an
+    # unexplained refusal.
+    if [ -s "$stream_error" ]; then
+      printf 'claude reported: %s\n' "$(sed -n '1,5p' "$stream_error")" >&2
+    fi
+    rm -f "$stream_error"
     exit 1
   fi
+  rm -f "$stream_error"
   if ! printf '%s\n' "$stream_output" | python3 -c '
 import json
 import re
