@@ -2,7 +2,7 @@
 
 **日期：** 2026-09-04
 **分支：** `integration/v1`
-**状态：** 待开发
+**状态：** 已审查，按修订契约开发中
 **上位文档：** `2026-09-03-remote-ai-ios-client-design.md`（§5.4 文件、§7 文件传输、§8 安全）
 
 ---
@@ -13,12 +13,23 @@
 
 | 层 | 状态 | 证据 |
 | --- | --- | --- |
-| agent 端点逻辑 | ✅ 完整 | `/v1/files/*`、`/v1/transfers/*` 已实现，含冲突检测、`PathOutsideRoot` 保护、分块与断点 |
+| agent 端点基础逻辑 | ⚠️ 部分完成 | `/v1/files/*`、`/v1/transfers/*` 已存在，但绝对后代路径会被错误拒绝、preview 仍返回裸字节、冲突响应缺少 body |
 | agent 接线 | ❌ **缺** | `GatewayState::set_file_root`（`agent/src/gateway.rs:93`）**全仓库无调用点** → `file_root` / `transfers` 恒为 `None` → 所有端点返回 **503** |
 | iOS 客户端 | ❌ **缺** | `ios/RemoteAI/Core/RemoteAgentClient.swift:326-333` 共 8 个方法是抛异常的桩 |
 | 既有测试 | ⚠️ 误导 | `TransferSuite`、`ManualTransferUITests` 全部打 `MockAgentClient`，真实链路一次都没跑过 |
 
 这与 `refresh_provider_sessions` 是同一个模式：**定义了、有单测、生产代码里没人调**。做完本文档后，建议全局搜一遍还有没有第三个同类死代码。
+
+### 1.1 集成审查修订（2026-09-04）
+
+实现前按当前 Rust/Swift 类型重新核对后，原草案有以下接缝，必须以本节为准：
+
+1. `FileEntry.path` 和 iOS 文件浏览器使用绝对路径，但 `TransferManager` 当前拒绝全部绝对路径，`FileService` 也只接受“恰好等于 root”的绝对路径。Agent 必须同时接受 `$HOME` 相对路径和 `$HOME` 内绝对路径，并拒绝 `..`、根目录外路径及 symlink escape。
+2. `POST /v1/transfers/create` 使用 Rust `rename_all = "camelCase"`；规范字段是 `expectedSha256`、`conflictPolicy`。`sha256`/`conflict` 仅为兼容 alias，不新增 snake_case 契约。
+3. `/v1/files/preview` 当前成功响应是裸字节，不是 JSON。v1 保持该端点为裸字节；iOS 用 `/metadata` 的大小与 preview 字节合成 `FilePreview`。
+4. `TransferRequest` 当前没有 SHA-256 字段。必须增加 `expectedSha256`，由 `TransferCoordinator` 在 create 前计算，否则 Agent 的完成校验不会实际启用。
+5. 下载端没有服务端 transfer session。下载 ticket、取消和 receipt 都是 iOS 本地状态；不得把本地 download ticket 发给 upload-only 的 cancel/finish 端点。
+6. 下载端能计算并展示接收内容的 SHA-256，并以已知文件大小校验完整性；当前服务端没有提供源摘要，因此不能把本地摘要描述成与服务端摘要的密码学比对。端到端验收在 Mac 侧独立比较源/目标摘要。
 
 ---
 
@@ -46,9 +57,22 @@
 
 > 现有测试之所以全绿却掩盖了这个 bug，是因为它们直接调 `state.set_file_root(...)`。新测试必须走真实启动路径。
 
-**实现：** 在 adapters 接线的同处调用 `state.set_file_root(home)`。`home` 取 `directories`/`std::env::home_dir` 的既有解析逻辑（`config.rs` 里已有 home 解析，复用它，不要重新实现）。
+**实现：** 从 `config.rs` 提取一个明确的 home 解析入口，由 `AgentConfig::default`、provider adapter 初始化和文件服务共同使用；不要调用已废弃的 `std::env::home_dir`，也不要在 `main.rs` 再实现一份不同的 fallback。在 adapters 接线的同处调用 `state.set_file_root(home)`。
 
-### 3.2 冲突响应带上现有文件信息（契约变更）
+为了可测试，生产启动接线应提取为由 `main` 调用的小函数；测试调用同一个函数后再通过 Router 请求端点，避免测试直接调用 `set_file_root` 造成假绿，也避免为了测试启动一个永不退出的固定端口进程。
+
+### 3.2 统一文件路径契约
+
+**文件：** `agent/src/files.rs`、`agent/src/transfers.rs`、对应 tests
+
+- `.`、`work/a.txt` 等根目录相对路径解析到 `$HOME` 内。
+- `$HOME` 和 `$HOME/work/a.txt` 等绝对路径保持可用。
+- 其他绝对路径、规范化后逃逸的 `..`、以及指向根目录外的符号链接均返回 403。
+- 返回给 iOS 的 `FileEntry.path` 和冲突 `existingPath` 始终是规范化后的绝对路径。
+
+测试全部使用临时 root 及其 sibling，不访问真实 `$HOME`、`/etc` 或真实项目。
+
+### 3.3 冲突响应带上现有文件信息（契约变更）
 
 **当前：** 同名上传返回 **409，无 body**。
 
@@ -84,7 +108,7 @@
 | --- | --- | --- | --- |
 | GET | `/v1/files/list` | `path`（必填）、`includeSensitive`（bool，默认 false） | `[FileEntry]` |
 | GET | `/v1/files/metadata` | `path` | `FileEntry` |
-| GET | `/v1/files/preview` | `path`、`maxBytes`（默认 65536） | preview JSON |
+| GET | `/v1/files/preview` | `path`、`maxBytes`（默认 65536） | `application/octet-stream` 裸字节 |
 
 `FileEntry` 为 **camelCase**（Rust 侧 `#[serde(rename_all = "camelCase")]`），字段与 Swift `FileEntry` 一致：`path,name,kind,size?,modifiedAt?,hidden,readable,sensitive`。
 
@@ -94,7 +118,7 @@
 
 | 方法 | 路径 | body | 成功 |
 | --- | --- | --- | --- |
-| POST | `/v1/transfers/create` | `{"path": "<绝对目标路径>", "expected_sha256": "<hex>", "conflict_policy": "keep_both"\|"overwrite"\|省略}` | `200 {"id","destination"}` |
+| POST | `/v1/transfers/create` | `{"path": "<绝对或根相对目标路径>", "expectedSha256": "<hex>", "conflictPolicy": "keep_both"\|"overwrite"\|省略}` | `200 {"id","destination"}` |
 | POST | `/v1/transfers/{id}/chunk` | `{"offset": <u64>, "data": "<base64>"}` | `204` |
 | POST | `/v1/transfers/{id}/finish` | 无 | `204` |
 | POST | `/v1/transfers/{id}/cancel` | 无 | `204` |
@@ -115,10 +139,10 @@
 客户端协议（`AgentClient`）与 agent REST 不是一一对应，这是泳道并行留下的接缝：
 
 1. **`uploadChunk(transferId:index:data:)` vs `{offset,...}`**
-   REST 要**字节偏移**而非块序号。`RemoteAgentClient` 需自己持有 `transferId → chunkSize` 映射，`offset = index × chunkSize`。chunkSize 由客户端决定（建议 **1 MiB**，远低于 4 MiB 上限），并写进 `createTransfer` 返回的 `TransferTicket.chunkSize`，使 `TransferCoordinator` 的分块与这里一致。
+   REST 要**字节偏移**而非块序号。`RemoteAgentClient` 需自己持有 `transferId → (chunkSize, destination, expectedSha256)` 映射，`offset = index × chunkSize`。chunkSize 由客户端决定（建议 **1 MiB**，远低于 4 MiB 上限），并写进 `createTransfer` 返回的 `TransferTicket.chunkSize`，使 `TransferCoordinator` 的分块与这里一致。`finish` 收到 204 后使用该映射合成 Swift `TransferReceipt`。
 
 2. **`downloadChunk(transferId:index:)` 根本不需要 transfer id**
-   下载是按 `path` 直接 ranged read，服务端**不建传输会话**。因此 `createTransfer(direction: .download)` **不要**打 `/v1/transfers/create`（那是上传专用，会误建上传会话甚至触发冲突）；应在客户端合成一个本地 ticket，存下 `path` 与 `chunkSize`，供后续 `downloadChunk` 换算 `start`/`end`。
+   下载是按 `path` 直接 ranged read，服务端**不建传输会话**。因此 `createTransfer(direction: .download)` **不要**打 `/v1/transfers/create`（那是上传专用，会误建上传会话甚至触发冲突）；应在客户端合成一个本地 ticket，存下 `path`、`byteCount` 与 `chunkSize`，供后续 `downloadChunk` 换算 `start`/`end`。下载 ticket 的 `cancel` 只删除本地映射，不调用 upload cancel；下载不调用 `finish`。
    > 已知历史坑：`MockAgentClient` 早期把 download 也当冲突处理过，已修（见 `MockAgentClientSuite` 里 "downloading an existing Mac file is not a conflict"）。真实客户端不要重蹈覆辙。
 
 3. **`TransferTicket.conflict` vs HTTP 409**
@@ -126,8 +150,9 @@
 
 ### 4.3 校验与完整性
 
-- 上传时把客户端算好的 SHA-256 放进 `expected_sha256`，让 agent 校验（不符返回 400）。`TransferCoordinator.checksum` 已经在算。
-- 下载完成后客户端自行校验 SHA-256 并展示。
+- `TransferRequest` 增加可选 `expectedSha256`；上传 create 前由 `TransferCoordinator.checksum` 计算并放进 `expectedSha256`，让 Agent 校验（不符返回 400）。重试与冲突决策必须复用同一摘要。
+- 下载以 listing/metadata 的 `size` 计算 `totalChunks`；完成时必须校验收到的总字节数等于该 size，再计算并展示 SHA-256。端到端测试另在 Mac 侧比较源文件与下载文件摘要。
+- `filePreview` 先获取 metadata，再读取裸 preview bytes：`byteCount` 使用源文件 size，`truncated = sourceSize > receivedBytes`，非 UTF-8 时 `text = nil`。
 
 ---
 
@@ -139,7 +164,7 @@
 - 同名上传必须显式选择 `keep_both` 或 `overwrite`，**不得**自动决定。
 - 未选择策略前，目标文件**必须**保持不变。
 - 离线时禁止发起传输。
-- 路径越界必须被拒绝（服务端已有 `PathOutsideRoot`，客户端也应在发请求前拦截明显的 `..`）。
+- 路径越界必须被拒绝（服务端必须作为权威边界；客户端也在发请求前拦截明显的 `..`，但不得把客户端检查当成安全控制）。
 
 **必须保持通过的既有回归测试：**
 `TransferSuite` 里 "a coordinator that is merely alive transfers nothing"、
@@ -152,12 +177,13 @@
 ### 自动化
 
 ```bash
-cargo fmt --all --check
-cargo test --workspace
-./scripts/ios-check.sh          # 含 190 逻辑测试 + 18 UI 测试
+rtk cargo fmt --all --check
+rtk cargo clippy --workspace --all-targets -- -D warnings
+rtk cargo test --workspace
+rtk ./scripts/ios-check.sh      # 含逻辑测试和 UI 测试；数量以当次输出为准
 ```
 
-### 真机联调（新增 opt-in UI 测试）
+### 真实 Simulator 联调（新增 opt-in UI 测试）
 
 参照现有 `ios/RemoteAIUITests/RealCodexConversationUITests.swift` 的写法：
 读 `SIMULATOR_HOST_HOME` + `~/Library/Application Support/RemoteAI/pairing.json` 决定是否 skip，并加进 `scripts/ios-check.sh` 的 `-skip-testing` 列表（配对密钥一次性，**一个 class 只放一个测试**）。
@@ -170,7 +196,7 @@ cargo test --workspace
 4. 上传**同名**文件 → 出现冲突弹窗，且**此时目标文件未被修改**（用 mtime/内容双重断言）
 5. 选 `keep_both` → 产生新文件名，原文件仍在
 6. 选 `overwrite` → 目标被替换
-7. 越界路径（如 `/etc/hosts`）→ 被拒绝
+7. 越界路径（使用测试 root 的 sibling）→ 被拒绝
 
 > 测试产生的文件请放在 `$HOME` 下的临时目录并在结束时清理，不要污染真实项目。
 
@@ -189,11 +215,9 @@ cargo test --workspace
 
 每步单独提交，先红后绿：
 
-1. `test(agent):` 新增走真实启动路径的 file-root 接线失败测试
-2. `feat(agent):` 启动时 `set_file_root($HOME)`
-3. `feat(agent):` 409 冲突响应带上 `existingPath` / `existingSize`
-4. `feat(ios):` `rest` 辅助暴露状态码
-5. `feat(ios):` 实现 `listFiles` / `initialDirectory` / `filePreview`
-6. `feat(ios):` 实现上传三件套（create/chunk/finish）+ 409 冲突路径
-7. `feat(ios):` 实现下载（合成本地 ticket + ranged read）
-8. `test(ios):` 新增 opt-in 真机传输 UI 测试
+1. `feat(agent):` 以失败测试驱动统一 home 解析、生产 file-root 接线及绝对/相对路径契约
+2. `feat(agent):` 以失败测试驱动 409 冲突 JSON（含 `existingPath` / `existingSize`）
+3. `feat(ios):` 以失败测试驱动 REST 原始响应/状态码辅助与文件浏览/preview 桥接
+4. `feat(ios):` 以失败测试驱动上传 create/chunk/finish/cancel、预提交 SHA-256 及 409 冲突路径
+5. `feat(ios):` 以失败测试驱动下载本地 ticket、ranged read、本地 cancel、大小校验与摘要展示
+6. `test(ios):` 新增 opt-in 真实 Simulator 传输 UI 测试
