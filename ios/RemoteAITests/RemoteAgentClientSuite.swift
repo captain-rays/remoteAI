@@ -165,6 +165,79 @@ public enum RemoteAgentClientSuite {
                     try expectEqual(error, .rejected("path_outside_root"))
                 }
             },
+
+            TestCase("upload REST maps chunk indexes to byte offsets and finishes") {
+                let client = try makeClient()
+                let request = TransferRequest(
+                    direction: .upload,
+                    name: "new.bin",
+                    remoteDirectory: "/Users/dev/work",
+                    byteCount: 1_048_577,
+                    conflictPolicy: nil,
+                    expectedSha256: "digest-123"
+                )
+
+                let ticket = try await client.createTransfer(request)
+                try await client.uploadChunk(
+                    transferId: ticket.id, index: 1, data: Data("z".utf8)
+                )
+                let receipt = try await client.finishTransfer(transferId: ticket.id)
+
+                try expectEqual(ticket.id, "upload-1")
+                try expectEqual(ticket.destinationPath, "/Users/dev/work/new.bin")
+                try expectEqual(ticket.chunkSize, 1_048_576)
+                try expectEqual(ticket.totalChunks, 2)
+                try expectNil(ticket.conflict)
+                try expectEqual(receipt.finalPath, ticket.destinationPath)
+                try expectEqual(receipt.sha256, "digest-123")
+            },
+
+            TestCase("upload conflict returns a decision ticket instead of throwing") {
+                let client = try makeClient()
+                let request = TransferRequest(
+                    direction: .upload,
+                    name: "existing.txt",
+                    remoteDirectory: "/Users/dev/work",
+                    byteCount: 7,
+                    conflictPolicy: nil,
+                    expectedSha256: "digest-conflict"
+                )
+
+                let ticket = try await client.createTransfer(request)
+
+                try expectEqual(ticket.destinationPath, "/Users/dev/work/existing.txt")
+                try expectEqual(ticket.conflict?.existingPath, "/Users/dev/work/existing.txt")
+                try expectEqual(ticket.conflict?.existingSize, 42)
+            },
+
+            TestCase("cancelling an upload removes its remote and local transfer state") {
+                let client = try makeClient()
+                let ticket = try await client.createTransfer(
+                    TransferRequest(
+                        direction: .upload,
+                        name: "new.bin",
+                        remoteDirectory: "/Users/dev/work",
+                        byteCount: 1,
+                        conflictPolicy: nil,
+                        expectedSha256: "digest-123"
+                    )
+                )
+
+                try await client.cancelTransfer(transferId: ticket.id)
+
+                do {
+                    try await client.uploadChunk(
+                        transferId: ticket.id, index: 0, data: Data("x".utf8)
+                    )
+                    throw ExpectationFailure(
+                        message: "cancelled upload should not accept chunks",
+                        file: #filePath,
+                        line: #line
+                    )
+                } catch let error as AgentClientError {
+                    try expectEqual(error, .notFound("transfer"))
+                }
+            },
         ]
     )
 }
@@ -224,6 +297,44 @@ private final class CatalogURLProtocol: URLProtocol {
                   query("maxBytes") == "5"
         {
             finish(data: Data("hello".utf8), contentType: "application/octet-stream")
+        } else if url.path == "/v1/transfers/create", request.httpMethod == "POST" {
+            let json = (try? JSONSerialization.jsonObject(with: requestBody()))
+                as? [String: Any]
+            if json?["path"] as? String == "/Users/dev/work/new.bin",
+               json?["expectedSha256"] as? String == "digest-123",
+               json?["conflictPolicy"] == nil
+            {
+                finish(
+                    body: #"{"id":"upload-1","destination":"/Users/dev/work/new.bin"}"#
+                )
+            } else if json?["path"] as? String == "/Users/dev/work/existing.txt" {
+                finish(
+                    status: 409,
+                    body: #"{"error":"conflict","existingPath":"/Users/dev/work/existing.txt","existingSize":42}"#
+                )
+            } else {
+                finish(status: 400, body: #"{"error":"bad_create"}"#)
+            }
+        } else if url.path == "/v1/transfers/upload-1/chunk",
+                  request.httpMethod == "POST"
+        {
+            let json = (try? JSONSerialization.jsonObject(with: requestBody()))
+                as? [String: Any]
+            guard json?["offset"] as? Int == 1_048_576,
+                  json?["data"] as? String == "eg=="
+            else {
+                finish(status: 400, body: #"{"error":"bad_chunk"}"#)
+                return
+            }
+            finish(status: 204, body: "")
+        } else if url.path == "/v1/transfers/upload-1/finish",
+                  request.httpMethod == "POST"
+        {
+            finish(status: 204, body: "")
+        } else if url.path == "/v1/transfers/upload-1/cancel",
+                  request.httpMethod == "POST"
+        {
+            finish(status: 204, body: "")
         } else {
             finish(status: 404, body: "{}")
         }
@@ -232,6 +343,21 @@ private final class CatalogURLProtocol: URLProtocol {
     private func query(_ name: String) -> String? {
         URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
             .queryItems?.first { $0.name == name }?.value
+    }
+
+    private func requestBody() -> Data {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return Data() }
+        stream.open()
+        defer { stream.close() }
+        var result = Data()
+        var buffer = [UInt8](repeating: 0, count: 4_096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            guard count > 0 else { break }
+            result.append(buffer, count: count)
+        }
+        return result
     }
 
     private func finish(status: Int = 200, body: String) {

@@ -70,19 +70,22 @@ public struct TransferRequest: Sendable, Hashable {
     public let remoteDirectory: String
     public let byteCount: Int64
     public let conflictPolicy: ConflictPolicy?
+    public let expectedSha256: String?
 
     public init(
         direction: TransferDirection,
         name: String,
         remoteDirectory: String,
         byteCount: Int64,
-        conflictPolicy: ConflictPolicy?
+        conflictPolicy: ConflictPolicy?,
+        expectedSha256: String? = nil
     ) {
         self.direction = direction
         self.name = name
         self.remoteDirectory = remoteDirectory
         self.byteCount = byteCount
         self.conflictPolicy = conflictPolicy
+        self.expectedSha256 = expectedSha256
     }
 }
 

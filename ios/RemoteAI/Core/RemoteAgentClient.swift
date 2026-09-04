@@ -17,10 +17,41 @@ public actor RemoteAgentClient: AgentClient {
     private var keys: SessionKeys?
     private var sendCounter: UInt64 = 0
     private var fileRoot: String?
+    private var uploadTransfers: [String: UploadTransferContext] = [:]
+
+    private static let transferChunkSize = 1_048_576
 
     private struct HTTPFailure: Error {
         let statusCode: Int
         let body: Data
+    }
+
+    private struct UploadTransferContext: Sendable {
+        let destination: String
+        let expectedSha256: String
+        let chunkSize: Int
+    }
+
+    private struct TransferCreatePayload: Encodable {
+        let path: String
+        let expectedSha256: String?
+        let conflictPolicy: ConflictPolicy?
+    }
+
+    private struct TransferCreateResponse: Decodable {
+        let id: String
+        let destination: String
+    }
+
+    private struct TransferConflictResponse: Decodable {
+        let error: String
+        let existingPath: String
+        let existingSize: Int64?
+    }
+
+    private struct TransferChunkPayload: Encodable {
+        let offset: Int64
+        let data: String
     }
 
     public init(store: SecretStore, session: URLSession = .shared) {
@@ -164,6 +195,18 @@ public actor RemoteAgentClient: AgentClient {
         }
     }
 
+    private static func transferHTTPError(_ statusCode: Int) -> AgentClientError {
+        switch statusCode {
+        case 401: return .notPaired
+        case 403: return .rejected("path_outside_root")
+        case 404: return .notFound("transfer")
+        case 409: return .rejected("conflict")
+        case 413: return .invalidRequest("chunk_too_large")
+        case 503: return .transport("transfers_unavailable")
+        default: return .transport("transfers_http_\(statusCode)")
+        }
+    }
+
     private static func validateFilePath(_ path: String) throws {
         guard path == "." || path.hasPrefix("/") else {
             throw AgentClientError.invalidRequest("file_path_must_be_absolute")
@@ -172,6 +215,34 @@ public actor RemoteAgentClient: AgentClient {
         guard !components.contains(where: { $0 == ".." || $0 == "." }) || path == "." else {
             throw AgentClientError.rejected("path_traversal")
         }
+    }
+
+    private static func transferDestination(for request: TransferRequest) throws -> String {
+        try validateFilePath(request.remoteDirectory)
+        guard request.byteCount >= 0,
+              !request.name.isEmpty,
+              request.name != ".",
+              request.name != "..",
+              !request.name.contains("/"),
+              !request.name.contains("\0")
+        else {
+            throw AgentClientError.invalidRequest("invalid_transfer")
+        }
+        let directory = request.remoteDirectory == "/"
+            ? "" : request.remoteDirectory.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return "/" + [directory, request.name].filter { !$0.isEmpty }.joined(separator: "/")
+    }
+
+    private static func totalChunks(byteCount: Int64, chunkSize: Int) throws -> Int {
+        guard byteCount >= 0, chunkSize > 0 else {
+            throw AgentClientError.invalidRequest("invalid_transfer_size")
+        }
+        if byteCount == 0 { return 1 }
+        let count = ((byteCount - 1) / Int64(chunkSize)) + 1
+        guard let result = Int(exactly: count) else {
+            throw AgentClientError.invalidRequest("transfer_too_large")
+        }
+        return result
     }
 
     private static func parentPath(of path: String, boundedBy root: String?) -> String? {
@@ -467,11 +538,120 @@ public actor RemoteAgentClient: AgentClient {
             throw Self.fileHTTPError(failure.statusCode)
         }
     }
-    public func createTransfer(_ request: TransferRequest) async throws -> TransferTicket { throw AgentClientError.transport("transfers require explicit REST API") }
-    public func uploadChunk(transferId: String, index: Int, data: Data) async throws { throw AgentClientError.transport("transfers require explicit REST API") }
+    public func createTransfer(_ request: TransferRequest) async throws -> TransferTicket {
+        guard request.direction == .upload else {
+            throw AgentClientError.transport("download_ticket_pending")
+        }
+        let destination = try Self.transferDestination(for: request)
+        let chunkSize = Self.transferChunkSize
+        let totalChunks = try Self.totalChunks(
+            byteCount: request.byteCount, chunkSize: chunkSize
+        )
+        let payload = TransferCreatePayload(
+            path: destination,
+            expectedSha256: request.expectedSha256,
+            conflictPolicy: request.conflictPolicy
+        )
+        let body: Data
+        do {
+            body = try JSONEncoder().encode(payload)
+        } catch {
+            throw AgentClientError.invalidRequest("transfer_encode_failed")
+        }
+
+        do {
+            let data = try await restData(
+                "POST", path: "v1/transfers/create", body: body,
+                contentType: "application/json"
+            )
+            let created = try decode(TransferCreateResponse.self, from: data)
+            let digest = request.expectedSha256 ?? ""
+            uploadTransfers[created.id] = UploadTransferContext(
+                destination: created.destination,
+                expectedSha256: digest,
+                chunkSize: chunkSize
+            )
+            return TransferTicket(
+                id: created.id,
+                destinationPath: created.destination,
+                chunkSize: chunkSize,
+                totalChunks: totalChunks,
+                conflict: nil
+            )
+        } catch let failure as HTTPFailure where failure.statusCode == 409 {
+            let conflict = try decode(TransferConflictResponse.self, from: failure.body)
+            guard conflict.error == "conflict" else {
+                throw AgentClientError.transport("invalid_conflict_response")
+            }
+            return TransferTicket(
+                id: "conflict-\(UUID().uuidString)",
+                destinationPath: destination,
+                chunkSize: chunkSize,
+                totalChunks: totalChunks,
+                conflict: TransferConflict(
+                    existingPath: conflict.existingPath,
+                    existingSize: conflict.existingSize
+                )
+            )
+        } catch let failure as HTTPFailure {
+            throw Self.transferHTTPError(failure.statusCode)
+        }
+    }
+
+    public func uploadChunk(transferId: String, index: Int, data: Data) async throws {
+        guard let transfer = uploadTransfers[transferId] else {
+            throw AgentClientError.notFound("transfer")
+        }
+        guard index >= 0, data.count <= transfer.chunkSize else {
+            throw AgentClientError.invalidRequest("invalid_chunk")
+        }
+        let (offset, overflow) = Int64(index).multipliedReportingOverflow(
+            by: Int64(transfer.chunkSize)
+        )
+        guard !overflow else { throw AgentClientError.invalidRequest("invalid_chunk") }
+        let payload = TransferChunkPayload(
+            offset: offset,
+            data: data.base64EncodedString()
+        )
+        let body = try JSONEncoder().encode(payload)
+        do {
+            _ = try await restData(
+                "POST", path: "v1/transfers/\(transferId)/chunk", body: body,
+                contentType: "application/json"
+            )
+        } catch let failure as HTTPFailure {
+            throw Self.transferHTTPError(failure.statusCode)
+        }
+    }
     public func downloadChunk(transferId: String, index: Int) async throws -> Data { throw AgentClientError.transport("transfers require explicit REST API") }
-    public func finishTransfer(transferId: String) async throws -> TransferReceipt { throw AgentClientError.transport("transfers require explicit REST API") }
-    public func cancelTransfer(transferId: String) async throws { throw AgentClientError.transport("transfers require explicit REST API") }
+    public func finishTransfer(transferId: String) async throws -> TransferReceipt {
+        guard let transfer = uploadTransfers[transferId] else {
+            throw AgentClientError.notFound("transfer")
+        }
+        do {
+            _ = try await restData("POST", path: "v1/transfers/\(transferId)/finish")
+        } catch let failure as HTTPFailure {
+            throw Self.transferHTTPError(failure.statusCode)
+        }
+        uploadTransfers.removeValue(forKey: transferId)
+        return TransferReceipt(
+            id: transferId,
+            finalPath: transfer.destination,
+            sha256: transfer.expectedSha256
+        )
+    }
+
+    public func cancelTransfer(transferId: String) async throws {
+        guard uploadTransfers[transferId] != nil else {
+            throw AgentClientError.notFound("transfer")
+        }
+        do {
+            _ = try await restData("POST", path: "v1/transfers/\(transferId)/cancel")
+        } catch let failure as HTTPFailure {
+            throw Self.transferHTTPError(failure.statusCode)
+        }
+        uploadTransfers.removeValue(forKey: transferId)
+    }
     public func listAudit(limit: Int) async throws -> [AuditEntry] { throw AgentClientError.transport("audit requires GatewaySession") }
     public func diagnostics() async throws -> Diagnostics { throw AgentClientError.transport("diagnostics mapping pending") }
     public func revokeDevice() async throws { throw AgentClientError.transport("revoke requires GatewaySession") }

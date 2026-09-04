@@ -79,12 +79,14 @@ public final class TransferCoordinator {
     /// Called from the upload button after the user picked a file and a target
     /// directory, and never from anywhere else.
     public func startUpload(name: String, data: Data, to directory: String) async {
+        let expectedSha256 = TransferCoordinator.checksum(data)
         let request = TransferRequest(
             direction: .upload,
             name: name,
             remoteDirectory: directory,
             byteCount: Int64(data.count),
-            conflictPolicy: nil
+            conflictPolicy: nil,
+            expectedSha256: expectedSha256
         )
         let localId = "local-\(transfers.count + 1)"
         transfers.append(
@@ -168,7 +170,8 @@ public final class TransferCoordinator {
             name: pending.request.name,
             remoteDirectory: pending.request.remoteDirectory,
             byteCount: pending.request.byteCount,
-            conflictPolicy: policy
+            conflictPolicy: policy,
+            expectedSha256: pending.request.expectedSha256
         )
         update(pending.transferId) { $0.status = .running }
 

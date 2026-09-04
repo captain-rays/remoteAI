@@ -43,6 +43,7 @@ public actor MockAgentClient: AgentClient {
     /// The regression test for "no automatic synchronisation" asserts this is
     /// zero while the app is merely browsing.
     public private(set) var transferRequestCount = 0
+    public private(set) var lastCreatedTransferRequest: TransferRequest?
 
     public init() {
 
@@ -576,6 +577,7 @@ public actor MockAgentClient: AgentClient {
 
     public func createTransfer(_ request: TransferRequest) async throws -> TransferTicket {
         transferRequestCount += 1
+        lastCreatedTransferRequest = request
         let directory = try MockAgentClient.normalize(request.remoteDirectory)
         guard request.name.contains("/") == false, request.name != "..", request.name != "." else {
             throw AgentClientError.rejected("invalid_name")

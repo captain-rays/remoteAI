@@ -51,6 +51,11 @@ public enum TransferSuite {
                 try expectEqual(transfer.destinationPath, "/Users/dev/work/api/notes.txt")
                 try expectEqual(transfer.progress.fraction, 1.0)
                 try expectEqual(transfer.sha256, TransferCoordinator.checksum(payload))
+                try expectEqual(
+                    await client.lastCreatedTransferRequest?.expectedSha256,
+                    TransferCoordinator.checksum(payload),
+                    "the digest must reach create before any chunk is sent"
+                )
             },
 
             TestCase("an uploaded file becomes visible in the destination directory") {
