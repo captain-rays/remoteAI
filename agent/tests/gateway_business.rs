@@ -146,6 +146,12 @@ async fn encrypted_start_send_interrupt_and_approval_use_registered_provider() {
         .unwrap();
     let send_values = decode_frames(send, &outbound);
     assert!(send_values.iter().any(|value| value["kind"] == "event"));
+    assert!(
+        send_values
+            .iter()
+            .any(|value| value["type"] == "turn.completed"),
+        "a completed provider turn must be delivered with the send response"
+    );
 
     let interrupt = session
         .handle_frame(&request_frame(

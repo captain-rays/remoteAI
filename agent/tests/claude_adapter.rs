@@ -349,6 +349,54 @@ async fn an_agent_started_session_is_busy_after_the_first_send() {
 }
 
 #[tokio::test]
+async fn started_claude_session_emits_delta_and_terminal_for_first_send() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project-turn");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let stub = temp.path().join("fake-claude.sh");
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"real-turn-1\",\"cwd\":\"'$PWD'\"}'\nIFS= read -r _\nprintf '%s\\n' '{\"type\":\"stream_event\",\"event\":{\"delta\":{\"type\":\"text_delta\",\"text\":\"fixed-reply\"}}}'\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"session_id\":\"real-turn-1\",\"is_error\":false}'\ncat >/dev/null\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    let adapter = ClaudeAdapter::new(&stub, temp.path());
+    let mut events = adapter.subscribe();
+    let id = adapter
+        .start(ConversationKind::Project, Some(project))
+        .await
+        .unwrap();
+    adapter
+        .send(&id, "fixed-probe".into(), Vec::new())
+        .await
+        .unwrap();
+
+    let mut saw_delta = false;
+    let mut saw_terminal = false;
+    for _ in 0..4 {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+            .await
+            .expect("first send should produce a bounded event")
+            .expect("event stream should remain open");
+        saw_delta |= matches!(event, ConversationEvent::Delta { ref text } if text == "fixed-reply");
+        saw_terminal |= matches!(event, ConversationEvent::TurnCompleted(_));
+        if saw_delta && saw_terminal {
+            break;
+        }
+    }
+    assert!(saw_delta, "the first Claude send must emit an assistant delta");
+    assert!(saw_terminal, "the first Claude send must emit a terminal event");
+}
+
+#[tokio::test]
 async fn a_started_project_session_rejects_a_directory_that_is_not_there() {
     use remote_ai_agent::adapters::ProviderAdapter;
     use remote_ai_agent::protocol::ConversationKind;
