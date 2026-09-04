@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Json, Path as AxumPath, Query, State};
-use axum::http::{HeaderMap, Request, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -240,25 +240,65 @@ async fn daily_conversations(
     let Some(provider) = parse_provider(&query.provider) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    // This read is what the phone asked for, so index the provider now. A
-    // failure keeps whatever was indexed before rather than emptying the list.
-    state.refresh_provider(provider).await;
-    let sessions = state
-        .sessions
-        .read()
-        .await
-        .get(&provider)
-        .cloned()
-        .unwrap_or_default();
+    let adapters = state.provider_adapters.read().await.clone();
+    let mut adapter = None;
+    for candidate in adapters {
+        if candidate.status().await.provider == provider {
+            adapter = Some(candidate);
+            break;
+        }
+    }
+    // Keep the host-owned Chats view separate from the generic provider
+    // session index. In particular, Codex must not turn session_index.jsonl
+    // project tasks into ChatGPT Chats when its host bridge is absent.
+    let (sessions, diagnostic) = if let Some(adapter) = adapter {
+        let diagnostic = adapter.daily_catalog_diagnostic_code();
+        match adapter.list_daily_conversations().await {
+            Ok(sessions) => {
+                state.sessions.write().await.insert(provider, sessions.clone());
+                (sessions, diagnostic)
+            }
+            Err(_) => (Vec::new(), diagnostic.or(Some("provider_catalog_unavailable"))),
+        }
+    } else {
+        let sessions = state
+            .sessions
+            .read()
+            .await
+            .get(&provider)
+            .cloned()
+            .unwrap_or_default();
+        (sessions, None)
+    };
     match build_catalog(provider, ".", sessions) {
-        Ok(catalog) => Json(
-            catalog
-                .conversations
-                .into_iter()
-                .filter(|item| item.kind == ConversationKind::Daily)
-                .collect::<Vec<_>>(),
-        )
-        .into_response(),
+        Ok(catalog) => {
+            let mut headers = HeaderMap::new();
+            if let Some(diagnostic) = diagnostic {
+                headers.insert(
+                    "x-remoteai-catalog-availability",
+                    HeaderValue::from_static("unavailable"),
+                );
+                if let Ok(value) = HeaderValue::from_str(diagnostic) {
+                    headers.insert("x-remoteai-diagnostic-code", value);
+                }
+            } else {
+                headers.insert(
+                    "x-remoteai-catalog-availability",
+                    HeaderValue::from_static("available"),
+                );
+            }
+            (
+                headers,
+                Json(
+                    catalog
+                        .conversations
+                        .into_iter()
+                        .filter(|item| item.kind == ConversationKind::Daily)
+                        .collect::<Vec<_>>(),
+                ),
+            )
+                .into_response()
+        }
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
@@ -270,18 +310,14 @@ async fn projects(
     let Some(provider) = parse_provider(&query.provider) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    // This read is what the phone asked for, so index the provider now. A
-    // failure keeps whatever was indexed before rather than emptying the list.
-    state.refresh_provider(provider).await;
     let adapters = state.provider_adapters.read().await.clone();
     for adapter in adapters {
         if adapter.status().await.provider != provider {
             continue;
         }
-        if let Ok(projects) = adapter.list_projects().await
-            && !projects.is_empty()
-        {
-            return Json(projects).into_response();
+        match adapter.list_projects().await {
+            Ok(projects) => return Json(projects).into_response(),
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         }
     }
     let sessions = state
@@ -305,9 +341,16 @@ async fn project_conversations(
     let Some(provider) = parse_provider(&query.provider) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    // This read is what the phone asked for, so index the provider now. A
-    // failure keeps whatever was indexed before rather than emptying the list.
-    state.refresh_provider(provider).await;
+    let adapters = state.provider_adapters.read().await.clone();
+    for adapter in adapters {
+        if adapter.status().await.provider != provider {
+            continue;
+        }
+        return match adapter.list_project_conversations(&project_id).await {
+            Ok(conversations) => Json(conversations).into_response(),
+            Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        };
+    }
     let sessions = state
         .sessions
         .read()
