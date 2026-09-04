@@ -18,6 +18,7 @@ public actor RemoteAgentClient: AgentClient {
     private var sendCounter: UInt64 = 0
     private var fileRoot: String?
     private var uploadTransfers: [String: UploadTransferContext] = [:]
+    private var downloadTransfers: [String: DownloadTransferContext] = [:]
 
     private static let transferChunkSize = 1_048_576
 
@@ -30,6 +31,13 @@ public actor RemoteAgentClient: AgentClient {
         let destination: String
         let expectedSha256: String
         let chunkSize: Int
+    }
+
+    private struct DownloadTransferContext: Sendable {
+        let path: String
+        let byteCount: Int64
+        let chunkSize: Int
+        let totalChunks: Int
     }
 
     private struct TransferCreatePayload: Encodable {
@@ -539,14 +547,27 @@ public actor RemoteAgentClient: AgentClient {
         }
     }
     public func createTransfer(_ request: TransferRequest) async throws -> TransferTicket {
-        guard request.direction == .upload else {
-            throw AgentClientError.transport("download_ticket_pending")
-        }
         let destination = try Self.transferDestination(for: request)
         let chunkSize = Self.transferChunkSize
         let totalChunks = try Self.totalChunks(
             byteCount: request.byteCount, chunkSize: chunkSize
         )
+        if request.direction == .download {
+            let id = "download-\(UUID().uuidString)"
+            downloadTransfers[id] = DownloadTransferContext(
+                path: destination,
+                byteCount: request.byteCount,
+                chunkSize: chunkSize,
+                totalChunks: totalChunks
+            )
+            return TransferTicket(
+                id: id,
+                destinationPath: destination,
+                chunkSize: chunkSize,
+                totalChunks: totalChunks,
+                conflict: nil
+            )
+        }
         let payload = TransferCreatePayload(
             path: destination,
             expectedSha256: request.expectedSha256,
@@ -623,7 +644,38 @@ public actor RemoteAgentClient: AgentClient {
             throw Self.transferHTTPError(failure.statusCode)
         }
     }
-    public func downloadChunk(transferId: String, index: Int) async throws -> Data { throw AgentClientError.transport("transfers require explicit REST API") }
+    public func downloadChunk(transferId: String, index: Int) async throws -> Data {
+        guard let transfer = downloadTransfers[transferId] else {
+            throw AgentClientError.notFound("transfer")
+        }
+        guard index >= 0, index < transfer.totalChunks else {
+            throw AgentClientError.invalidRequest("invalid_chunk")
+        }
+        let (start, overflow) = Int64(index).multipliedReportingOverflow(
+            by: Int64(transfer.chunkSize)
+        )
+        guard !overflow else { throw AgentClientError.invalidRequest("invalid_chunk") }
+        let (candidateEnd, endOverflow) = start.addingReportingOverflow(
+            Int64(transfer.chunkSize)
+        )
+        let end = endOverflow ? transfer.byteCount : min(transfer.byteCount, candidateEnd)
+        do {
+            let data = try await restData(
+                "GET", path: "v1/transfers/download",
+                query: [
+                    .init(name: "path", value: transfer.path),
+                    .init(name: "start", value: String(start)),
+                    .init(name: "end", value: String(end)),
+                ]
+            )
+            if index == transfer.totalChunks - 1 {
+                downloadTransfers.removeValue(forKey: transferId)
+            }
+            return data
+        } catch let failure as HTTPFailure {
+            throw Self.transferHTTPError(failure.statusCode)
+        }
+    }
     public func finishTransfer(transferId: String) async throws -> TransferReceipt {
         guard let transfer = uploadTransfers[transferId] else {
             throw AgentClientError.notFound("transfer")
@@ -642,6 +694,9 @@ public actor RemoteAgentClient: AgentClient {
     }
 
     public func cancelTransfer(transferId: String) async throws {
+        if downloadTransfers.removeValue(forKey: transferId) != nil {
+            return
+        }
         guard uploadTransfers[transferId] != nil else {
             throw AgentClientError.notFound("transfer")
         }

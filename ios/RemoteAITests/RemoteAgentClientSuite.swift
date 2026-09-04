@@ -238,6 +238,52 @@ public enum RemoteAgentClientSuite {
                     try expectEqual(error, .notFound("transfer"))
                 }
             },
+
+            TestCase("download uses a local ticket and translates indexes into ranges") {
+                let client = try makeClient()
+                let ticket = try await client.createTransfer(
+                    TransferRequest(
+                        direction: .download,
+                        name: "source.bin",
+                        remoteDirectory: "/Users/dev/work",
+                        byteCount: 1_048_577,
+                        conflictPolicy: nil
+                    )
+                )
+
+                let tail = try await client.downloadChunk(transferId: ticket.id, index: 1)
+
+                try expectTrue(ticket.id.hasPrefix("download-"))
+                try expectEqual(ticket.destinationPath, "/Users/dev/work/source.bin")
+                try expectEqual(ticket.totalChunks, 2)
+                try expectEqual(tail, Data("z".utf8))
+            },
+
+            TestCase("cancelling a download is local and rejects later reads") {
+                let client = try makeClient()
+                let ticket = try await client.createTransfer(
+                    TransferRequest(
+                        direction: .download,
+                        name: "source.bin",
+                        remoteDirectory: "/Users/dev/work",
+                        byteCount: 1,
+                        conflictPolicy: nil
+                    )
+                )
+
+                try await client.cancelTransfer(transferId: ticket.id)
+
+                do {
+                    _ = try await client.downloadChunk(transferId: ticket.id, index: 0)
+                    throw ExpectationFailure(
+                        message: "cancelled download should not remain readable",
+                        file: #filePath,
+                        line: #line
+                    )
+                } catch let error as AgentClientError {
+                    try expectEqual(error, .notFound("transfer"))
+                }
+            },
         ]
     )
 }
@@ -335,6 +381,13 @@ private final class CatalogURLProtocol: URLProtocol {
                   request.httpMethod == "POST"
         {
             finish(status: 204, body: "")
+        } else if url.path == "/v1/transfers/download",
+                  request.httpMethod == "GET",
+                  query("path") == "/Users/dev/work/source.bin",
+                  query("start") == "1048576",
+                  query("end") == "1048577"
+        {
+            finish(data: Data("z".utf8), status: 206, contentType: "application/octet-stream")
         } else {
             finish(status: 404, body: "{}")
         }

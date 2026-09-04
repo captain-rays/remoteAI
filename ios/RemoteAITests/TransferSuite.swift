@@ -165,7 +165,7 @@ public enum TransferSuite {
                 await coordinator.startDownload(
                     FileEntry(
                         path: "/Users/dev/work/api/README.md", name: "README.md",
-                        kind: .file, size: 30
+                        kind: .file, size: 25
                     ),
                     to: destination
                 )
@@ -185,7 +185,7 @@ public enum TransferSuite {
                 await coordinator.startDownload(
                     FileEntry(
                         path: "/Users/dev/work/api/README.md", name: "README.md",
-                        kind: .file, size: 30
+                        kind: .file, size: 25
                     ),
                     to: destination
                 )
@@ -193,6 +193,27 @@ public enum TransferSuite {
                     await coordinator.pendingConflict,
                     "conflict handling applies to uploads onto the Mac only"
                 )
+            },
+
+            TestCase("an incomplete download never replaces the phone destination") {
+                let coordinator = await makeCoordinator()
+                let destination = tempURL("incomplete.bin")
+                defer { try? FileManager.default.removeItem(at: destination) }
+
+                await coordinator.startDownload(
+                    FileEntry(
+                        path: "/Users/dev/work/api/README.md", name: "README.md",
+                        kind: .file, size: 9_999
+                    ),
+                    to: destination
+                )
+
+                guard case .failed = await coordinator.transfers.first?.status else {
+                    throw ExpectationFailure(
+                        message: "short download should fail", file: #filePath, line: #line
+                    )
+                }
+                try expectFalse(FileManager.default.fileExists(atPath: destination.path))
             },
 
             TestCase("cancelling a running transfer stops it and reports cancelled") {

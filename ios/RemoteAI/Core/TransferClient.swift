@@ -236,6 +236,10 @@ public final class TransferCoordinator {
                 progressSamples.append(Double(index + 1) / Double(max(ticket.totalChunks, 1)))
             }
 
+            guard Int64(payload.count) == request.byteCount else {
+                throw AgentClientError.transport("download_size_mismatch")
+            }
+
             try FileManager.default.createDirectory(
                 at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
             )
