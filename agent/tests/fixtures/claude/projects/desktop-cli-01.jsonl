@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","session_id":"cli-01","cwd":"/Users/test/药盒"}
+{"type":"user","session_id":"cli-01","uuid":"desktop-user-01","cwd":"/Users/test/药盒","message":{"role":"user","content":[{"type":"text","text":"history through cli id"}]}}
