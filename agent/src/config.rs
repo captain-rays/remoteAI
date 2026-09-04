@@ -27,7 +27,14 @@ impl AgentConfig {
 
 impl Default for AgentConfig {
     fn default() -> Self {
-        let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from);
+        let home = resolve_home();
         Self::with_state_dir(home.join("Library/Application Support/RemoteAI"))
     }
+}
+
+/// Resolve the single filesystem root used by providers and file services.
+/// Tests can pass an explicit root to the wiring helper; production always
+/// derives this value from the launching macOS user's HOME.
+pub fn resolve_home() -> PathBuf {
+    std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from)
 }

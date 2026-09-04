@@ -10,7 +10,7 @@ pub mod files;
 pub mod gateway;
 pub mod pairing;
 pub mod protocol;
-mod provider_wiring;
+pub mod provider_wiring;
 pub mod store;
 pub mod transfers;
 pub mod tunnel;

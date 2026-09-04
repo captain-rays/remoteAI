@@ -14,6 +14,7 @@ use remote_ai_agent::config::AgentConfig;
 use remote_ai_agent::crypto::load_or_create_private_key;
 use remote_ai_agent::discovery::discover_provider;
 use remote_ai_agent::gateway::{GatewayState, router};
+use remote_ai_agent::config::resolve_home;
 use remote_ai_agent::pairing::{PairingPayload, PairingRegistry};
 use remote_ai_agent::protocol::{
     ApprovalDecision, ConversationEvent, ConversationKind, ProviderId, ProviderStatus,
@@ -192,9 +193,9 @@ async fn main() -> anyhow::Result<()> {
     }
     let state = GatewayState::new(Arc::new(tokio::sync::RwLock::new(pairing)), 256);
     state.set_mac_private_key(key.to_bytes().into()).await;
-    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from);
+    let home = resolve_home();
     state
-        .set_provider_adapters(discover_runtime_adapters(home).await)
+        .configure_runtime_state(&home, discover_runtime_adapters(home.clone()).await)
         .await;
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     println!(

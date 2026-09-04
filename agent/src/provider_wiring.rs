@@ -1,9 +1,21 @@
 use std::sync::Arc;
+use std::path::Path;
 
 use crate::adapters::ProviderAdapter;
 use crate::gateway::GatewayState;
 
 impl GatewayState {
+    /// Apply production runtime wiring in one place so the adapters and file
+    /// service share the exact same HOME-derived root.
+    pub async fn configure_runtime_state(
+        &self,
+        home: impl AsRef<Path>,
+        adapters: Vec<Arc<dyn ProviderAdapter>>,
+    ) {
+        self.set_file_root(home).await;
+        self.set_provider_adapters(adapters).await;
+    }
+
     /// Inject provider adapters and publish a status-only diagnostics snapshot.
     /// Adapter instances remain owned by the caller; this method never persists
     /// credentials or conversation content.
