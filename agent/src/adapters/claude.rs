@@ -372,12 +372,7 @@ impl ProviderAdapter for ClaudeAdapter {
             let desktop_sessions = self.refresh_desktop_index().await?;
             let mut conversations = desktop_sessions
                 .iter()
-                .map(|desktop| {
-                    let kind = self.mapper.classify(desktop.cwd.clone());
-                    let project_path = (kind == ConversationKind::Project)
-                        .then(|| desktop.cwd.to_string_lossy().into_owned());
-                    self.desktop_summary(desktop, kind, None, project_path)
-                })
+                .map(|desktop| self.desktop_summary(desktop, ConversationKind::Daily, None, None))
                 .collect::<Vec<_>>();
             conversations.sort_by(|left, right| {
                 right
