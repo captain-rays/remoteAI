@@ -1,0 +1,11 @@
+{
+  "id": "approval-1",
+  "provider": "claude",
+  "conversationId": "session-1",
+  "category": "command",
+  "title": "Run command",
+  "detail": "git status",
+  "cwd": "/tmp/project-a",
+  "risk": "low",
+  "createdAt": "2026-09-03T00:00:00Z"
+}

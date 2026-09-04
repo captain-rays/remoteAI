@@ -1,0 +1,8 @@
+{"type":"system","subtype":"init","session_id":"session-a","cwd":"/actual/project-a"}
+{"type":"user","sessionId":"session-a","uuid":"user-1","cwd":"/actual/project-a","message":{"role":"user","content":"Build project alpha"}}
+{"type":"assistant","sessionId":"session-a","uuid":"assistant-1","message":{"content":[{"type":"thinking","thinking":"checking the project"}]}}
+{"type":"assistant","sessionId":"session-a","uuid":"assistant-2","message":{"content":[{"type":"text","text":"done"}]}}
+{"type":"assistant","sessionId":"session-a","uuid":"tool-1","message":{"content":[{"type":"tool_use","id":"tool-1","name":"Bash","input":{"command":"pwd"}}]}}
+{"type":"user","sessionId":"session-a","uuid":"tool-result-1","message":{"content":[{"type":"tool_result","tool_use_id":"tool-1","content":"/actual/project-a"}]}}
+{"type":"result","sessionId":"session-a","subtype":"success","is_error":false}
+not-json-and-never-exposed

@@ -1,0 +1,27 @@
+{
+  "projects": [
+    {
+      "id": "codex:project-a",
+      "provider": "codex",
+      "canonicalPath": "/tmp/project-a",
+      "displayPath": "~/project-a",
+      "title": "project-a",
+      "updatedAt": "2026-09-03T00:00:00Z",
+      "available": true
+    }
+  ],
+  "conversations": [
+    {
+      "id": "thread-1",
+      "provider": "codex",
+      "kind": "project",
+      "title": "Fixture conversation",
+      "projectId": "codex:project-a",
+      "projectPath": "/tmp/project-a",
+      "updatedAt": "2026-09-03T00:00:00Z",
+      "status": "idle",
+      "writeState": "busy",
+      "writeBlockCode": "session_busy"
+    }
+  ]
+}
