@@ -91,6 +91,43 @@ fn maps_codex_thread_read_to_bounded_shared_history_events() {
     );
 }
 
+#[test]
+fn maps_codex_recent_session_index_entries_as_daily_conversations() {
+    let mapper = CodexMapper::new(PathBuf::from("/tmp/codex-home"));
+    let summary = mapper
+        .map_session_index_line(
+            r#"{"id":"daily-1","thread_name":"供应链系统名称整理","updated_at":"2026-09-04T08:30:00Z"}"#,
+        )
+        .unwrap();
+
+    assert_eq!(summary.id, "daily-1");
+    assert_eq!(summary.provider, ProviderId::Codex);
+    assert_eq!(summary.kind, ConversationKind::Daily);
+    assert_eq!(summary.title, "供应链系统名称整理");
+    assert!(summary.project_id.is_none());
+    assert!(summary.project_path.is_none());
+    assert_eq!(summary.updated_at.to_rfc3339(), "2026-09-04T08:30:00+00:00");
+}
+
+#[test]
+fn recent_session_index_skips_malformed_metadata_and_sorts_newest_first() {
+    let mapper = CodexMapper::new(PathBuf::from("/tmp/codex-home"));
+    let entries = mapper.map_session_index(
+        r#"{"id":"older","thread_name":"older","updated_at":"2026-09-01T00:00:00Z"}
+not-json
+{"id":"newer","thread_name":"newer","updated_at":"2026-09-04T00:00:00Z"}
+{"thread_name":"missing id","updated_at":"2026-09-05T00:00:00Z"}"#,
+    );
+
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect::<Vec<_>>(),
+        ["newer", "older"]
+    );
+}
+
 #[tokio::test]
 #[ignore = "read-only smoke test requires a locally authenticated Codex CLI"]
 async fn lists_real_codex_threads_without_modifying_them() {
@@ -98,4 +135,17 @@ async fn lists_real_codex_threads_without_modifying_them() {
     let adapter = CodexAdapter::new("codex", std::env::var("HOME").unwrap());
     let conversations = adapter.list_conversations().await.unwrap();
     assert!(!conversations.is_empty());
+}
+
+#[tokio::test]
+#[ignore = "read-only smoke test requires a locally authenticated Codex CLI and session index"]
+async fn lists_real_codex_recent_daily_sessions() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+    let adapter = CodexAdapter::new("codex", std::env::var("HOME").unwrap());
+    let conversations = adapter.list_conversations().await.unwrap();
+    assert!(
+        conversations
+            .iter()
+            .any(|conversation| conversation.kind == ConversationKind::Daily)
+    );
 }

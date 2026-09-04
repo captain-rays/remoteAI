@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::cmp::Reverse;
+use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::io::{BufRead, BufReader as StdBufReader};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -37,6 +40,47 @@ impl CodexMapper {
     pub fn map_thread_list(&self, line: &str) -> anyhow::Result<Vec<ConversationSummary>> {
         let value: Value = serde_json::from_str(line)?;
         self.map_thread_list_value(value.get("result").unwrap_or(&value))
+    }
+
+    /// Normalize one entry from Codex's local `session_index.jsonl`.  These
+    /// entries back the CLI's global "Recent" list and intentionally contain
+    /// only metadata (never transcript contents).
+    pub fn map_session_index_line(&self, line: &str) -> anyhow::Result<ConversationSummary> {
+        let value: Value = serde_json::from_str(line)?;
+        let id = required_string(&value, "id")?;
+        Ok(ConversationSummary {
+            id,
+            provider: ProviderId::Codex,
+            kind: ConversationKind::Daily,
+            title: value
+                .get("thread_name")
+                .and_then(Value::as_str)
+                .filter(|title| !title.trim().is_empty())
+                .unwrap_or("Untitled Codex conversation")
+                .to_owned(),
+            project_id: None,
+            project_path: None,
+            updated_at: parse_time(value.get("updated_at")),
+            status: "idle".to_owned(),
+            write_state: None,
+            write_block_code: None,
+        })
+    }
+
+    /// Parse bounded JSONL metadata from the Codex recent-session index.
+    /// Malformed or oversized records are ignored so one damaged line cannot
+    /// hide the remaining recent conversations.
+    pub fn map_session_index(&self, content: &str) -> Vec<ConversationSummary> {
+        const MAX_INDEX_ENTRIES: usize = 4096;
+        const MAX_LINE_BYTES: usize = 64 * 1024;
+        let mut summaries = content
+            .lines()
+            .take(MAX_INDEX_ENTRIES)
+            .filter(|line| line.len() <= MAX_LINE_BYTES)
+            .filter_map(|line| self.map_session_index_line(line).ok())
+            .collect::<Vec<_>>();
+        summaries.sort_by_key(|summary| Reverse(summary.updated_at));
+        summaries
     }
 
     /// Normalize a Codex `thread/read` response into the provider-neutral
@@ -226,6 +270,21 @@ impl CodexAdapter {
         id.as_str().map_or_else(|| id.to_string(), str::to_owned)
     }
 
+    fn read_session_index(&self) -> Vec<ConversationSummary> {
+        let path = self.mapper.home.join(".codex/session_index.jsonl");
+        let Ok(file) = File::open(path) else {
+            return Vec::new();
+        };
+        let content = StdBufReader::new(file)
+            .lines()
+            .take(4096)
+            .filter_map(Result::ok)
+            .filter(|line| line.len() <= 64 * 1024)
+            .collect::<Vec<_>>()
+            .join("\n");
+        self.mapper.map_session_index(&content)
+    }
+
     async fn client(&self) -> anyhow::Result<Arc<RpcClient>> {
         let mut slot = self.rpc.lock().await;
         if let Some(client) = slot.as_ref() {
@@ -259,12 +318,32 @@ impl ProviderAdapter for CodexAdapter {
     }
 
     async fn list_conversations(&self) -> anyhow::Result<Vec<ConversationSummary>> {
-        let result = self
-            .client()
-            .await?
-            .call("thread/list", json!({"sortDirection":"desc"}))
-            .await?;
-        self.mapper.map_thread_list_value(&result)
+        let indexed = self.read_session_index();
+        let rpc_result = match self.client().await {
+            Ok(client) => {
+                client
+                    .call("thread/list", json!({"sortDirection":"desc"}))
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        let mut conversations = match rpc_result {
+            Ok(result) => self.mapper.map_thread_list_value(&result)?,
+            Err(_error) if !indexed.is_empty() => indexed.clone(),
+            Err(error) => return Err(error),
+        };
+
+        let existing: HashSet<_> = conversations
+            .iter()
+            .map(|summary| summary.id.clone())
+            .collect();
+        conversations.extend(
+            indexed
+                .into_iter()
+                .filter(|summary| !existing.contains(&summary.id)),
+        );
+        conversations.sort_by_key(|summary| Reverse(summary.updated_at));
+        Ok(conversations)
     }
 
     async fn load_conversation(
