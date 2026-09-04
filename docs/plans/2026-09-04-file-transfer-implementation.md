@@ -27,6 +27,7 @@
 1. `FileEntry.path` 和 iOS 文件浏览器使用绝对路径，但 `TransferManager` 当前拒绝全部绝对路径，`FileService` 也只接受“恰好等于 root”的绝对路径。Agent 必须同时接受 `$HOME` 相对路径和 `$HOME` 内绝对路径，并拒绝 `..`、根目录外路径及 symlink escape。
 2. `POST /v1/transfers/create` 使用 Rust `rename_all = "camelCase"`；规范字段是 `expectedSha256`、`conflictPolicy`。`sha256`/`conflict` 仅为兼容 alias，不新增 snake_case 契约。
 3. `/v1/files/preview` 当前成功响应是裸字节，不是 JSON。v1 保持该端点为裸字节；iOS 用 `/metadata` 的大小与 preview 字节合成 `FilePreview`。
+   `maxBytes` 是规范 query 名；Agent 对当前内部字段补 camelCase rename，并可保留 `max_bytes` alias 兼容旧调用。
 4. `TransferRequest` 当前没有 SHA-256 字段。必须增加 `expectedSha256`，由 `TransferCoordinator` 在 create 前计算，否则 Agent 的完成校验不会实际启用。
 5. 下载端没有服务端 transfer session。下载 ticket、取消和 receipt 都是 iOS 本地状态；不得把本地 download ticket 发给 upload-only 的 cancel/finish 端点。
 6. 下载端能计算并展示接收内容的 SHA-256，并以已知文件大小校验完整性；当前服务端没有提供源摘要，因此不能把本地摘要描述成与服务端摘要的密码学比对。端到端验收在 Mac 侧独立比较源/目标摘要。
