@@ -73,8 +73,15 @@ final class ManualTransferUITests: XCTestCase {
         app.tabBars.buttons["Files"].tap()
         app.buttons["toggle-hidden"].tap()
 
-        XCTAssertTrue(app.buttons["Show them"].waitForExistence(timeout: 5))
-        app.buttons["Cancel"].tap()
+        // A confirmationDialog is not an Alert in the accessibility tree, so
+        // the button is addressed by the identifier the view gives it. On this
+        // size class the dialog is a popover, which carries no Cancel button
+        // of its own and is dismissed by tapping outside it.
+        let confirm = app.descendants(matching: .any)
+            .matching(identifier: "reveal-hidden-confirm").firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95)).tap()
+        XCTAssertFalse(confirm.waitForExistence(timeout: 2), "the dialog stayed up")
         XCTAssertFalse(app.staticTexts[".ssh"].exists)
     }
 }

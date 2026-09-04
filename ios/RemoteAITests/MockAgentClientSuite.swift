@@ -293,6 +293,30 @@ public enum MockAgentClientSuite {
                     "no automatic synchronisation is allowed"
                 )
             },
+            TestCase("mock history pages backwards instead of replaying one page") {
+                let client = MockAgentClient()
+                let first = try await client.history(
+                    provider: .claude, conversationId: "claude-project-api-1",
+                    cursor: nil, limit: 4
+                )
+                let second = try await client.history(
+                    provider: .claude, conversationId: "claude-project-api-1",
+                    cursor: first.nextCursor, limit: 4
+                )
+
+                try expectTrue(first.hasMore)
+                try expectEqual(first.events.last?.messageId, "mock-assistant-9")
+                try expectEqual(
+                    second.events.last?.messageId, "mock-assistant-7",
+                    "the second page ends just before the first one begins"
+                )
+                try expectTrue(
+                    Set(first.events.map(\.messageId))
+                        .isDisjoint(with: second.events.map(\.messageId)),
+                    "paging backwards must not repeat an event"
+                )
+            },
+
         ]
     )
 }

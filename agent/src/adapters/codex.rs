@@ -24,7 +24,7 @@ static INDEX_TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 /// enough back to cover every project that has recent work.
 const MAX_THREAD_LIST_PAGES: usize = 20;
 
-use super::{ConversationPage, ProviderAdapter};
+use super::{ConversationPage, DEFAULT_HISTORY_TURNS, ProviderAdapter, history_turn_page};
 use crate::protocol::{
     ApprovalDecision, ConversationEvent, ConversationKind, ConversationSummary, ProjectSummary,
     ProviderId, ProviderStatus, WriteState,
@@ -61,11 +61,22 @@ pub trait CodexHostBridge: Send + Sync {
 #[derive(Debug, Clone)]
 pub struct CodexMapper {
     home: PathBuf,
+    history_turns: usize,
 }
 
 impl CodexMapper {
     pub fn new(home: PathBuf) -> Self {
-        Self { home }
+        Self {
+            home,
+            history_turns: DEFAULT_HISTORY_TURNS,
+        }
+    }
+
+    /// Narrow the page to fewer turns. Tests use it to exercise paging on
+    /// small fixtures; production keeps the default.
+    pub fn with_history_turns(mut self, turns: usize) -> Self {
+        self.history_turns = turns.max(1);
+        self
     }
 
     pub fn map_thread_list(&self, line: &str) -> anyhow::Result<Vec<ConversationSummary>> {
@@ -232,34 +243,34 @@ impl CodexMapper {
             actual_id.is_empty() || actual_id == conversation_id,
             "thread ID mismatch"
         );
+        let turns = thread
+            .get("turns")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let (range, next_cursor) =
+            history_turn_page(turns.len(), cursor.as_deref(), self.history_turns)?;
         let mut normalized = Vec::new();
-        if let Some(turns) = thread.get("turns").and_then(Value::as_array) {
-            for (turn_index, turn) in turns.iter().enumerate() {
-                if let Some(items) = turn.get("items").and_then(Value::as_array) {
-                    for (item_index, item) in items.iter().enumerate() {
-                        normalized.extend(normalize_codex_item(
-                            conversation_id,
-                            turn_index,
-                            item_index,
-                            item,
-                        ));
-                    }
-                }
+        for turn_index in range {
+            // The index is the turn's position in the whole thread, not in
+            // this page: a synthetic item id must not change because a later
+            // page delivered it.
+            let Some(items) = turns[turn_index].get("items").and_then(Value::as_array) else {
+                continue;
+            };
+            for (item_index, item) in items.iter().enumerate() {
+                normalized.extend(normalize_codex_item(
+                    conversation_id,
+                    turn_index,
+                    item_index,
+                    item,
+                ));
             }
         }
-        let start = cursor
-            .as_deref()
-            .map(|raw| raw.parse::<usize>())
-            .transpose()
-            .map_err(|_| anyhow::anyhow!("invalid history cursor"))?
-            .unwrap_or(0);
-        anyhow::ensure!(start <= normalized.len(), "history cursor out of range");
-        const PAGE_SIZE: usize = 6;
-        let end = (start + PAGE_SIZE).min(normalized.len());
         Ok(ConversationPage {
             conversation_id: conversation_id.to_owned(),
-            events: normalized[start..end].to_vec(),
-            next_cursor: (end < normalized.len()).then(|| end.to_string()),
+            events: normalized,
+            next_cursor,
         })
     }
 

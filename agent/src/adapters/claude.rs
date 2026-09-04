@@ -12,16 +12,13 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{Mutex, RwLock, broadcast};
 
-use super::{ConversationPage, ProviderAdapter};
+use super::{ConversationPage, DEFAULT_HISTORY_TURNS, ProviderAdapter, history_turn_page};
 use crate::protocol::{
     ApprovalDecision, ConversationEvent, ConversationKind, ConversationSummary, ProviderId,
     ProviderStatus, WriteState,
 };
 
 const MAX_METADATA_LINE_BYTES: usize = 64 * 1024;
-/// Upper bound on one history page. Real transcripts are long, so the agent —
-/// not the client — decides how much one read may cost.
-const DEFAULT_HISTORY_PAGE_SIZE: usize = 50;
 const MAX_DESKTOP_DEPTH: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,7 +153,7 @@ pub struct ClaudeAdapter {
     desktop_sessions: RwLock<HashMap<String, DesktopSessionTarget>>,
     /// Placeholder id handed to the phone -> the id Claude itself assigned.
     adopted_ids: Arc<RwLock<HashMap<String, String>>>,
-    history_page_size: usize,
+    history_turns: usize,
     /// Model passed to the CLI. `None` leaves the Mac's own default in place;
     /// an operator sets it when that default is not usable for phone-started
     /// turns.
@@ -344,7 +341,7 @@ impl ClaudeAdapter {
             started_cwds: RwLock::new(HashMap::new()),
             desktop_sessions: RwLock::new(HashMap::new()),
             adopted_ids: Arc::new(RwLock::new(HashMap::new())),
-            history_page_size: DEFAULT_HISTORY_PAGE_SIZE,
+            history_turns: DEFAULT_HISTORY_TURNS,
             model: None,
         }
     }
@@ -365,10 +362,10 @@ impl ClaudeAdapter {
         self.adopted_ids.read().await.get(id).cloned()
     }
 
-    /// Narrow the page size. Tests use it to exercise paging on small
-    /// fixtures; production keeps the default bound.
-    pub fn with_history_page_size(mut self, size: usize) -> Self {
-        self.history_page_size = size.max(1);
+    /// Narrow the page to fewer turns. Tests use it to exercise paging on
+    /// small fixtures; production keeps the default.
+    pub fn with_history_turns(mut self, turns: usize) -> Self {
+        self.history_turns = turns.max(1);
         self
     }
 
@@ -743,19 +740,13 @@ impl ProviderAdapter for ClaudeAdapter {
                 next_cursor: None,
             });
         };
-        let events = read_conversation_events(lookup, &path)?;
-        let start = cursor
-            .as_deref()
-            .map(|cursor| cursor.parse::<usize>())
-            .transpose()
-            .map_err(|_| anyhow::anyhow!("invalid history cursor"))?
-            .unwrap_or(0);
-        anyhow::ensure!(start <= events.len(), "history cursor is out of range");
-        let end = (start + self.history_page_size).min(events.len());
+        let turns = group_into_turns(read_conversation_events(lookup, &path)?);
+        let (range, next_cursor) =
+            history_turn_page(turns.len(), cursor.as_deref(), self.history_turns)?;
         Ok(ConversationPage {
             conversation_id: id.to_owned(),
-            events: events[start..end].to_vec(),
-            next_cursor: (end < events.len()).then(|| end.to_string()),
+            events: turns[range].concat(),
+            next_cursor,
         })
     }
 
@@ -1226,6 +1217,29 @@ fn read_conversation_metadata(
         write_state: None,
         write_block_code: None,
     }))
+}
+
+/// Split a normalized transcript into turns.
+///
+/// A turn starts at each user message. Claude records a tool result as a
+/// `user` line too, but normalization already turns those into `tool.completed`
+/// — so a `conversation.user_message` really is the start of a new exchange.
+/// Anything before the first one is bookkeeping that belongs to the oldest
+/// page rather than to no page at all.
+fn group_into_turns(events: Vec<Value>) -> Vec<Vec<Value>> {
+    let mut turns: Vec<Vec<Value>> = Vec::new();
+    for event in events {
+        let starts_turn =
+            event.get("type").and_then(Value::as_str) == Some("conversation.user_message");
+        if starts_turn || turns.is_empty() {
+            turns.push(Vec::new());
+        }
+        turns
+            .last_mut()
+            .expect("a turn was just pushed")
+            .push(event);
+    }
+    turns
 }
 
 fn read_conversation_events(session_id: &str, path: &Path) -> anyhow::Result<Vec<Value>> {

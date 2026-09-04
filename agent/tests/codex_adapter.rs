@@ -73,7 +73,8 @@ fn maps_codex_thread_read_to_bounded_shared_history_events() {
         )
         .unwrap();
     assert_eq!(page.conversation_id, "project-1");
-    assert!(page.next_cursor.is_some());
+    // One complete exchange is one page, however small the turn budget is.
+    assert_eq!(page.next_cursor, None);
     assert!(page.events.iter().any(|event| {
         event["type"] == "conversation.user_message" && event["payload"]["text"] == "hello"
     }));
@@ -791,4 +792,133 @@ fn a_pasted_prompt_does_not_become_the_whole_list_row() {
     let conversations = mapper.map_thread_list(&line).unwrap();
     assert!(conversations[0].title.chars().count() <= 81);
     assert!(conversations[0].title.ends_with('…'));
+}
+
+/// A `thread/read` response with `turns` complete exchanges.
+fn codex_thread_read(turns: usize) -> String {
+    let turns = (1..=turns)
+        .map(|turn| {
+            serde_json::json!({
+                "id": format!("turn-{turn}"),
+                "items": [
+                    {"type": "userMessage", "id": format!("user-{turn}"), "text": format!("ask {turn}")},
+                    {"type": "commandExecution", "id": format!("tool-{turn}"), "command": "ls"},
+                    {"type": "agentMessage", "id": format!("assistant-{turn}"), "text": format!("answer {turn}")},
+                ]
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({"result": {"thread": {"id": "paged", "turns": turns}}}).to_string()
+}
+
+fn codex_user_texts(events: &[serde_json::Value]) -> Vec<String> {
+    events
+        .iter()
+        .filter(|event| event["type"] == "conversation.user_message")
+        .map(|event| {
+            event["payload"]["text"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect()
+}
+
+#[test]
+fn codex_history_opens_on_the_newest_turns_and_pages_backwards() {
+    let mapper = CodexMapper::new(PathBuf::from("/Users/test")).with_history_turns(3);
+    let response = codex_thread_read(7);
+
+    let first = mapper.map_thread_read(&response, "paged", None).unwrap();
+    assert_eq!(
+        codex_user_texts(&first.events),
+        ["ask 5", "ask 6", "ask 7"],
+        "the transcript opens on the newest turns, still oldest-first inside \
+         the page: {:?}",
+        first.events
+    );
+
+    let second = mapper
+        .map_thread_read(&response, "paged", first.next_cursor.clone())
+        .unwrap();
+    assert_eq!(
+        codex_user_texts(&second.events),
+        ["ask 2", "ask 3", "ask 4"]
+    );
+
+    let third = mapper
+        .map_thread_read(&response, "paged", second.next_cursor.clone())
+        .unwrap();
+    assert_eq!(codex_user_texts(&third.events), ["ask 1"]);
+    assert_eq!(third.next_cursor, None, "the oldest page ends the walk");
+}
+
+#[test]
+fn a_codex_turn_is_never_split_across_history_pages() {
+    let mapper = CodexMapper::new(PathBuf::from("/Users/test")).with_history_turns(2);
+    let response = codex_thread_read(5);
+
+    let mut cursor = None;
+    let mut pages = 0;
+    loop {
+        let page = mapper.map_thread_read(&response, "paged", cursor).unwrap();
+        pages += 1;
+        assert_eq!(
+            page.events.first().map(|event| &event["type"]),
+            Some(&serde_json::json!("conversation.user_message")),
+            "a page starts at a turn boundary: {:?}",
+            page.events
+        );
+        assert_eq!(
+            page.events.len(),
+            codex_user_texts(&page.events).len() * 3,
+            "each turn in the page carries its whole exchange: {:?}",
+            page.events
+        );
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+        assert!(pages < 10, "paging must terminate");
+    }
+    assert_eq!(pages, 3, "five turns at two per page is three pages");
+}
+
+#[test]
+fn a_codex_history_item_keeps_its_id_whichever_page_it_lands_on() {
+    // Synthetic ids are derived from the turn's position in the whole thread,
+    // so an item must not be renumbered just because it arrived on a later
+    // page. The phone dedupes history by id.
+    let response = serde_json::json!({"result": {"thread": {"id": "paged", "turns": [
+        {"items": [{"type": "userMessage", "text": "ask 1"}]},
+        {"items": [{"type": "userMessage", "text": "ask 2"}]},
+    ]}}})
+    .to_string();
+
+    let whole = CodexMapper::new(PathBuf::from("/Users/test"))
+        .with_history_turns(5)
+        .map_thread_read(&response, "paged", None)
+        .unwrap();
+    let paged = CodexMapper::new(PathBuf::from("/Users/test")).with_history_turns(1);
+    let newest = paged.map_thread_read(&response, "paged", None).unwrap();
+    let older = paged
+        .map_thread_read(&response, "paged", newest.next_cursor.clone())
+        .unwrap();
+
+    let ids = |events: &[serde_json::Value]| {
+        events
+            .iter()
+            .map(|event| {
+                event["payload"]["messageId"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_owned()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        [ids(&older.events), ids(&newest.events)].concat(),
+        ids(&whole.events),
+        "an item's id must not depend on which page delivered it"
+    );
 }

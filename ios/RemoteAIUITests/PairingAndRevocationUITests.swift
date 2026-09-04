@@ -15,7 +15,11 @@ final class PairingAndRevocationUITests: XCTestCase {
         app.tabBars.buttons["Settings"].tap()
         app.buttons["start-pairing"].tap()
 
-        let field = app.textViews["pairing-paste-field"]
+        // Xcode 26 classifies a vertical SwiftUI TextField as a TextField
+        // from legacy attributes and a TextView from modern ones, so neither
+        // typed query matches reliably. Address it by identifier instead.
+        let field = app.descendants(matching: .any)
+            .matching(identifier: "pairing-paste-field").firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap()
         field.typeText(Self.expiredPairingCode)
@@ -29,7 +33,11 @@ final class PairingAndRevocationUITests: XCTestCase {
         app.tabBars.buttons["Settings"].tap()
         app.buttons["start-pairing"].tap()
 
-        let field = app.textViews["pairing-paste-field"]
+        // Xcode 26 classifies a vertical SwiftUI TextField as a TextField
+        // from legacy attributes and a TextView from modern ones, so neither
+        // typed query matches reliably. Address it by identifier instead.
+        let field = app.descendants(matching: .any)
+            .matching(identifier: "pairing-paste-field").firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap()
         field.typeText("not a pairing code")
@@ -50,8 +58,15 @@ final class PairingAndRevocationUITests: XCTestCase {
         XCTAssertTrue(revoke.waitForExistence(timeout: 5))
         revoke.tap()
 
-        XCTAssertTrue(app.buttons["Revoke"].waitForExistence(timeout: 5))
-        app.buttons["Cancel"].tap()
+        // A confirmationDialog is not an Alert in the accessibility tree, so
+        // the button is addressed by the identifier the view gives it. On this
+        // size class the dialog is a popover, which carries no Cancel button
+        // of its own and is dismissed by tapping outside it.
+        let confirm = app.descendants(matching: .any)
+            .matching(identifier: "revoke-device-confirm").firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95)).tap()
+        XCTAssertFalse(confirm.waitForExistence(timeout: 2), "the dialog stayed up")
         XCTAssertTrue(app.buttons["revoke-device"].exists)
     }
 

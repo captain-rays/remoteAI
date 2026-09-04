@@ -410,7 +410,7 @@ public enum ConversationViewModelSuite {
                 try expectFalse(await model.canStop, "a replayed completed turn is not running")
             },
 
-            TestCase("paged history merges in order and drops redelivered event ids") {
+            TestCase("an earlier page is stored ahead of the newer one, without duplicates") {
                 let duplicate = event(
                     2,
                     "conversation.message_completed",
@@ -459,11 +459,166 @@ public enum ConversationViewModelSuite {
                 let stored = try expectNotNil(
                     cache.history(provider: .codex, conversationId: conversation.id)
                 )
+                // The second page is the earlier one, so what it added is
+                // stored ahead of the first page, and the row both pages
+                // carried is kept once.
                 try expectEqual(stored.events.map(\.messageId), [
+                    second.events[1].messageId,
                     first.events[0].messageId,
                     duplicate.messageId,
-                    second.events[1].messageId,
                 ])
+            },
+
+            TestCase("an older history page is shown above the page already loaded") {
+                // The transcript opens on the newest turns and pages
+                // backwards, so the second page is *earlier* in time and its
+                // rows belong above the first page's.
+                let newest = HistoryPage(
+                    events: [
+                        event(
+                            1, "conversation.user_message",
+                            .userMessage(
+                                MessagePayload(messageId: "user-2", role: .user, text: "later")
+                            )
+                        ),
+                        event(
+                            2, "conversation.message_completed",
+                            .messageCompleted(
+                                MessagePayload(
+                                    messageId: "assistant-2", role: .assistant, text: "second"
+                                )
+                            )
+                        ),
+                    ],
+                    hasMore: true,
+                    nextCursor: "1"
+                )
+                let older = HistoryPage(
+                    events: [
+                        event(
+                            1, "conversation.user_message",
+                            .userMessage(
+                                MessagePayload(messageId: "user-1", role: .user, text: "earlier")
+                            )
+                        ),
+                        event(
+                            2, "conversation.message_completed",
+                            .messageCompleted(
+                                MessagePayload(
+                                    messageId: "assistant-1", role: .assistant, text: "first"
+                                )
+                            )
+                        ),
+                    ],
+                    hasMore: false,
+                    nextCursor: nil
+                )
+                let model = await makeViewModel(
+                    client: ControlledSendClient(mode: .history([newest, older]))
+                )
+
+                await model.loadHistory()
+                try expectEqual(await model.messages.map(\.id), ["user-2", "assistant-2"])
+
+                await model.loadMoreHistory()
+
+                try expectEqual(
+                    await model.messages.map(\.id),
+                    ["user-1", "assistant-1", "user-2", "assistant-2"],
+                    "time still runs downwards; only the scroll position starts at the bottom"
+                )
+                try expectFalse(await model.hasMoreHistory)
+            },
+
+            TestCase("paging back leaves a turn in flight alone") {
+                let newest = HistoryPage(
+                    events: [
+                        event(
+                            1, "conversation.user_message",
+                            .userMessage(
+                                MessagePayload(messageId: "user-2", role: .user, text: "later")
+                            )
+                        )
+                    ],
+                    hasMore: true,
+                    nextCursor: "1"
+                )
+                let older = HistoryPage(
+                    events: [
+                        event(
+                            1, "conversation.user_message",
+                            .userMessage(
+                                MessagePayload(messageId: "user-1", role: .user, text: "earlier")
+                            )
+                        ),
+                        event(
+                            2, "turn.completed",
+                            .turnCompleted(TurnPayload(turnId: "t-1"))
+                        ),
+                    ],
+                    hasMore: false,
+                    nextCursor: nil
+                )
+                let model = await makeViewModel(
+                    client: ControlledSendClient(mode: .history([newest, older]))
+                )
+                await model.loadHistory()
+                // A live turn is streaming while the user scrolls up.
+                await model.handle(delta(9, "streaming", id: "live-1"))
+                try expectTrue(await model.isRunning)
+
+                await model.loadMoreHistory()
+
+                try expectTrue(
+                    await model.isRunning,
+                    "an earlier page carries an old turn.completed; replaying it"
+                        + " must not stop the turn that is running now"
+                )
+                try expectEqual(
+                    await model.messages.map(\.id).last,
+                    "live-1",
+                    "the streaming reply stays at the bottom"
+                )
+            },
+
+            TestCase("a live reply still appends after paging back") {
+                let newest = HistoryPage(
+                    events: [
+                        event(
+                            1, "conversation.user_message",
+                            .userMessage(
+                                MessagePayload(messageId: "user-2", role: .user, text: "later")
+                            )
+                        )
+                    ],
+                    hasMore: true,
+                    nextCursor: "1"
+                )
+                let older = HistoryPage(
+                    events: [
+                        event(
+                            1, "conversation.user_message",
+                            .userMessage(
+                                MessagePayload(messageId: "user-1", role: .user, text: "earlier")
+                            )
+                        )
+                    ],
+                    hasMore: false,
+                    nextCursor: nil
+                )
+                let model = await makeViewModel(
+                    client: ControlledSendClient(mode: .history([newest, older]))
+                )
+                await model.loadHistory()
+                await model.loadMoreHistory()
+
+                await model.handle(delta(9, "fresh", id: "live-1"))
+
+                try expectEqual(
+                    await model.messages.map(\.id),
+                    ["user-1", "user-2", "live-1"],
+                    "a new reply belongs at the bottom, below everything paged in"
+                )
             },
 
             TestCase("a conversation immediately restores cached history before refresh") {

@@ -13,6 +13,36 @@ pub mod claude;
 pub mod codex;
 pub mod mock;
 
+/// Turns carried by one history page.
+///
+/// A page is measured in turns rather than records because the phone opens on
+/// the newest turn and pages backwards: a turn read on its own is a complete
+/// exchange, where a fixed number of records can cut one in half.
+pub const DEFAULT_HISTORY_TURNS: usize = 5;
+
+/// The range of turns one history page covers, newest page first, plus the
+/// cursor for the page before it.
+///
+/// The cursor counts the *oldest* turns still undelivered. Measuring from that
+/// end keeps it valid while the phone pages backwards through a conversation
+/// that is still being appended to — a cursor counted from the newest end
+/// would shift under every live turn and deliver the same one twice.
+pub fn history_turn_page(
+    total_turns: usize,
+    cursor: Option<&str>,
+    turns_per_page: usize,
+) -> anyhow::Result<(std::ops::Range<usize>, Option<String>)> {
+    let end = match cursor {
+        Some(cursor) => cursor
+            .parse::<usize>()
+            .map_err(|_| anyhow::anyhow!("invalid history cursor"))?,
+        None => total_turns,
+    };
+    anyhow::ensure!(end <= total_turns, "history cursor is out of range");
+    let start = end.saturating_sub(turns_per_page.max(1));
+    Ok((start..end, (start > 0).then(|| start.to_string())))
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationPage {

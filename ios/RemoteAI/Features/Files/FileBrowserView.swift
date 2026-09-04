@@ -99,6 +99,7 @@ public struct FileBrowserView: View {
                 Button("Show them") {
                     Task { await model.revealSensitiveEntries(confirmed: true) }
                 }
+                .accessibilityIdentifier("reveal-hidden-confirm")
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("These folders can contain sensitive files.")

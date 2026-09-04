@@ -581,7 +581,7 @@ async fn history_pages_skip_records_with_nothing_to_show() {
     );
     std::fs::write(&project_file, lines.join("\n")).unwrap();
 
-    let adapter = ClaudeAdapter::new("claude", temp.path()).with_history_page_size(3);
+    let adapter = ClaudeAdapter::new("claude", temp.path()).with_history_turns(3);
     adapter.list_conversations().await.unwrap();
 
     let page = adapter
@@ -639,7 +639,7 @@ async fn a_signature_only_thinking_block_is_not_shown_as_reasoning() {
 }
 
 #[tokio::test]
-async fn loads_paged_claude_history_with_normalized_events() {
+async fn loads_claude_history_as_normalized_events() {
     use remote_ai_agent::adapters::ProviderAdapter;
 
     let temp = tempfile::tempdir().unwrap();
@@ -652,35 +652,33 @@ async fn loads_paged_claude_history_with_normalized_events() {
         include_str!("fixtures/claude/projects/project-a/session-a.jsonl"),
     )
     .unwrap();
-    let adapter = ClaudeAdapter::new("claude", temp.path()).with_history_page_size(3);
+    let adapter = ClaudeAdapter::new("claude", temp.path()).with_history_turns(3);
     adapter.list_conversations().await.unwrap();
 
-    let first = adapter.load_conversation("session-a", None).await.unwrap();
-    assert_eq!(first.events.len(), 3);
-    assert_eq!(first.next_cursor.as_deref(), Some("3"));
-    assert_eq!(first.events[0]["type"], "conversation.user_message");
-    assert_eq!(first.events[0]["payload"]["messageId"], "user-1");
-    assert_eq!(first.events[0]["payload"]["text"], "Build project alpha");
-    assert_eq!(first.events[1]["type"], "conversation.reasoning_completed");
-    assert_eq!(first.events[1]["payload"]["reasoningId"], "assistant-1");
-    assert_eq!(first.events[2]["type"], "conversation.message_completed");
-    assert_eq!(first.events[2]["payload"]["text"], "done");
-
-    let second = adapter
-        .load_conversation("session-a", first.next_cursor)
-        .await
-        .unwrap();
-    assert_eq!(second.events.len(), 3);
-    assert_eq!(second.next_cursor, None);
-    assert_eq!(second.events[0]["type"], "tool.started");
-    assert_eq!(second.events[1]["type"], "tool.completed");
-    assert_eq!(second.events[2]["type"], "turn.completed");
-    assert!(
-        first
-            .events
+    // This fixture is one complete exchange, so it is one page however small
+    // the turn budget is: a page never cuts a turn in half.
+    let page = adapter.load_conversation("session-a", None).await.unwrap();
+    assert_eq!(page.next_cursor, None);
+    assert_eq!(
+        page.events
             .iter()
-            .all(|event| !second.events.contains(event))
+            .map(|event| event["type"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>(),
+        [
+            "conversation.user_message",
+            "conversation.reasoning_completed",
+            "conversation.message_completed",
+            "tool.started",
+            "tool.completed",
+            "turn.completed",
+        ],
+        "the page reads oldest-first: {:?}",
+        page.events
     );
+    assert_eq!(page.events[0]["payload"]["messageId"], "user-1");
+    assert_eq!(page.events[0]["payload"]["text"], "Build project alpha");
+    assert_eq!(page.events[1]["payload"]["reasoningId"], "assistant-1");
+    assert_eq!(page.events[2]["payload"]["text"], "done");
 }
 
 #[tokio::test]
@@ -1114,4 +1112,184 @@ async fn without_a_desktop_catalog_cli_session_directories_are_the_projects() {
             .collect::<Vec<_>>(),
         [canonical(&project).as_str()]
     );
+}
+
+/// Write a transcript of `turns` complete exchanges, each one user message
+/// followed by a tool call, its result and an assistant reply.
+fn write_claude_turns(root: &std::path::Path, session: &str, turns: usize) {
+    let path = root
+        .join(".claude/projects/paging")
+        .join(format!("{session}.jsonl"));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut lines = vec![format!(
+        r#"{{"type":"system","subtype":"init","sessionId":"{session}","cwd":"{}"}}"#,
+        root.display()
+    )];
+    for turn in 1..=turns {
+        lines.push(format!(
+            r#"{{"type":"user","sessionId":"{session}","uuid":"u-{turn}","cwd":"{}","message":{{"content":[{{"type":"text","text":"ask {turn}"}}]}}}}"#,
+            root.display()
+        ));
+        lines.push(format!(
+            r#"{{"type":"assistant","sessionId":"{session}","uuid":"t-{turn}","message":{{"content":[{{"type":"tool_use","id":"tool-{turn}","name":"Bash","input":{{}}}}]}}}}"#
+        ));
+        lines.push(format!(
+            r#"{{"type":"user","sessionId":"{session}","uuid":"r-{turn}","message":{{"content":[{{"type":"tool_result","tool_use_id":"tool-{turn}","content":"out {turn}"}}]}}}}"#
+        ));
+        lines.push(format!(
+            r#"{{"type":"assistant","sessionId":"{session}","uuid":"a-{turn}","message":{{"content":[{{"type":"text","text":"answer {turn}"}}]}}}}"#
+        ));
+        lines.push(format!(
+            r#"{{"type":"result","subtype":"success","sessionId":"{session}","is_error":false}}"#
+        ));
+    }
+    std::fs::write(&path, lines.join("\n")).unwrap();
+}
+
+fn user_texts(events: &[serde_json::Value]) -> Vec<String> {
+    events
+        .iter()
+        .filter(|event| event["type"] == "conversation.user_message")
+        .map(|event| {
+            event["payload"]["text"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn claude_history_opens_on_the_newest_turns_and_pages_backwards() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let temp = tempfile::tempdir().unwrap();
+    write_claude_turns(temp.path(), "paged", 7);
+    let adapter = ClaudeAdapter::new("claude", temp.path()).with_history_turns(3);
+    adapter.list_conversations().await.unwrap();
+
+    let first = adapter.load_conversation("paged", None).await.unwrap();
+    assert_eq!(
+        user_texts(&first.events),
+        ["ask 5", "ask 6", "ask 7"],
+        "the transcript opens on the newest turns, still oldest-first inside \
+         the page: {:?}",
+        first.events
+    );
+
+    let second = adapter
+        .load_conversation("paged", first.next_cursor.clone())
+        .await
+        .unwrap();
+    assert_eq!(user_texts(&second.events), ["ask 2", "ask 3", "ask 4"]);
+
+    let third = adapter
+        .load_conversation("paged", second.next_cursor.clone())
+        .await
+        .unwrap();
+    assert_eq!(user_texts(&third.events), ["ask 1"]);
+    assert_eq!(third.next_cursor, None, "the oldest page ends the walk");
+}
+
+#[tokio::test]
+async fn a_claude_turn_is_never_split_across_history_pages() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let temp = tempfile::tempdir().unwrap();
+    write_claude_turns(temp.path(), "whole", 5);
+    let adapter = ClaudeAdapter::new("claude", temp.path()).with_history_turns(2);
+    adapter.list_conversations().await.unwrap();
+
+    let mut cursor = None;
+    let mut pages = 0;
+    loop {
+        let page = adapter
+            .load_conversation("whole", cursor.clone())
+            .await
+            .unwrap();
+        pages += 1;
+        assert_eq!(
+            page.events.first().map(|event| &event["type"]),
+            Some(&serde_json::json!("conversation.user_message")),
+            "a page starts at a turn boundary: {:?}",
+            page.events
+        );
+        // Every turn in the page carries its whole exchange.
+        let turns = user_texts(&page.events).len();
+        assert_eq!(
+            page.events
+                .iter()
+                .filter(|event| event["type"] == "turn.completed")
+                .count(),
+            turns,
+            "a page ends on a completed turn: {:?}",
+            page.events
+        );
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+        assert!(pages < 10, "paging must terminate");
+    }
+    assert_eq!(pages, 3, "five turns at two per page is three pages");
+}
+
+#[tokio::test]
+async fn a_claude_history_cursor_survives_a_turn_arriving_while_paging() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let temp = tempfile::tempdir().unwrap();
+    write_claude_turns(temp.path(), "growing", 6);
+    let adapter = ClaudeAdapter::new("claude", temp.path()).with_history_turns(2);
+    adapter.list_conversations().await.unwrap();
+
+    let first = adapter.load_conversation("growing", None).await.unwrap();
+    assert_eq!(user_texts(&first.events), ["ask 5", "ask 6"]);
+
+    // The Mac keeps working while the phone is scrolled up.
+    write_claude_turns(temp.path(), "growing", 8);
+    let second = adapter
+        .load_conversation("growing", first.next_cursor)
+        .await
+        .unwrap();
+    assert_eq!(
+        user_texts(&second.events),
+        ["ask 3", "ask 4"],
+        "the page before the one already shown must not repeat a turn"
+    );
+}
+
+#[tokio::test]
+#[ignore = "read-only smoke test against this Mac's real Claude sessions"]
+async fn reports_the_first_history_page_of_a_real_session() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let home = std::env::var("HOME").unwrap();
+    let adapter = ClaudeAdapter::new("claude", &home);
+    let projects = adapter.list_projects().await.unwrap();
+    let project = projects.first().expect("a Claude project");
+    let conversations = adapter
+        .list_project_conversations(&project.id)
+        .await
+        .unwrap();
+    let conversation = conversations.first().expect("a session in that project");
+
+    let page = adapter
+        .load_conversation(&conversation.id, None)
+        .await
+        .unwrap();
+    let turns = page
+        .events
+        .iter()
+        .filter(|event| event["type"] == "conversation.user_message")
+        .count();
+    println!(
+        "REAL_HISTORY project={} session={} events={} turns={} next={:?}",
+        project.display_path,
+        conversation.id,
+        page.events.len(),
+        turns,
+        page.next_cursor
+    );
+    assert!(turns <= 5, "a page carries at most five turns");
 }

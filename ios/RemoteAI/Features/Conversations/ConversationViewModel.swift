@@ -107,6 +107,10 @@ public final class ConversationViewModel {
     private var failedMessageId: String?
     /// Provider echoes of the local user turn that have already been folded in.
     private var reconciledUserEchoes: Set<String> = []
+    /// Distinguishes rows the provider gave no id of its own. It counts rather
+    /// than reading `items.count`, which restarts while an earlier page is
+    /// replayed into a timeline of its own.
+    private var syntheticRowCount = 0
 
     /// Prefix of an optimistic user message, which exists before any provider
     /// has given the turn an id.
@@ -124,7 +128,7 @@ public final class ConversationViewModel {
             provider: conversation.provider,
             conversationId: conversation.id
         ) {
-            mergeHistory(cached.events)
+            mergeHistory(cached.events, isEarlierThanWhatIsShown: false)
             hasMoreHistory = cached.hasMore
             historyCursor = cached.nextCursor
         }
@@ -179,7 +183,9 @@ public final class ConversationViewModel {
             )
             hasMoreHistory = page.hasMore
             historyCursor = page.nextCursor
-            mergeHistory(page.events)
+            // Only a cursored read walks backwards. The first page of a screen
+            // — and a refresh — is the newest end of the transcript.
+            mergeHistory(page.events, isEarlierThanWhatIsShown: cursor != nil)
             cache?.storeHistory(
                 HistorySnapshot(
                     provider: conversation.provider,
@@ -194,12 +200,46 @@ public final class ConversationViewModel {
         }
     }
 
-    private func mergeHistory(_ events: [EventEnvelope]) {
-        for envelope in events where envelope.conversationId == conversation.id {
-            guard historyEventIds.insert(envelope.messageId).inserted else { continue }
-            historyEvents.append(envelope)
-            apply(envelope.event)
+    /// Fold one history page into the transcript.
+    ///
+    /// Time runs downwards on screen, so a page read with a cursor — which is
+    /// earlier than everything already shown — is replayed into a timeline of
+    /// its own and that timeline goes above the rest. Replaying it in place
+    /// would append its rows to the bottom and reorder the conversation.
+    ///
+    /// The replay must not disturb what is happening *now*: an earlier page
+    /// ends in its own `turn.completed`, and applying that would stop a turn
+    /// that is still running. Live state is therefore restored afterwards.
+    private func mergeHistory(_ events: [EventEnvelope], isEarlierThanWhatIsShown: Bool) {
+        let fresh = events.filter { envelope in
+            envelope.conversationId == conversation.id
+                && historyEventIds.insert(envelope.messageId).inserted
         }
+        guard !fresh.isEmpty else { return }
+
+        guard isEarlierThanWhatIsShown else {
+            historyEvents.append(contentsOf: fresh)
+            for envelope in fresh { apply(envelope.event) }
+            return
+        }
+
+        historyEvents.insert(contentsOf: fresh, at: 0)
+        let shown = items
+        let running = isRunning
+        let approval = pendingApproval
+        let streamId = currentStreamId
+        items = []
+        currentStreamId = nil
+        for envelope in fresh { apply(envelope.event) }
+        items += shown
+        isRunning = running
+        pendingApproval = approval
+        currentStreamId = streamId
+    }
+
+    private func nextSyntheticId() -> Int {
+        syntheticRowCount += 1
+        return syntheticRowCount
     }
 
     public func send(_ text: String) async {
@@ -386,7 +426,7 @@ public final class ConversationViewModel {
     }
 
     private func appendDelta(_ payload: MessagePayload) {
-        let messageId = payload.messageId ?? currentStreamId ?? "stream-\(items.count)"
+        let messageId = payload.messageId ?? currentStreamId ?? "stream-\(nextSyntheticId())"
         currentStreamId = messageId
 
         if let index = indexOfMessage(messageId) {
@@ -414,8 +454,8 @@ public final class ConversationViewModel {
     ) {
         let messageId =
             payload.messageId
-            ?? (payload.role == .user ? "user-\(items.count)" : currentStreamId)
-            ?? "message-\(items.count)"
+            ?? (payload.role == .user ? "user-\(nextSyntheticId())" : currentStreamId)
+            ?? "message-\(nextSyntheticId())"
 
         if let index = indexOfMessage(messageId) {
             guard case var .message(item) = items[index] else { return }
@@ -506,7 +546,7 @@ public final class ConversationViewModel {
 
     private func appendError(code: String, message: String) {
         items.append(
-            .error(ErrorItem(id: "\(code)-\(items.count)", code: code, message: message))
+            .error(ErrorItem(id: "\(code)-\(nextSyntheticId())", code: code, message: message))
         )
     }
 }

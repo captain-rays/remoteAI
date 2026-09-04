@@ -70,6 +70,7 @@ public struct SettingsView: View {
                         await pairing.revoke()
                     }
                 }
+                .accessibilityIdentifier("revoke-device-confirm")
                 Button("Cancel", role: .cancel) {}
             }
         }

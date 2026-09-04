@@ -324,6 +324,39 @@ public actor MockAgentClient: AgentClient {
                 ),
             ],
         ]
+
+        // One conversation long enough to page through, so the transcript's
+        // "open at the newest end, load earlier on scroll" behaviour can be
+        // exercised without a live provider.
+        for turn in 1...9 {
+            history["claude-project-api-1", default: []].append(
+                EventEnvelope(
+                    messageId: "mock-user-\(turn)",
+                    sequence: turn * 2 - 1,
+                    conversationId: "claude-project-api-1",
+                    rawType: "conversation.user_message",
+                    event: .userMessage(
+                        MessagePayload(
+                            messageId: "mock-user-\(turn)", role: .user, text: "question \(turn)"
+                        )
+                    )
+                )
+            )
+            history["claude-project-api-1", default: []].append(
+                EventEnvelope(
+                    messageId: "mock-assistant-\(turn)",
+                    sequence: turn * 2,
+                    conversationId: "claude-project-api-1",
+                    rawType: "conversation.message_completed",
+                    event: .messageCompleted(
+                        MessagePayload(
+                            messageId: "mock-assistant-\(turn)", role: .assistant,
+                            text: "answer \(turn)"
+                        )
+                    )
+                )
+            )
+        }
         // Live events must never reuse a seeded sequence number.
         self.sequence = seeded
     }
@@ -401,10 +434,16 @@ public actor MockAgentClient: AgentClient {
         }
         guard conversation.provider == provider else { throw AgentClientError.providerMismatch }
 
+        // The newest page first, then the page before it. The cursor names the
+        // oldest event already delivered, so it is read as an upper bound —
+        // ignoring it, as this mock used to, replays the same page forever.
         let all = history[conversationId] ?? []
-        let start = all.count > limit ? all.count - limit : 0
+        let end = cursor.flatMap { cursor in
+            all.firstIndex { $0.messageId == cursor }
+        } ?? all.count
+        let start = end > limit ? end - limit : 0
         return HistoryPage(
-            events: Array(all[start...]),
+            events: Array(all[start..<end]),
             hasMore: start > 0,
             nextCursor: start > 0 ? all[start].messageId : nil
         )
