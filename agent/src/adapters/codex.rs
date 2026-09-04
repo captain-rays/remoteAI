@@ -434,7 +434,11 @@ impl CodexAdapter {
 #[async_trait]
 impl ProviderAdapter for CodexAdapter {
     async fn status(&self) -> ProviderStatus {
-        self.status.clone()
+        let mut status = self.status.clone();
+        status.reason = self
+            .daily_catalog_diagnostic_code()
+            .map(str::to_owned);
+        status
     }
 
     async fn list_conversations(&self) -> anyhow::Result<Vec<ConversationSummary>> {

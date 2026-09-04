@@ -56,6 +56,10 @@ async fn codex_chats_without_host_bridge_are_empty_and_diagnosable() {
         adapter.daily_catalog_diagnostic_code(),
         Some("codex_chats_host_bridge_unavailable")
     );
+    assert_eq!(
+        adapter.status().await.reason.as_deref(),
+        Some("codex_chats_host_bridge_unavailable")
+    );
 }
 
 #[tokio::test]
