@@ -123,6 +123,48 @@ public enum RemoteAgentClientSuite {
                 try expectEqual(completed.toolCallId, "tool-1")
                 try expectEqual(completed.detail, "finished")
             },
+
+            TestCase("real file browsing derives the home and decodes absolute entries") {
+                let client = try makeClient()
+
+                let home = try await client.initialDirectory()
+                let work = try await client.listFiles(
+                    path: "/Users/dev/work", showHidden: false
+                )
+
+                try expectEqual(home.path, "/Users/dev")
+                try expectEqual(home.parentPath, nil, "the configured file root has no parent")
+                try expectEqual(home.entries.map(\.name), ["work", "README.md"])
+                try expectEqual(work.path, "/Users/dev/work")
+                try expectEqual(work.parentPath, "/Users/dev")
+                try expectEqual(work.entries.map(\.path), ["/Users/dev/work/api"])
+            },
+
+            TestCase("real preview combines metadata with raw bounded bytes") {
+                let client = try makeClient()
+
+                let preview = try await client.filePreview(
+                    path: "/Users/dev/README.md", maxBytes: 5
+                )
+
+                try expectEqual(preview.path, "/Users/dev/README.md")
+                try expectEqual(preview.text, "hello")
+                try expectEqual(preview.byteCount, 12)
+                try expectTrue(preview.truncated)
+            },
+
+            TestCase("file path rejection is surfaced as a stable client error") {
+                let client = try makeClient()
+
+                do {
+                    _ = try await client.listFiles(path: "/outside", showHidden: false)
+                    throw ExpectationFailure(
+                        message: "outside path should be rejected", file: #filePath, line: #line
+                    )
+                } catch let error as AgentClientError {
+                    try expectEqual(error, .rejected("path_outside_root"))
+                }
+            },
         ]
     )
 }
@@ -157,18 +199,54 @@ private final class CatalogURLProtocol: URLProtocol {
             finish(
                 body: #"[{"id":"codex-project","provider":"codex","kind":"project","title":"Project","projectId":"codex:/Users/dev/work/api","projectPath":"/Users/dev/work/api","updatedAt":"2026-09-03T00:00:00Z","status":"idle"}]"#
             )
+        } else if url.path == "/v1/files/metadata", query("path") == "." {
+            finish(
+                body: #"{"path":"/Users/dev","name":"dev","kind":"directory","hidden":false,"readable":true,"sensitive":false}"#
+            )
+        } else if url.path == "/v1/files/metadata",
+                  query("path") == "/Users/dev/README.md"
+        {
+            finish(
+                body: #"{"path":"/Users/dev/README.md","name":"README.md","kind":"file","size":12,"hidden":false,"readable":true,"sensitive":false}"#
+            )
+        } else if url.path == "/v1/files/list", query("path") == "/Users/dev" {
+            finish(
+                body: #"[{"path":"/Users/dev/README.md","name":"README.md","kind":"file","size":12,"hidden":false,"readable":true,"sensitive":false},{"path":"/Users/dev/work","name":"work","kind":"directory","hidden":false,"readable":true,"sensitive":false}]"#
+            )
+        } else if url.path == "/v1/files/list", query("path") == "/Users/dev/work" {
+            finish(
+                body: #"[{"path":"/Users/dev/work/api","name":"api","kind":"directory","hidden":false,"readable":true,"sensitive":false}]"#
+            )
+        } else if url.path == "/v1/files/list", query("path") == "/outside" {
+            finish(status: 403, body: #"{"error":"path_outside_root"}"#)
+        } else if url.path == "/v1/files/preview",
+                  query("path") == "/Users/dev/README.md",
+                  query("maxBytes") == "5"
+        {
+            finish(data: Data("hello".utf8), contentType: "application/octet-stream")
         } else {
             finish(status: 404, body: "{}")
         }
     }
 
+    private func query(_ name: String) -> String? {
+        URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == name }?.value
+    }
+
     private func finish(status: Int = 200, body: String) {
+        finish(data: Data(body.utf8), status: status, contentType: "application/json")
+    }
+
+    private func finish(
+        data: Data, status: Int = 200, contentType: String
+    ) {
         let response = HTTPURLResponse(
             url: request.url!, statusCode: status, httpVersion: "HTTP/1.1",
-            headerFields: ["Content-Type": "application/json"]
+            headerFields: ["Content-Type": contentType]
         )!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocol(self, didLoad: data)
         client?.urlProtocolDidFinishLoading(self)
     }
 }

@@ -16,6 +16,12 @@ public actor RemoteAgentClient: AgentClient {
     private var socket: URLSessionWebSocketTask?
     private var keys: SessionKeys?
     private var sendCounter: UInt64 = 0
+    private var fileRoot: String?
+
+    private struct HTTPFailure: Error {
+        let statusCode: Int
+        let body: Data
+    }
 
     public init(store: SecretStore, session: URLSession = .shared) {
         self.store = store
@@ -102,19 +108,85 @@ public actor RemoteAgentClient: AgentClient {
         return (origin, identity, deviceId)
     }
 
-    private func rest<T: Decodable>(_ method: String, path: String, query: [URLQueryItem] = []) async throws -> T {
+    private func restData(
+        _ method: String,
+        path: String,
+        query: [URLQueryItem] = [],
+        body: Data? = nil,
+        contentType: String? = nil
+    ) async throws -> Data {
         let (origin, _, deviceId) = try originAndIdentity()
         var components = URLComponents(url: try Self.endpoint(origin: origin, path: path), resolvingAgainstBaseURL: false)!
         components.queryItems = query.isEmpty ? nil : query
         var request = URLRequest(url: components.url!)
         request.httpMethod = method
+        request.httpBody = body
         request.setValue(deviceId, forHTTPHeaderField: "x-remoteai-device")
+        if let contentType {
+            request.setValue(contentType, forHTTPHeaderField: "content-type")
+        }
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw AgentClientError.transport("invalid response") }
         guard (200..<300).contains(http.statusCode) else {
-            throw AgentClientError.transport("http_\(http.statusCode)")
+            throw HTTPFailure(statusCode: http.statusCode, body: data)
+        }
+        return data
+    }
+
+    private func rest<T: Decodable>(_ method: String, path: String, query: [URLQueryItem] = []) async throws -> T {
+        let data: Data
+        do {
+            data = try await restData(method, path: path, query: query)
+        } catch let failure as HTTPFailure {
+            throw Self.genericHTTPError(failure.statusCode)
         }
         do { return try ProtocolCoding.decoder.decode(T.self, from: data) }
+        catch { throw AgentClientError.transport("decode_failed") }
+    }
+
+    private static func genericHTTPError(_ statusCode: Int) -> AgentClientError {
+        switch statusCode {
+        case 401: return .notPaired
+        case 404: return .notFound("remote_resource")
+        case 409: return .rejected("conflict")
+        case 503: return .transport("service_unavailable")
+        default: return .transport("http_\(statusCode)")
+        }
+    }
+
+    private static func fileHTTPError(_ statusCode: Int) -> AgentClientError {
+        switch statusCode {
+        case 401: return .notPaired
+        case 403: return .rejected("path_outside_root")
+        case 404: return .notFound("file")
+        case 503: return .transport("files_unavailable")
+        default: return .transport("files_http_\(statusCode)")
+        }
+    }
+
+    private static func validateFilePath(_ path: String) throws {
+        guard path == "." || path.hasPrefix("/") else {
+            throw AgentClientError.invalidRequest("file_path_must_be_absolute")
+        }
+        let components = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard !components.contains(where: { $0 == ".." || $0 == "." }) || path == "." else {
+            throw AgentClientError.rejected("path_traversal")
+        }
+    }
+
+    private static func parentPath(of path: String, boundedBy root: String?) -> String? {
+        if path == root { return nil }
+        let parent = (path as NSString).deletingLastPathComponent
+        guard !parent.isEmpty, parent != path else { return nil }
+        if let root {
+            let prefix = root.hasSuffix("/") ? root : root + "/"
+            guard parent == root || parent.hasPrefix(prefix) else { return nil }
+        }
+        return parent
+    }
+
+    private func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+        do { return try ProtocolCoding.decoder.decode(type, from: data) }
         catch { throw AgentClientError.transport("decode_failed") }
     }
 
@@ -323,9 +395,78 @@ public actor RemoteAgentClient: AgentClient {
 
     public func interrupt(provider: ProviderId, conversationId: String) async throws { throw AgentClientError.transport("interrupt requires GatewaySession") }
     public func decideApproval(id: String, decision: ApprovalDecision) async throws { throw AgentClientError.transport("approval requires GatewaySession") }
-    public func initialDirectory() async throws -> DirectoryListing { throw AgentClientError.transport("files require GatewaySession") }
-    public func listFiles(path: String, showHidden: Bool) async throws -> DirectoryListing { throw AgentClientError.transport("files require GatewaySession") }
-    public func filePreview(path: String, maxBytes: Int) async throws -> FilePreview { throw AgentClientError.transport("files require GatewaySession") }
+    public func initialDirectory() async throws -> DirectoryListing {
+        do {
+            let metadataData = try await restData(
+                "GET", path: "v1/files/metadata",
+                query: [.init(name: "path", value: ".")]
+            )
+            let root = try decode(FileEntry.self, from: metadataData)
+            guard root.kind == .directory, root.path.hasPrefix("/") else {
+                throw AgentClientError.transport("invalid_file_root")
+            }
+            fileRoot = root.path
+            return try await listFiles(path: root.path, showHidden: false)
+        } catch let failure as HTTPFailure {
+            throw Self.fileHTTPError(failure.statusCode)
+        }
+    }
+
+    public func listFiles(path: String, showHidden: Bool) async throws -> DirectoryListing {
+        try Self.validateFilePath(path)
+        do {
+            let data = try await restData(
+                "GET", path: "v1/files/list",
+                query: [
+                    .init(name: "path", value: path),
+                    .init(name: "includeSensitive", value: showHidden ? "true" : "false"),
+                ]
+            )
+            let entries = try decode([FileEntry].self, from: data).sorted { left, right in
+                if left.kind == .directory, right.kind != .directory { return true }
+                if left.kind != .directory, right.kind == .directory { return false }
+                return left.name.localizedCaseInsensitiveCompare(right.name) == .orderedAscending
+            }
+            return DirectoryListing(
+                path: path,
+                parentPath: Self.parentPath(of: path, boundedBy: fileRoot),
+                entries: entries
+            )
+        } catch let failure as HTTPFailure {
+            throw Self.fileHTTPError(failure.statusCode)
+        }
+    }
+
+    public func filePreview(path: String, maxBytes: Int) async throws -> FilePreview {
+        try Self.validateFilePath(path)
+        let boundedBytes = max(0, min(maxBytes, 1_048_576))
+        do {
+            let metadataData = try await restData(
+                "GET", path: "v1/files/metadata",
+                query: [.init(name: "path", value: path)]
+            )
+            let entry = try decode(FileEntry.self, from: metadataData)
+            guard entry.kind == .file else {
+                throw AgentClientError.invalidRequest("preview_requires_file")
+            }
+            let bytes = try await restData(
+                "GET", path: "v1/files/preview",
+                query: [
+                    .init(name: "path", value: path),
+                    .init(name: "maxBytes", value: String(boundedBytes)),
+                ]
+            )
+            let sourceSize = entry.size.flatMap(Int.init(exactly:)) ?? bytes.count
+            return FilePreview(
+                path: entry.path,
+                text: String(data: bytes, encoding: .utf8),
+                byteCount: sourceSize,
+                truncated: sourceSize > bytes.count
+            )
+        } catch let failure as HTTPFailure {
+            throw Self.fileHTTPError(failure.statusCode)
+        }
+    }
     public func createTransfer(_ request: TransferRequest) async throws -> TransferTicket { throw AgentClientError.transport("transfers require explicit REST API") }
     public func uploadChunk(transferId: String, index: Int, data: Data) async throws { throw AgentClientError.transport("transfers require explicit REST API") }
     public func downloadChunk(transferId: String, index: Int) async throws -> Data { throw AgentClientError.transport("transfers require explicit REST API") }
