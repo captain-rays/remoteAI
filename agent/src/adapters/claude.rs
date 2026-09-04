@@ -493,10 +493,7 @@ impl ProviderAdapter for ClaudeAdapter {
             paths.extend(desktop.user_selected_folders.iter().cloned());
             for path in paths {
                 let canonical_path = canonical_or_normalized(&path);
-                let id = crate::catalog::project_id_for_path(
-                    ProviderId::Claude,
-                    &canonical_path,
-                );
+                let id = crate::catalog::project_id_for_path(ProviderId::Claude, &canonical_path);
                 let updated_at = desktop.updated_at.max(desktop.created_at);
                 let display_path = display_path(&canonical_path, &self.mapper.home);
                 let title = Path::new(&canonical_path)
@@ -848,15 +845,13 @@ fn collect_desktop_sessions(home: &Path) -> anyhow::Result<Vec<DesktopSessionMet
             .and_then(Value::as_str)
             .filter(|id| !id.is_empty())
             .map(str::to_owned);
-        let transcript_path = cli_id
-            .as_ref()
-            .and_then(|cli_id| {
-                find_cli_transcript(home, cli_id).or_else(|| {
-                    path.parent()
-                        .map(|parent| parent.join(format!("{cli_id}.jsonl")))
-                        .filter(|candidate| candidate.is_file())
-                })
-            });
+        let transcript_path = cli_id.as_ref().and_then(|cli_id| {
+            find_cli_transcript(home, cli_id).or_else(|| {
+                path.parent()
+                    .map(|parent| parent.join(format!("{cli_id}.jsonl")))
+                    .filter(|candidate| candidate.is_file())
+            })
+        });
         let user_selected_folders = value
             .get("userSelectedFolders")
             .and_then(Value::as_array)

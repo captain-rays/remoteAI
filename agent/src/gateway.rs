@@ -255,10 +255,17 @@ async fn daily_conversations(
         let diagnostic = adapter.daily_catalog_diagnostic_code();
         match adapter.list_daily_conversations().await {
             Ok(sessions) => {
-                state.sessions.write().await.insert(provider, sessions.clone());
+                state
+                    .sessions
+                    .write()
+                    .await
+                    .insert(provider, sessions.clone());
                 (sessions, diagnostic)
             }
-            Err(_) => (Vec::new(), diagnostic.or(Some("provider_catalog_unavailable"))),
+            Err(_) => (
+                Vec::new(),
+                diagnostic.or(Some("provider_catalog_unavailable")),
+            ),
         }
     } else {
         let sessions = state

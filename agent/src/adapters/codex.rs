@@ -435,9 +435,7 @@ impl CodexAdapter {
 impl ProviderAdapter for CodexAdapter {
     async fn status(&self) -> ProviderStatus {
         let mut status = self.status.clone();
-        status.reason = self
-            .daily_catalog_diagnostic_code()
-            .map(str::to_owned);
+        status.reason = self.daily_catalog_diagnostic_code().map(str::to_owned);
         status
     }
 

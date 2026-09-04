@@ -11,7 +11,12 @@ use remote_ai_agent::protocol::{
 use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
-fn summary(id: &str, title: &str, kind: ConversationKind, path: Option<&str>) -> ConversationSummary {
+fn summary(
+    id: &str,
+    title: &str,
+    kind: ConversationKind,
+    path: Option<&str>,
+) -> ConversationSummary {
     ConversationSummary {
         id: id.into(),
         provider: ProviderId::Codex,
@@ -68,14 +73,25 @@ async fn codex_chats_accept_only_host_chatgpt_rows_and_clear_project_identity() 
         FixtureCodexHostBridge {
             chats: vec![
                 summary("chat", "Chat", ConversationKind::Daily, None),
-                summary("wrong", "Wrong project task", ConversationKind::Project, Some("/tmp")),
+                summary(
+                    "wrong",
+                    "Wrong project task",
+                    ConversationKind::Project,
+                    Some("/tmp"),
+                ),
             ],
         },
     ));
 
     let chats = adapter.list_daily_conversations().await.unwrap();
 
-    assert_eq!(chats.iter().map(|chat| chat.id.as_str()).collect::<Vec<_>>(), ["chat"]);
+    assert_eq!(
+        chats
+            .iter()
+            .map(|chat| chat.id.as_str())
+            .collect::<Vec<_>>(),
+        ["chat"]
+    );
     assert!(chats.iter().all(|chat| {
         chat.provider == ProviderId::Codex
             && chat.kind == ConversationKind::Daily
@@ -141,9 +157,13 @@ async fn codex_projects_keep_same_paths_separate_and_select_one_primary_root() {
     let projects = adapter.list_projects().await.unwrap();
 
     assert_eq!(projects.len(), 3);
-    assert_eq!(projects.iter().map(|project| project.id.as_str()).collect::<Vec<_>>(), [
-        "project-a", "project-b", "project-c"
-    ]);
+    assert_eq!(
+        projects
+            .iter()
+            .map(|project| project.id.as_str())
+            .collect::<Vec<_>>(),
+        ["project-a", "project-b", "project-c"]
+    );
     assert_eq!(projects[0].canonical_path, "/tmp/shared");
     assert_eq!(projects[1].canonical_path, "/tmp/shared");
     assert_eq!(projects[2].canonical_path, "/tmp/secondary");
@@ -214,21 +234,32 @@ async fn claude_prefers_new_desktop_root_excludes_archived_and_groups_six_projec
     assert_eq!(projects.len(), 6);
     assert!(!chats.iter().any(|chat| chat.id == "archived"));
     assert!(!chats.iter().any(|chat| chat.id == "legacy"));
-    assert!(chats.iter().all(|chat| chat.kind == ConversationKind::Daily));
-    assert!(projects.iter().all(|project| project.provider == ProviderId::Claude));
+    assert!(
+        chats
+            .iter()
+            .all(|chat| chat.kind == ConversationKind::Daily)
+    );
+    assert!(
+        projects
+            .iter()
+            .all(|project| project.provider == ProviderId::Claude)
+    );
     let mut titles = projects
         .iter()
         .map(|project| project.title.as_str())
         .collect::<Vec<_>>();
     titles.sort_unstable();
-    assert_eq!(titles, [
-        "beem-agent-data-server",
-        "beem-ai-data-server",
-        "new-agent",
-        "pi-agent",
-        "remoteAICli",
-        "药盒",
-    ]);
+    assert_eq!(
+        titles,
+        [
+            "beem-agent-data-server",
+            "beem-ai-data-server",
+            "new-agent",
+            "pi-agent",
+            "remoteAICli",
+            "药盒",
+        ]
+    );
 }
 
 #[tokio::test]
@@ -295,9 +326,15 @@ async fn claude_session_is_in_global_chats_and_its_project_view_and_uses_cli_ses
     assert_eq!(project_chats.len(), 1);
     assert_eq!(project_chats[0].id, chat.id);
     assert_eq!(project_chats[0].kind, ConversationKind::Project);
-    assert_eq!(project_chats[0].project_id.as_deref(), Some(project.id.as_str()));
+    assert_eq!(
+        project_chats[0].project_id.as_deref(),
+        Some(project.id.as_str())
+    );
     let history = adapter.load_conversation("desktop-01", None).await.unwrap();
-    assert_eq!(history.events[0]["payload"]["text"], "history through cli id");
+    assert_eq!(
+        history.events[0]["payload"]["text"],
+        "history through cli id"
+    );
 
     adapter.resume("desktop-01").await.unwrap();
     adapter
@@ -305,18 +342,35 @@ async fn claude_session_is_in_global_chats_and_its_project_view_and_uses_cli_ses
         .await
         .unwrap();
     let args = std::fs::read_to_string(temp.path().join("药盒/claude-args.txt")).unwrap();
-    assert!(args.lines().collect::<Vec<_>>().windows(2).any(|pair| pair == ["--resume", "cli-01"]));
+    assert!(
+        args.lines()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .any(|pair| pair == ["--resume", "cli-01"])
+    );
 }
 
 #[test]
 fn fixture_metadata_contains_only_the_desktop_allowlist() {
-    let raw: Value = serde_json::from_str(include_str!("fixtures/claude/desktop/catalog/local_01_project.json")).unwrap();
+    let raw: Value = serde_json::from_str(include_str!(
+        "fixtures/claude/desktop/catalog/local_01_project.json"
+    ))
+    .unwrap();
     let mut keys = raw.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
     keys.sort_unstable();
-    assert_eq!(keys, vec![
-        "cliSessionId", "createdAt", "cwd", "isArchived", "lastActivityAt", "sessionId",
-        "title", "userSelectedFolders"
-    ]);
+    assert_eq!(
+        keys,
+        vec![
+            "cliSessionId",
+            "createdAt",
+            "cwd",
+            "isArchived",
+            "lastActivityAt",
+            "sessionId",
+            "title",
+            "userSelectedFolders"
+        ]
+    );
 }
 
 // Keep the imports in the fixture contract explicit: this test module is the
