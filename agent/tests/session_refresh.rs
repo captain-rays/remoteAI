@@ -17,6 +17,26 @@ fn state() -> GatewayState {
 }
 
 #[tokio::test]
+async fn injecting_adapters_populates_initial_session_catalog() {
+    let state = state();
+    let codex = Arc::new(MockAdapter::new(ProviderId::Codex));
+    let claude = Arc::new(MockAdapter::new(ProviderId::Claude));
+    codex.start(ConversationKind::Daily, None).await.unwrap();
+    claude
+        .start(ConversationKind::Project, Some("/tmp/project".into()))
+        .await
+        .unwrap();
+
+    state
+        .configure_runtime_state("/tmp", vec![codex, claude])
+        .await;
+
+    let sessions = state.sessions.read().await;
+    assert_eq!(sessions[&ProviderId::Codex].len(), 1);
+    assert_eq!(sessions[&ProviderId::Claude].len(), 1);
+}
+
+#[tokio::test]
 async fn refresh_keeps_provider_sessions_separate() {
     let state = state();
     let codex = Arc::new(MockAdapter::new(ProviderId::Codex));

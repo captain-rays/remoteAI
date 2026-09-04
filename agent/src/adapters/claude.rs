@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader as StdBufReader};
 use std::path::{Path, PathBuf};
@@ -15,13 +15,14 @@ use tokio::sync::{Mutex, RwLock, broadcast};
 use super::{ConversationPage, ProviderAdapter};
 use crate::protocol::{
     ApprovalDecision, ConversationEvent, ConversationKind, ConversationSummary, ProviderId,
-    ProviderStatus,
+    ProviderStatus, WriteState,
 };
 
 const MAX_METADATA_LINE_BYTES: usize = 64 * 1024;
 /// Upper bound on one history page. Real transcripts are long, so the agent —
 /// not the client — decides how much one read may cost.
 const DEFAULT_HISTORY_PAGE_SIZE: usize = 50;
+const MAX_DESKTOP_DEPTH: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandSpec {
@@ -50,6 +51,14 @@ impl ClaudeMapper {
     pub fn map_line(&self, line: &str) -> anyhow::Result<ConversationEvent> {
         let value: Value = serde_json::from_str(line)?;
         Ok(self.map_value(&value))
+    }
+
+    pub fn map_line_for_session(
+        &self,
+        line: &str,
+        public_id: &str,
+    ) -> anyhow::Result<ConversationEvent> {
+        Ok(remap_event_session_id(self.map_line(line)?, public_id))
     }
 
     fn map_value(&self, value: &Value) -> ConversationEvent {
@@ -137,9 +146,28 @@ pub struct ClaudeAdapter {
     events: broadcast::Sender<ConversationEvent>,
     sessions: RwLock<HashMap<String, Arc<ClaudeSession>>>,
     session_paths: RwLock<HashMap<String, PathBuf>>,
+    desktop_sessions: RwLock<HashMap<String, DesktopSessionTarget>>,
     /// Placeholder id handed to the phone -> the id Claude itself assigned.
     adopted_ids: Arc<RwLock<HashMap<String, String>>>,
     history_page_size: usize,
+}
+
+#[derive(Debug, Clone)]
+struct DesktopSessionTarget {
+    cli_id: Option<String>,
+    cwd: PathBuf,
+    transcript_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+struct DesktopSessionMeta {
+    desktop_id: String,
+    cli_id: Option<String>,
+    cwd: PathBuf,
+    title: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    transcript_path: Option<PathBuf>,
 }
 
 struct ClaudeSession {
@@ -164,6 +192,7 @@ impl ClaudeAdapter {
             events,
             sessions: RwLock::new(HashMap::new()),
             session_paths: RwLock::new(HashMap::new()),
+            desktop_sessions: RwLock::new(HashMap::new()),
             adopted_ids: Arc::new(RwLock::new(HashMap::new())),
             history_page_size: DEFAULT_HISTORY_PAGE_SIZE,
         }
@@ -256,7 +285,7 @@ impl ClaudeAdapter {
                 {
                     adopted.write().await.insert(local_id.clone(), real);
                 }
-                if let Ok(value) = mapper.map_line(&line) {
+                if let Ok(value) = mapper.map_line_for_session(&line, &local_id) {
                     let _ = events.send(value);
                 }
             }
@@ -312,6 +341,48 @@ impl ProviderAdapter for ClaudeAdapter {
                 }
             }
         }
+        let mut known_cli_ids = session_paths.keys().cloned().collect::<HashSet<_>>();
+        let mut desktop_sessions = HashMap::new();
+        for desktop in collect_desktop_sessions(&self.mapper.home)? {
+            if conversations
+                .iter()
+                .any(|conversation| conversation.id == desktop.desktop_id)
+                || desktop
+                    .cli_id
+                    .as_ref()
+                    .is_some_and(|cli_id| known_cli_ids.contains(cli_id))
+            {
+                continue;
+            }
+            if let Some(cli_id) = desktop.cli_id.as_ref() {
+                known_cli_ids.insert(cli_id.clone());
+            }
+            let writable = desktop.cli_id.is_some();
+            desktop_sessions.insert(
+                desktop.desktop_id.clone(),
+                DesktopSessionTarget {
+                    cli_id: desktop.cli_id.clone(),
+                    cwd: desktop.cwd.clone(),
+                    transcript_path: desktop.transcript_path.clone(),
+                },
+            );
+            conversations.push(ConversationSummary {
+                id: desktop.desktop_id,
+                provider: ProviderId::Claude,
+                kind: ConversationKind::Daily,
+                title: desktop.title,
+                project_id: None,
+                project_path: None,
+                updated_at: desktop.updated_at.max(desktop.created_at),
+                status: "idle".into(),
+                write_state: Some(if writable {
+                    WriteState::Available
+                } else {
+                    WriteState::Unavailable
+                }),
+                write_block_code: (!writable).then(|| "claude_cli_session_unavailable".into()),
+            });
+        }
         conversations.sort_by(|left, right| {
             right
                 .updated_at
@@ -319,6 +390,7 @@ impl ProviderAdapter for ClaudeAdapter {
                 .then_with(|| left.id.cmp(&right.id))
         });
         *self.session_paths.write().await = session_paths;
+        *self.desktop_sessions.write().await = desktop_sessions;
         Ok(conversations)
     }
 
@@ -327,17 +399,24 @@ impl ProviderAdapter for ClaudeAdapter {
         id: &str,
         cursor: Option<String>,
     ) -> anyhow::Result<ConversationPage> {
+        let desktop = self.desktop_sessions.read().await.get(id).cloned();
         // A session started from the phone is addressed by its placeholder id
         // until a refresh; resolve it to the transcript Claude actually wrote.
         let resolved = self.resolved_session_id(id).await;
-        let lookup = resolved.as_deref().unwrap_or(id);
-        let path = self.session_paths.read().await.get(lookup).cloned();
+        let lookup = desktop
+            .as_ref()
+            .map(|_| id)
+            .unwrap_or_else(|| resolved.as_deref().unwrap_or(id));
+        let path = match desktop.as_ref() {
+            Some(target) => target.transcript_path.clone(),
+            None => self.session_paths.read().await.get(lookup).cloned(),
+        };
         let Some(path) = path else {
             // A session this agent just started has no transcript on disk yet.
             // That is an empty history, not a failure — the phone opens the
             // screen before the first turn exists.
             anyhow::ensure!(
-                self.sessions.read().await.contains_key(id),
+                desktop.is_some() || self.sessions.read().await.contains_key(id),
                 "session is not indexed"
             );
             return Ok(ConversationPage {
@@ -373,6 +452,21 @@ impl ProviderAdapter for ClaudeAdapter {
     }
 
     async fn resume(&self, id: &str) -> anyhow::Result<()> {
+        if let Some(target) = self.desktop_sessions.read().await.get(id).cloned() {
+            let cli_id = target
+                .cli_id
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("desktop session has no CLI session id"))?;
+            anyhow::ensure!(
+                target.cwd.is_dir(),
+                "desktop session directory is unavailable"
+            );
+            let session = self
+                .spawn_session(Some(cli_id), Some(&target.cwd), id)
+                .await?;
+            self.sessions.write().await.insert(id.to_owned(), session);
+            return Ok(());
+        }
         // Only a session this agent knows may be resumed: an id from the phone
         // must never turn into a CLI spawned for an arbitrary string.
         anyhow::ensure!(
@@ -478,6 +572,132 @@ impl ProviderAdapter for ClaudeAdapter {
 
 fn same_path(left: &Path, right: &Path) -> bool {
     left.components().eq(right.components())
+}
+
+fn remap_event_session_id(event: ConversationEvent, public_id: &str) -> ConversationEvent {
+    fn set_id(mut payload: Value, public_id: &str) -> Value {
+        if let Some(object) = payload.as_object_mut() {
+            object.insert("conversationId".into(), Value::String(public_id.into()));
+            object.insert("sessionId".into(), Value::String(public_id.into()));
+        }
+        payload
+    }
+    match event {
+        ConversationEvent::Started(payload) => {
+            ConversationEvent::Started(set_id(payload, public_id))
+        }
+        ConversationEvent::ApprovalRequested(payload) => {
+            ConversationEvent::ApprovalRequested(set_id(payload, public_id))
+        }
+        ConversationEvent::TurnCompleted(payload) => {
+            ConversationEvent::TurnCompleted(set_id(payload, public_id))
+        }
+        ConversationEvent::TurnFailed(payload) => {
+            ConversationEvent::TurnFailed(set_id(payload, public_id))
+        }
+        ConversationEvent::TurnInterrupted(payload) => {
+            ConversationEvent::TurnInterrupted(set_id(payload, public_id))
+        }
+        other => other,
+    }
+}
+
+fn collect_desktop_sessions(home: &Path) -> anyhow::Result<Vec<DesktopSessionMeta>> {
+    let root = home
+        .join("Library")
+        .join("Application Support")
+        .join("Claude")
+        .join("local-agent-mode-sessions");
+    let mut metadata_paths = Vec::new();
+    collect_desktop_metadata_paths(&root, 0, &mut metadata_paths)?;
+    let mut sessions = Vec::new();
+    for path in metadata_paths {
+        if fs::metadata(&path)?.len() > MAX_METADATA_LINE_BYTES as u64 {
+            continue;
+        }
+        let Ok(value) = serde_json::from_slice::<Value>(&fs::read(&path)?) else {
+            continue;
+        };
+        if value
+            .get("isArchived")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let Some(desktop_id) = value.get("sessionId").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(title) = value.get("title").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(cwd) = value.get("cwd").and_then(Value::as_str) else {
+            continue;
+        };
+        if desktop_id.is_empty() || title.trim().is_empty() || cwd.is_empty() {
+            continue;
+        }
+        let cli_id = value
+            .get("cliSessionId")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned);
+        let transcript_path = cli_id
+            .as_ref()
+            .and_then(|cli_id| {
+                path.parent()
+                    .map(|parent| parent.join(format!("{cli_id}.jsonl")))
+            })
+            .filter(|candidate| candidate.is_file());
+        sessions.push(DesktopSessionMeta {
+            desktop_id: desktop_id.to_owned(),
+            cli_id,
+            cwd: PathBuf::from(cwd),
+            title: title.chars().take(512).collect(),
+            created_at: desktop_timestamp(value.get("createdAt")),
+            updated_at: desktop_timestamp(value.get("lastActivityAt")),
+            transcript_path,
+        });
+    }
+    Ok(sessions)
+}
+
+fn collect_desktop_metadata_paths(
+    root: &Path,
+    depth: usize,
+    paths: &mut Vec<PathBuf>,
+) -> anyhow::Result<()> {
+    if depth > MAX_DESKTOP_DEPTH {
+        return Ok(());
+    }
+    let Ok(entries) = fs::read_dir(root) else {
+        return Ok(());
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            collect_desktop_metadata_paths(&path, depth + 1, paths)?;
+        } else if file_type.is_file()
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.starts_with("local_")
+                        && path.extension().and_then(|ext| ext.to_str()) == Some("json")
+                })
+        {
+            paths.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn desktop_timestamp(value: Option<&Value>) -> DateTime<Utc> {
+    value
+        .and_then(Value::as_i64)
+        .and_then(DateTime::<Utc>::from_timestamp_millis)
+        .unwrap_or_else(|| DateTime::<Utc>::from(std::time::SystemTime::UNIX_EPOCH))
 }
 
 fn read_conversation_metadata(

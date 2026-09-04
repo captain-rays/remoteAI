@@ -152,6 +152,48 @@ async fn indexes_claude_project_sessions_from_bounded_metadata() {
 }
 
 #[tokio::test]
+async fn indexes_unarchived_claude_desktop_sessions_as_daily() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let temp = tempfile::tempdir().unwrap();
+    let desktop_root = temp
+        .path()
+        .join("Library/Application Support/Claude/local-agent-mode-sessions/account/session");
+    std::fs::create_dir_all(&desktop_root).unwrap();
+    std::fs::write(
+        desktop_root.join("local_session.json"),
+        include_str!("fixtures/claude/desktop/local-session.json"),
+    )
+    .unwrap();
+    std::fs::write(
+        desktop_root.join("11111111-1111-4111-8111-111111111111.jsonl"),
+        r#"{"type":"user","sessionId":"11111111-1111-4111-8111-111111111111","message":{"content":[{"type":"text","text":"hello"}]}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        desktop_root.join("local_archived.json"),
+        r#"{"sessionId":"archived","cliSessionId":"22222222-2222-4222-8222-222222222222","title":"Archived","cwd":"/tmp/archived","createdAt":1725400000000,"lastActivityAt":1725400060000,"isArchived":true}"#,
+    )
+    .unwrap();
+
+    let adapter = ClaudeAdapter::new("claude", temp.path());
+    let conversations = adapter.list_conversations().await.unwrap();
+
+    assert_eq!(conversations.len(), 1);
+    assert_eq!(conversations[0].id, "desktop-session-1");
+    assert_eq!(conversations[0].kind, ConversationKind::Daily);
+    assert_eq!(conversations[0].title, "Desktop daily fixture");
+    assert_eq!(conversations[0].project_path, None);
+
+    let page = adapter
+        .load_conversation("desktop-session-1", None)
+        .await
+        .unwrap();
+    assert_eq!(page.events[0]["type"], "conversation.user_message");
+    assert_eq!(page.events[0]["payload"]["text"], "hello");
+}
+
+#[tokio::test]
 async fn a_started_project_session_runs_in_that_project_and_adopts_its_real_id() {
     use remote_ai_agent::adapters::ProviderAdapter;
     use remote_ai_agent::protocol::{ConversationEvent, ConversationKind};
