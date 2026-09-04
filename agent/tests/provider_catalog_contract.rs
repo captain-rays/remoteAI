@@ -341,7 +341,17 @@ async fn claude_session_is_in_global_chats_and_its_project_view_and_uses_cli_ses
         .send("desktop-01", "send through cli id".into(), Vec::new())
         .await
         .unwrap();
-    let args = std::fs::read_to_string(temp.path().join("药盒/claude-args.txt")).unwrap();
+    let args_path = temp.path().join("药盒/claude-args.txt");
+    let args = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if let Ok(args) = std::fs::read_to_string(&args_path) {
+                break args;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("Claude resume should invoke the CLI in the selected project");
     assert!(
         args.lines()
             .collect::<Vec<_>>()
