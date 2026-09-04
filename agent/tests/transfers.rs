@@ -107,11 +107,11 @@ async fn accepts_root_absolute_upload_and_rejects_symlink_escape() {
     std::os::unix::fs::symlink(&sibling, root.join("link")).unwrap();
     let manager = TransferManager::new(&root);
     let absolute = root.canonicalize().unwrap().join("inside.txt");
-    let transfer = manager
-        .create_upload(&absolute, None, None)
+    let transfer = manager.create_upload(&absolute, None, None).await.unwrap();
+    manager
+        .write_chunk(&transfer.id, 0, b"inside")
         .await
         .unwrap();
-    manager.write_chunk(&transfer.id, 0, b"inside").await.unwrap();
     manager.finish(&transfer.id).await.unwrap();
     assert_eq!(fs::read(&absolute).unwrap(), b"inside");
     assert!(matches!(

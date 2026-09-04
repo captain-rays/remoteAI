@@ -371,7 +371,11 @@ async fn files_metadata(
 #[derive(Debug, Deserialize)]
 struct PreviewQuery {
     path: String,
-    #[serde(rename = "maxBytes", alias = "max_bytes", default = "default_preview_bytes")]
+    #[serde(
+        rename = "maxBytes",
+        alias = "max_bytes",
+        default = "default_preview_bytes"
+    )]
     max_bytes: usize,
 }
 

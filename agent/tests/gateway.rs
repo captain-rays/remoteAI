@@ -264,7 +264,10 @@ async fn files_preview_accepts_camel_case_max_bytes_and_legacy_alias() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let expected = if query == "maxBytes=2" { "he" } else { "hel" };
-        assert_eq!(to_bytes(response.into_body(), usize::MAX).await.unwrap(), expected);
+        assert_eq!(
+            to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+            expected
+        );
     }
 }
 
@@ -343,7 +346,12 @@ async fn transfer_upload_requires_authentication_and_explicit_conflict_policy() 
     let body = to_bytes(conflict.into_body(), usize::MAX).await.unwrap();
     let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(value["error"], "conflict");
-    assert!(value["existingPath"].as_str().unwrap().ends_with("same.txt"));
+    assert!(
+        value["existingPath"]
+            .as_str()
+            .unwrap()
+            .ends_with("same.txt")
+    );
     assert_eq!(value["existingSize"], 3);
 }
 

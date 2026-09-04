@@ -67,18 +67,22 @@ fn accepts_root_absolute_descendants_but_rejects_sibling_symlink_escape() {
     std::os::unix::fs::symlink(sibling.join("outside.txt"), root.join("escape.txt")).unwrap();
     let service = FileService::new(&root);
     let canonical_root = root.canonicalize().unwrap();
-    assert!(service
-        .metadata(&canonical_root.join("inside.txt"))
-        .unwrap()
-        .is_some());
+    assert!(
+        service
+            .metadata(&canonical_root.join("inside.txt"))
+            .unwrap()
+            .is_some()
+    );
     assert!(matches!(
         service.metadata(&canonical_root.join("escape.txt")),
         Err(FilesError::PathOutsideRoot)
     ));
-    assert!(service
-        .metadata(&canonical_root.join("missing.txt"))
-        .unwrap()
-        .is_none());
+    assert!(
+        service
+            .metadata(&canonical_root.join("missing.txt"))
+            .unwrap()
+            .is_none()
+    );
     assert!(matches!(
         service.metadata(&parent.path().join("outside-missing.txt")),
         Err(FilesError::PathOutsideRoot)

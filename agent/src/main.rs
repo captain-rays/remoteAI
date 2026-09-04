@@ -11,10 +11,10 @@ use remote_ai_agent::adapters::claude::ClaudeAdapter;
 use remote_ai_agent::adapters::codex::CodexAdapter;
 use remote_ai_agent::adapters::{ConversationPage, ProviderAdapter};
 use remote_ai_agent::config::AgentConfig;
+use remote_ai_agent::config::resolve_home;
 use remote_ai_agent::crypto::load_or_create_private_key;
 use remote_ai_agent::discovery::discover_provider;
 use remote_ai_agent::gateway::{GatewayState, router};
-use remote_ai_agent::config::resolve_home;
 use remote_ai_agent::pairing::{PairingPayload, PairingRegistry};
 use remote_ai_agent::protocol::{
     ApprovalDecision, ConversationEvent, ConversationKind, ProviderId, ProviderStatus,
