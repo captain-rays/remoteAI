@@ -291,11 +291,21 @@ impl CodexMapper {
             id,
             provider: ProviderId::Codex,
             kind,
-            title: thread
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("Untitled Codex thread")
-                .to_owned(),
+            // Codex only fills `name` once a thread has been named, so an
+            // unnamed one falls back to what it does carry — the same order
+            // its own UI uses. A wall of "Untitled" rows is unusable.
+            title: [
+                thread.get("name"),
+                thread.get("preview"),
+                thread.get("firstUserMessage"),
+            ]
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .find(|title| !title.is_empty())
+            .map(one_line_title)
+            .unwrap_or_else(|| "Untitled Codex thread".to_owned()),
             // The authoritative Codex project identity comes from
             // state_5.sqlite. A thread/list row only carries cwd, so it must
             // not invent a path-derived project ID.
@@ -1134,6 +1144,19 @@ fn normalize_approval(value: &Value, category: &str) -> Value {
 /// error the phone is told about.
 fn is_unmaterialized_thread(error: &anyhow::Error) -> bool {
     error.to_string().contains("not materialized")
+}
+
+/// A list row is one line. Collapse whitespace and bound the length so a
+/// pasted prompt or a delegation block cannot become the whole row.
+fn one_line_title(raw: &str) -> String {
+    const MAX_TITLE_CHARS: usize = 80;
+    let collapsed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= MAX_TITLE_CHARS {
+        return collapsed;
+    }
+    let mut title = collapsed.chars().take(MAX_TITLE_CHARS).collect::<String>();
+    title.push('…');
+    title
 }
 
 fn required_string(value: &Value, key: &str) -> anyhow::Result<String> {

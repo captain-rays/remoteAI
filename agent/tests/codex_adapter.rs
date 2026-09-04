@@ -757,3 +757,38 @@ for line in sys.stdin:
         "the adapter kept using the dead process instead of replacing it"
     );
 }
+
+#[test]
+fn an_unnamed_thread_is_titled_from_what_it_does_carry() {
+    let mapper = CodexMapper::new(PathBuf::from("/Users/test"));
+    let conversations = mapper
+        .map_thread_list(
+            r#"{"data":[
+                {"id":"named","name":"Chosen name","preview":"ignored","cwd":"/Users/test"},
+                {"id":"preview-only","name":null,"preview":"  fix the\n  login flow  ","cwd":"/Users/test"},
+                {"id":"nothing","name":null,"preview":"","cwd":"/Users/test"}
+            ]}"#,
+        )
+        .unwrap();
+    let titles = conversations
+        .iter()
+        .map(|conversation| conversation.title.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        titles,
+        ["Chosen name", "fix the login flow", "Untitled Codex thread"]
+    );
+}
+
+#[test]
+fn a_pasted_prompt_does_not_become_the_whole_list_row() {
+    let mapper = CodexMapper::new(PathBuf::from("/Users/test"));
+    let long = "word ".repeat(200);
+    let line = serde_json::json!({
+        "data": [{"id": "long", "name": null, "preview": long, "cwd": "/Users/test"}]
+    })
+    .to_string();
+    let conversations = mapper.map_thread_list(&line).unwrap();
+    assert!(conversations[0].title.chars().count() <= 81);
+    assert!(conversations[0].title.ends_with('…'));
+}
