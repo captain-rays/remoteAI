@@ -1,7 +1,8 @@
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
-use std::io::{BufRead, BufReader as StdBufReader};
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead, BufReader as StdBufReader, Write as StdWrite};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -14,6 +15,8 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{Mutex, RwLock, broadcast, oneshot};
+
+static INDEX_TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 use super::{ConversationPage, ProviderAdapter};
 use crate::protocol::{
@@ -81,6 +84,96 @@ impl CodexMapper {
             .collect::<Vec<_>>();
         summaries.sort_by_key(|summary| Reverse(summary.updated_at));
         summaries
+    }
+
+    /// Upsert only the metadata Codex uses for its global recent list.  The
+    /// index deliberately contains no message text or prompt data.
+    pub fn upsert_session_index_content(
+        content: &str,
+        id: &str,
+        updated_at: DateTime<Utc>,
+    ) -> String {
+        if id.trim().is_empty() {
+            return content.to_owned();
+        }
+        let mut records = Vec::new();
+        let mut seen = HashSet::new();
+        let updated_at = updated_at.to_rfc3339();
+        for line in content
+            .lines()
+            .take(4096)
+            .filter(|line| line.len() <= 64 * 1024)
+        {
+            let Ok(mut record) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            let Some(record_id) = record.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            if !seen.insert(record_id.to_owned()) {
+                continue;
+            }
+            if record_id == id {
+                record["updated_at"] = Value::String(updated_at.clone());
+                if record
+                    .get("thread_name")
+                    .and_then(Value::as_str)
+                    .is_none_or(|title| title.trim().is_empty())
+                {
+                    record["thread_name"] = Value::String("New Codex conversation".to_owned());
+                }
+            }
+            records.push(record);
+        }
+        if seen.insert(id.to_owned()) {
+            records.push(json!({
+                "id": id,
+                "thread_name": "New Codex conversation",
+                "updated_at": updated_at,
+            }));
+        }
+        records
+            .into_iter()
+            .filter_map(|record| serde_json::to_string(&record).ok())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Atomically update the local recent-session index with metadata only.
+    pub fn write_session_index_entry(
+        &self,
+        id: &str,
+        updated_at: DateTime<Utc>,
+    ) -> anyhow::Result<()> {
+        let path = self.home.join(".codex/session_index.jsonl");
+        let parent = path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Codex home has no parent"))?;
+        fs::create_dir_all(parent)?;
+        let content = fs::read_to_string(&path).unwrap_or_default();
+        let replacement = Self::upsert_session_index_content(&content, id, updated_at);
+        let temp_path = parent.join(format!(
+            ".session_index.jsonl.{}.{}",
+            std::process::id(),
+            INDEX_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let write_result = (|| -> anyhow::Result<()> {
+            let mut file = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .mode(0o600)
+                .open(&temp_path)?;
+            file.write_all(replacement.as_bytes())?;
+            file.write_all(b"\n")?;
+            file.sync_all()?;
+            fs::set_permissions(&temp_path, fs::Permissions::from_mode(0o600))?;
+            fs::rename(&temp_path, &path)?;
+            Ok(())
+        })();
+        if write_result.is_err() {
+            let _ = fs::remove_file(&temp_path);
+        }
+        write_result
     }
 
     /// Normalize a Codex `thread/read` response into the provider-neutral
@@ -233,6 +326,7 @@ pub struct CodexAdapter {
     events: broadcast::Sender<ConversationEvent>,
     rpc: Mutex<Option<Arc<RpcClient>>>,
     active_turns: Arc<RwLock<HashMap<String, String>>>,
+    index_write_lock: Arc<std::sync::Mutex<()>>,
 }
 
 impl CodexAdapter {
@@ -252,6 +346,7 @@ impl CodexAdapter {
             events,
             rpc: Mutex::new(None),
             active_turns: Arc::new(RwLock::new(HashMap::new())),
+            index_write_lock: Arc::new(std::sync::Mutex::new(())),
         }
     }
 
@@ -283,6 +378,14 @@ impl CodexAdapter {
             .collect::<Vec<_>>()
             .join("\n");
         self.mapper.map_session_index(&content)
+    }
+
+    fn touch_recent_session(&self, id: &str) -> anyhow::Result<()> {
+        let _guard = self
+            .index_write_lock
+            .lock()
+            .map_err(|_| anyhow::anyhow!("recent-session index lock poisoned"))?;
+        self.mapper.write_session_index_entry(id, Utc::now())
     }
 
     async fn client(&self) -> anyhow::Result<Arc<RpcClient>> {
@@ -359,7 +462,7 @@ impl ProviderAdapter for CodexAdapter {
         self.mapper.map_thread_read_value(&result, id, _cursor)
     }
 
-    async fn start(&self, _kind: ConversationKind, cwd: Option<PathBuf>) -> anyhow::Result<String> {
+    async fn start(&self, kind: ConversationKind, cwd: Option<PathBuf>) -> anyhow::Result<String> {
         let result = self
             .client()
             .await?
@@ -372,7 +475,11 @@ impl ProviderAdapter for CodexAdapter {
                 }),
             )
             .await?;
-        required_string(result.get("thread").unwrap_or(&result), "id")
+        let id = required_string(result.get("thread").unwrap_or(&result), "id")?;
+        if kind == ConversationKind::Daily {
+            self.touch_recent_session(&id)?;
+        }
+        Ok(id)
     }
 
     async fn resume(&self, id: &str) -> anyhow::Result<()> {
@@ -421,6 +528,13 @@ impl ProviderAdapter for CodexAdapter {
                 .write()
                 .await
                 .insert(id.to_owned(), turn_id.to_owned());
+        }
+        if self
+            .read_session_index()
+            .iter()
+            .any(|conversation| conversation.id == id)
+        {
+            self.touch_recent_session(id)?;
         }
         Ok(())
     }
