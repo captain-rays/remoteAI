@@ -7,9 +7,10 @@
 
 ---
 
-## 1. 结论先行
+## 1. 审查基线
 
-文件浏览和文件传输**两端都没有接线**。不是 bug，是没写完。当前点"下载"会立刻失败，Files tab 是空的。
+以下是 2026-09-04 开始执行本计划前的状态，用来说明本轮工作的起点；
+它不是当前实现进度。
 
 | 层 | 状态 | 证据 |
 | --- | --- | --- |
@@ -31,6 +32,28 @@
 4. `TransferRequest` 当前没有 SHA-256 字段。必须增加 `expectedSha256`，由 `TransferCoordinator` 在 create 前计算，否则 Agent 的完成校验不会实际启用。
 5. 下载端没有服务端 transfer session。下载 ticket、取消和 receipt 都是 iOS 本地状态；不得把本地 download ticket 发给 upload-only 的 cancel/finish 端点。
 6. 下载端能计算并展示接收内容的 SHA-256，并以已知文件大小校验完整性；当前服务端没有提供源摘要，因此不能把本地摘要描述成与服务端摘要的密码学比对。端到端验收在 Mac 侧独立比较源/目标摘要。
+
+### 1.2 执行与独立审查记录
+
+截至当前 review checkpoint：
+
+| 范围 | 状态 | 提交 / 证据 |
+| --- | --- | --- |
+| 契约与安全边界纠错 | ✅ 已完成 | `c5b374f`、`266bb35`；v1 root 冻结为 `$HOME`，preview 保持裸字节，JSON/query 使用 camelCase |
+| iOS 文件浏览与 preview | ✅ 已完成 | `7d027fa`；真实 REST 状态码、raw body、403 稳定错误映射 |
+| iOS 显式上传 | ✅ 已完成 | `17efd79`；预提交 SHA-256、1 MiB chunk、409 决策 ticket、finish/cancel |
+| iOS 显式下载 | ✅ 已完成 | `41b5d97`；本地 download ticket、range read、本地 cancel、大小与摘要校验 |
+| opt-in Simulator 验收 | ✅ 已编写，待真实 Agent 运行 | `720315e`；正常门禁默认 skip，只在单次配对文件存在时运行 |
+| Rust HOME 接线、路径与 409 body | 🚧 5.6 Luna 开发/复审中 | 已要求不存在的 root 外绝对路径也必须稳定返回 403，不得因 canonicalize 失败误报 404 |
+
+自动化现状：SwiftPM 200 tests / 0 failures；XCTest bridge 1 / 0；默认
+XCUITest 18 / 0。真实文件验收不能以 mock 结果代替，必须等 Rust 变更集成后
+重启 Agent、签发一次性 pairing，再单独运行 `RealFileTransferUITests`。
+
+本轮顺手审查了 Claude 的会话同步/富文本改版。provider 隔离、用户消息、推理折叠、
+代码块与历史分页均有逻辑/UI 回归并通过；但 `RemoteAgentClient` 的
+`resumeConversation`、`interrupt`、`decideApproval`、`listAudit`、`diagnostics`、
+`revokeDevice` 仍是显式未接线方法。这些不阻塞本文件计划，但不能据此宣称整个客户端完成。
 
 ---
 
