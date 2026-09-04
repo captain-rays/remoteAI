@@ -38,6 +38,19 @@ pub struct CommandSpec {
 #[async_trait]
 pub trait CodexHostBridge: Send + Sync {
     async fn list_chatgpt_conversations(&self) -> anyhow::Result<Vec<ConversationSummary>>;
+    async fn load_chatgpt_conversation(
+        &self,
+        id: &str,
+        cursor: Option<String>,
+    ) -> anyhow::Result<ConversationPage>;
+    async fn resume_chatgpt_conversation(&self, id: &str) -> anyhow::Result<()>;
+    async fn send_chatgpt_message(
+        &self,
+        id: &str,
+        text: String,
+        attachments: Vec<PathBuf>,
+    ) -> anyhow::Result<()>;
+    async fn start_chatgpt_conversation(&self, cwd: Option<PathBuf>) -> anyhow::Result<String>;
 }
 
 #[derive(Debug, Clone)]
@@ -432,6 +445,27 @@ impl CodexAdapter {
         *slot = Some(client.clone());
         Ok(client)
     }
+
+    async fn host_chat_bridge_for(
+        &self,
+        id: &str,
+    ) -> anyhow::Result<Option<Arc<dyn CodexHostBridge>>> {
+        let Some(bridge) = self.host_bridge.as_ref().cloned() else {
+            return Ok(None);
+        };
+        let is_host_chat =
+            bridge
+                .list_chatgpt_conversations()
+                .await?
+                .into_iter()
+                .any(|conversation| {
+                    conversation.id == id
+                        && conversation.provider == ProviderId::Codex
+                        && conversation.kind == ConversationKind::Daily
+                        && conversation.project_id.is_none()
+                });
+        Ok(is_host_chat.then_some(bridge))
+    }
 }
 
 #[async_trait]
@@ -573,17 +607,26 @@ impl ProviderAdapter for CodexAdapter {
     async fn load_conversation(
         &self,
         id: &str,
-        _cursor: Option<String>,
+        cursor: Option<String>,
     ) -> anyhow::Result<ConversationPage> {
+        if let Some(bridge) = self.host_chat_bridge_for(id).await? {
+            return bridge.load_chatgpt_conversation(id, cursor).await;
+        }
         let result = self
             .client()
             .await?
             .call("thread/read", json!({"threadId": id, "includeTurns": true}))
             .await?;
-        self.mapper.map_thread_read_value(&result, id, _cursor)
+        self.mapper.map_thread_read_value(&result, id, cursor)
     }
 
     async fn start(&self, kind: ConversationKind, cwd: Option<PathBuf>) -> anyhow::Result<String> {
+        if kind == ConversationKind::Daily {
+            let Some(bridge) = self.host_bridge.as_ref() else {
+                return Err(anyhow::anyhow!("codex_chats_host_bridge_unavailable"));
+            };
+            return bridge.start_chatgpt_conversation(cwd).await;
+        }
         let result = self
             .client()
             .await?
@@ -604,6 +647,9 @@ impl ProviderAdapter for CodexAdapter {
     }
 
     async fn resume(&self, id: &str) -> anyhow::Result<()> {
+        if let Some(bridge) = self.host_chat_bridge_for(id).await? {
+            return bridge.resume_chatgpt_conversation(id).await;
+        }
         self.client()
             .await?
             .call(
@@ -619,6 +665,9 @@ impl ProviderAdapter for CodexAdapter {
     }
 
     async fn send(&self, id: &str, text: String, attachments: Vec<PathBuf>) -> anyhow::Result<()> {
+        if let Some(bridge) = self.host_chat_bridge_for(id).await? {
+            return bridge.send_chatgpt_message(id, text, attachments).await;
+        }
         let mut input = vec![json!({"type":"text","text":text})];
         input.extend(attachments.into_iter().map(
             |path| json!({"type":"text","text":format!("Explicit attachment: {}", path.display())}),

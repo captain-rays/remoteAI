@@ -542,13 +542,14 @@ impl ProviderAdapter for ClaudeAdapter {
             if paths
                 .iter()
                 .map(|path| canonical_or_normalized(path))
-                .any(|path| path == project.canonical_path)
+                .find(|path| path == &project.canonical_path)
+                .is_some()
             {
                 conversations.push(self.desktop_summary(
                     &desktop,
                     ConversationKind::Project,
                     Some(project.id.clone()),
-                    Some(desktop.cwd.to_string_lossy().into_owned()),
+                    Some(project.canonical_path.clone()),
                 ));
             }
         }

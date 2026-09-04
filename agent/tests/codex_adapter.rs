@@ -184,58 +184,18 @@ fn recent_session_index_writer_is_atomic_and_owner_only() {
 }
 
 #[tokio::test]
-async fn daily_start_and_send_update_recent_index_metadata() {
+async fn daily_start_without_host_bridge_is_unavailable_without_index_fallback() {
     use remote_ai_agent::adapters::ProviderAdapter;
-    use std::os::unix::fs::PermissionsExt;
 
     let root = tempfile::tempdir().unwrap();
-    let script = root.path().join("fake-codex.sh");
-    std::fs::write(
-        &script,
-        r#"#!/bin/sh
-while IFS= read -r line; do
-  case "$line" in
-    *'"method":"initialize"'*) echo '{"id":"1","result":{}}' ;;
-    *'"method":"thread/start"'*) echo '{"id":"2","result":{"thread":{"id":"daily-1"}}}' ;;
-    *'"method":"turn/start"'*) echo '{"id":"3","result":{"turn":{"id":"turn-1"}}}' ;;
-  esac
-done
-"#,
-    )
-    .unwrap();
-    let mut permissions = std::fs::metadata(&script).unwrap().permissions();
-    permissions.set_mode(0o700);
-    std::fs::set_permissions(&script, permissions).unwrap();
-
-    let adapter = CodexAdapter::new(&script, root.path());
-    let id = adapter.start(ConversationKind::Daily, None).await.unwrap();
-    assert_eq!(id, "daily-1");
+    let adapter = CodexAdapter::new("/definitely/missing/codex", root.path());
+    let error = adapter
+        .start(ConversationKind::Daily, None)
+        .await
+        .unwrap_err();
+    assert_eq!(error.to_string(), "codex_chats_host_bridge_unavailable");
     let index = root.path().join(".codex/session_index.jsonl");
-    assert!(index.exists());
-    assert!(std::fs::read_to_string(&index).unwrap().contains("daily-1"));
-
-    adapter
-        .send(&id, "hello from mobile".to_owned(), Vec::new())
-        .await
-        .unwrap();
-    let entries = CodexMapper::new(root.path().to_path_buf())
-        .map_session_index(&std::fs::read_to_string(index).unwrap());
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].id, id);
-    assert_eq!(entries[0].kind, ConversationKind::Daily);
-
-    let project_home = tempfile::tempdir().unwrap();
-    let project_adapter = CodexAdapter::new(&script, project_home.path());
-    project_adapter
-        .start(ConversationKind::Project, None)
-        .await
-        .unwrap();
-    assert!(
-        !project_home
-            .path()
-            .join(".codex/session_index.jsonl")
-            .exists()
-    );
+    assert!(!index.exists());
 }
 
 #[tokio::test]

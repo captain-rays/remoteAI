@@ -1,9 +1,10 @@
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
-use remote_ai_agent::adapters::ProviderAdapter;
 use remote_ai_agent::adapters::codex::{CodexAdapter, CodexHostBridge};
+use remote_ai_agent::adapters::{ConversationPage, ProviderAdapter};
 use remote_ai_agent::protocol::{
     ApprovalDecision, ConversationEvent, ConversationKind, ConversationSummary, ProjectSummary,
     ProviderId, ProviderStatus,
@@ -33,12 +34,52 @@ fn summary(
 
 struct FixtureCodexHostBridge {
     chats: Vec<ConversationSummary>,
+    calls: Arc<Mutex<Vec<String>>>,
 }
 
 #[async_trait]
 impl CodexHostBridge for FixtureCodexHostBridge {
     async fn list_chatgpt_conversations(&self) -> anyhow::Result<Vec<ConversationSummary>> {
         Ok(self.chats.clone())
+    }
+
+    async fn load_chatgpt_conversation(
+        &self,
+        id: &str,
+        cursor: Option<String>,
+    ) -> anyhow::Result<ConversationPage> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("load:{id}:{}", cursor.unwrap_or_default()));
+        Ok(ConversationPage {
+            conversation_id: id.into(),
+            events: vec![serde_json::json!({
+                "type": "conversation.message_completed",
+                "payload": {"text": "host history"}
+            })],
+            next_cursor: None,
+        })
+    }
+
+    async fn resume_chatgpt_conversation(&self, id: &str) -> anyhow::Result<()> {
+        self.calls.lock().unwrap().push(format!("resume:{id}"));
+        Ok(())
+    }
+
+    async fn send_chatgpt_message(
+        &self,
+        id: &str,
+        text: String,
+        _attachments: Vec<PathBuf>,
+    ) -> anyhow::Result<()> {
+        self.calls.lock().unwrap().push(format!("send:{id}:{text}"));
+        Ok(())
+    }
+
+    async fn start_chatgpt_conversation(&self, _cwd: Option<PathBuf>) -> anyhow::Result<String> {
+        self.calls.lock().unwrap().push("start".into());
+        Ok("host-new-chat".into())
     }
 }
 
@@ -80,6 +121,7 @@ async fn codex_chats_accept_only_host_chatgpt_rows_and_clear_project_identity() 
                     Some("/tmp"),
                 ),
             ],
+            calls: Arc::new(Mutex::new(Vec::new())),
         },
     ));
 
@@ -99,6 +141,45 @@ async fn codex_chats_accept_only_host_chatgpt_rows_and_clear_project_identity() 
             && chat.project_path.is_none()
     }));
     assert_eq!(adapter.daily_catalog_diagnostic_code(), None);
+}
+
+#[tokio::test]
+async fn codex_host_chat_ids_route_history_resume_send_and_daily_start_through_bridge() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let bridge = Arc::new(FixtureCodexHostBridge {
+        chats: vec![summary(
+            "host-chat",
+            "Host Chat",
+            ConversationKind::Daily,
+            None,
+        )],
+        calls: calls.clone(),
+    });
+    let adapter =
+        CodexAdapter::new("/definitely/missing/codex", "/Users/test").with_host_bridge(bridge);
+
+    let page = adapter
+        .load_conversation("host-chat", Some("cursor-1".into()))
+        .await
+        .unwrap();
+    adapter.resume("host-chat").await.unwrap();
+    adapter
+        .send("host-chat", "hello from host".into(), Vec::new())
+        .await
+        .unwrap();
+    let new_id = adapter.start(ConversationKind::Daily, None).await.unwrap();
+
+    assert_eq!(page.events[0]["payload"]["text"], "host history");
+    assert_eq!(new_id, "host-new-chat");
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec![
+            "load:host-chat:cursor-1",
+            "resume:host-chat",
+            "send:host-chat:hello from host",
+            "start",
+        ]
+    );
 }
 
 async fn make_codex_state_db(root: &std::path::Path) {
@@ -364,6 +445,40 @@ async fn claude_session_is_in_global_chats_and_its_project_view_and_uses_cli_ses
             .collect::<Vec<_>>()
             .windows(2)
             .any(|pair| pair == ["--resume", "cli-01"])
+    );
+}
+
+#[tokio::test]
+async fn claude_project_view_uses_the_selected_folder_that_matched_the_project() {
+    let temp = tempfile::tempdir().unwrap();
+    let metadata_root = temp
+        .path()
+        .join("Library/Application Support/Claude/claude-code-sessions");
+    std::fs::create_dir_all(&metadata_root).unwrap();
+    let content = format!(
+        r#"{{"sessionId":"desktop-selected","cliSessionId":"cli-selected","title":"Selected folder","cwd":"{}/workspace","createdAt":1725400000000,"lastActivityAt":1725400060000,"isArchived":false,"userSelectedFolders":["{}/药盒"]}}"#,
+        temp.path().display(),
+        temp.path().display(),
+    );
+    std::fs::write(metadata_root.join("local_selected.json"), content).unwrap();
+
+    let adapter = remote_ai_agent::adapters::claude::ClaudeAdapter::new("claude", temp.path());
+    let project = adapter
+        .list_projects()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|project| project.title == "药盒")
+        .unwrap();
+    let conversations = adapter
+        .list_project_conversations(&project.id)
+        .await
+        .unwrap();
+
+    assert_eq!(conversations.len(), 1);
+    assert_eq!(
+        conversations[0].project_path.as_deref(),
+        Some(project.canonical_path.as_str())
     );
 }
 
