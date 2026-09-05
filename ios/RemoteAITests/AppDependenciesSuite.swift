@@ -273,6 +273,47 @@ public enum AppDependenciesSuite {
                 }
                 try expectNil(await production.uiTestFileProbePath)
             },
+            TestCase("a phone that already holds an identity starts paired") {
+                // Reinstalling the app, or restarting the Mac, must not send
+                // the reader back to the QR screen: the credential is still in
+                // the keychain and the agent still knows the device.
+                let store = InMemorySecretStore()
+                try store.save(
+                    DeviceIdentity(
+                        macId: "mac-local",
+                        origin: "https://mac.example.org",
+                        privateKey: Data(repeating: 7, count: 32),
+                        macPublicKey: Data([4, 2])
+                    )
+                )
+                let dependencies = await MainActor.run {
+                    AppDependencies(
+                        client: MockAgentClient(),
+                        preferences: InMemoryPreferencesStore(),
+                        cache: InMemoryCatalogCache(),
+                        store: store,
+                        pairingService: MockPairingService()
+                    )
+                }
+                try expectEqual(
+                    await dependencies.connectionState, .online,
+                    "a stored identity is a completed pairing; nothing more is needed"
+                )
+            },
+
+            TestCase("a phone with no identity still starts disconnected") {
+                let dependencies = await MainActor.run {
+                    AppDependencies(
+                        client: MockAgentClient(),
+                        preferences: InMemoryPreferencesStore(),
+                        cache: InMemoryCatalogCache(),
+                        store: InMemorySecretStore(),
+                        pairingService: MockPairingService()
+                    )
+                }
+                try expectEqual(await dependencies.connectionState, .disconnected)
+            },
+
         ]
     )
 }

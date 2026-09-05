@@ -59,6 +59,15 @@ public final class AppDependencies {
         self.uiTestFileProbePath = uiTestFileProbePath
         self.publicOrigin = publicOrigin
         self.usesEphemeralPairingStore = usesEphemeralPairingStore
+
+        // A stored identity *is* a completed pairing. Starting disconnected
+        // whenever this launch did not itself pair sent the reader back to the
+        // QR screen after every reinstall and every Mac restart, even though
+        // the credential was still in the keychain and the agent still knew
+        // the device. If the Mac cannot be reached, the first request says so.
+        if (try? store.load()) ?? nil != nil {
+            self.connectionState = .online
+        }
     }
 
     public static func live(arguments: [String] = CommandLine.arguments) -> AppDependencies {
