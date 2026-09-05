@@ -117,6 +117,19 @@ HOME 与登录钥匙串运行。
 域名、模型覆盖）放在 `~/.config/remoteai/agent.env`，不进版本库，样例见
 `deploy/remoteai.env.example`。
 
+## 6.2 macOS 隐私授权（2026-09-05）
+
+手机浏览 `~/Desktop`、`~/Documents`、`~/Downloads` 等受保护目录时，macOS 会向
+Agent 弹出授权对话框；Agent 派生的 CLI 也归属于它。这是系统机制，无法在代码里
+绕过，只能减少重复：
+
+- macOS 按**代码签名身份**记录授权。cargo 产物是 ad-hoc 签名，每次重新编译哈希
+  都变，授权随之失效、于是反复弹窗。安装脚本因此用固定 identifier
+  （`live.jaco.remoteai.agent`）和证书重新签名，一次授权即可长期有效。
+- 想彻底不弹，在「系统设置 → 隐私与安全性 → 完全磁盘访问权限」中加入
+  `~/Library/Application Support/RemoteAI/bin/remote-ai-agent`，一次授权覆盖全部
+  受保护目录。这等于把整个磁盘暴露给手机端，是明确的取舍。
+
 ## 7. 文件传输
 
 文件传输采用分块 HTTPS：

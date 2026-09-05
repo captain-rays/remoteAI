@@ -106,6 +106,31 @@ bootout() {
     done
 }
 
+# Give the installed binary a stable code identity.
+#
+# macOS keys its privacy grants — Desktop, Documents, Downloads — to code
+# identity. A cargo build is ad-hoc signed, so every reinstall produces a new
+# hash, the grant stops matching, and the Mac asks again. Signing with a real
+# certificate and a fixed identifier means a grant given once keeps applying.
+sign_agent() {
+    local identity="${REMOTEAI_SIGNING_IDENTITY:-}"
+    if [ -z "$identity" ]; then
+        identity="$(security find-identity -v -p codesigning 2>/dev/null \
+            | awk -F'"' '/Apple Development|Developer ID Application/ {print $2; exit}')"
+    fi
+    if [ -z "$identity" ]; then
+        echo "==> no signing identity found; leaving the binary ad-hoc signed." >&2
+        echo "    macOS will ask for folder access again after every reinstall." >&2
+        echo "    Set REMOTEAI_SIGNING_IDENTITY to silence that." >&2
+        return
+    fi
+    echo "==> signing as: $identity"
+    codesign --force --options runtime --identifier "$agent_label" \
+        --sign "$identity" "$binary_path"
+    codesign --verify --strict "$binary_path" \
+        || die "the signed binary does not verify"
+}
+
 do_install() {
     read_config
     cloudflared="$(command -v cloudflared || true)"
@@ -125,6 +150,8 @@ do_install() {
     # Copy rather than symlink the build tree: rebuilding a worktree, or
     # deleting it, must not take the installed service down with it.
     install -m 755 "$repo_root/target/release/remote-ai-agent" "$binary_path"
+
+    sign_agent
 
     render "$repo_root/deploy/launchd/$agent_label.plist.template" \
         "$launch_agents/$agent_label.plist"
