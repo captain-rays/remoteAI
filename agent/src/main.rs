@@ -177,8 +177,12 @@ fn adapters_from_statuses(
                     .clone()
                     .expect("available provider executable");
                 match status.provider {
-                    ProviderId::Codex => Arc::new(CodexAdapter::new(executable, home.clone()))
-                        as Arc<dyn ProviderAdapter>,
+                    ProviderId::Codex => Arc::new(
+                        CodexAdapter::new(executable, home.clone())
+                            // A thread pinned to a retired model cannot be
+                            // resumed; this overrides it.
+                            .with_model(std::env::var("REMOTEAI_CODEX_MODEL").ok()),
+                    ) as Arc<dyn ProviderAdapter>,
                     ProviderId::Claude => Arc::new(
                         ClaudeAdapter::new(executable, home.clone())
                             // Opt-in override for a Mac whose configured

@@ -397,6 +397,9 @@ pub struct CodexAdapter {
     active_turns: Arc<RwLock<HashMap<String, String>>>,
     index_write_lock: Arc<std::sync::Mutex<()>>,
     host_bridge: Option<Arc<dyn CodexHostBridge>>,
+    /// Model to run threads on. `None` leaves each thread on the one it
+    /// recorded — which fails once that model is retired.
+    model: Option<String>,
 }
 
 impl CodexAdapter {
@@ -418,7 +421,24 @@ impl CodexAdapter {
             active_turns: Arc::new(RwLock::new(HashMap::new())),
             index_write_lock: Arc::new(std::sync::Mutex::new(())),
             host_bridge: None,
+            model: None,
         }
+    }
+
+    /// Run threads on an explicit model instead of the one each thread
+    /// recorded. A thread pinned to a retired model cannot be resumed at all.
+    pub fn with_model(mut self, model: Option<String>) -> Self {
+        self.model = model.filter(|model| !model.trim().is_empty());
+        self
+    }
+
+    fn apply_model(&self, mut params: Value) -> Value {
+        if let Some(model) = self.model.as_deref()
+            && let Some(object) = params.as_object_mut()
+        {
+            object.insert("model".into(), json!(model));
+        }
+        params
     }
 
     pub fn with_host_bridge(mut self, bridge: Arc<dyn CodexHostBridge>) -> Self {
@@ -736,11 +756,11 @@ impl ProviderAdapter for CodexAdapter {
         let result = client
             .call(
                 "thread/start",
-                json!({
+                self.apply_model(json!({
                     "cwd": cwd,
                     "approvalPolicy": "on-request",
                     "approvalsReviewer": "user"
-                }),
+                })),
             )
             .await?;
         let id = required_string(result.get("thread").unwrap_or(&result), "id")?;
@@ -756,7 +776,7 @@ impl ProviderAdapter for CodexAdapter {
             return bridge.resume_chatgpt_conversation(id).await;
         }
         let client = self.client().await?;
-        client.load_thread(id).await?;
+        client.load_thread(id, self.model.as_deref()).await?;
         Ok(())
     }
 
@@ -784,7 +804,7 @@ impl ProviderAdapter for CodexAdapter {
         // the Mac, so resuming it here is exactly what pressing send asked for;
         // the gateway has already checked that no other writer holds it.
         if !client.is_loaded(id).await
-            && let Err(error) = client.load_thread(id).await
+            && let Err(error) = client.load_thread(id, self.model.as_deref()).await
         {
             self.active_turns.write().await.remove(id);
             return Err(error);
@@ -958,16 +978,18 @@ impl RpcClient {
     }
 
     /// Resume a thread into this process and remember that it is loaded.
-    async fn load_thread(&self, id: &str) -> anyhow::Result<()> {
-        self.call(
-            "thread/resume",
-            json!({
-                "threadId": id,
-                "approvalPolicy": "on-request",
-                "approvalsReviewer": "user"
-            }),
-        )
-        .await?;
+    async fn load_thread(&self, id: &str, model: Option<&str>) -> anyhow::Result<()> {
+        let mut params = json!({
+            "threadId": id,
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "user"
+        });
+        if let Some(model) = model
+            && let Some(object) = params.as_object_mut()
+        {
+            object.insert("model".into(), json!(model));
+        }
+        self.call("thread/resume", params).await?;
         self.mark_loaded(id).await;
         Ok(())
     }

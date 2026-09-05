@@ -4,6 +4,9 @@ import SwiftUI
 public struct ConversationView: View {
     @State private var model: ConversationViewModel
     @State private var draft = ""
+    /// Lets sending put the keyboard away: the reader's next act is reading
+    /// the reply, and a keyboard covers half the transcript.
+    @FocusState private var composerIsFocused: Bool
     /// True once the transcript has been put at its newest end. The first
     /// layout has no rows yet, so the jump waits for them to arrive.
     @State private var hasOpenedAtNewest = false
@@ -193,6 +196,16 @@ public struct ConversationView: View {
         }
     }
 
+    /// Hand the draft to the provider and get out of the reader's way: the
+    /// field empties and the keyboard closes, so the reply has the screen.
+    private func submitDraft() {
+        let text = draft
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        draft = ""
+        composerIsFocused = false
+        Task { await model.send(text) }
+    }
+
     /// What the newest end of the transcript looks like right now. It changes
     /// both when a row is added and when the last row's text grows, which is
     /// how a streamed reply arrives.
@@ -256,11 +269,10 @@ public struct ConversationView: View {
                 TextField("Message", text: $draft, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...4)
+                    .focused($composerIsFocused)
                     .accessibilityIdentifier("composer")
                 Button {
-                    let text = draft
-                    draft = ""
-                    Task { await model.send(text) }
+                    submitDraft()
                 } label: {
                     Image(systemName: "arrow.up.circle.fill")
                 }

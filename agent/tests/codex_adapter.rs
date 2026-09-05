@@ -922,3 +922,88 @@ fn a_codex_history_item_keeps_its_id_whichever_page_it_lands_on() {
         "an item's id must not depend on which page delivered it"
     );
 }
+
+#[tokio::test]
+async fn a_configured_model_replaces_the_one_a_thread_was_pinned_to() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let root = tempfile::tempdir().unwrap();
+    let stub = root.path().join("stub-app-server.py");
+    let seen = root.path().join("models.txt");
+    // A thread records the model it was created with. When that model is
+    // retired the provider refuses to resume it, so an operator needs a way to
+    // say "use this one instead" without editing every thread.
+    write_app_server_stub(
+        &stub,
+        &format!(
+            r#"if method in ("thread/resume", "thread/start"):
+    with open({path:?}, "a") as handle:
+        handle.write(method + "=" + str(params.get("model")) + "\n")
+    reply(request_id, {{"thread": {{"id": "thread-1"}}}})
+    continue
+if method == "turn/start":
+    reply(request_id, {{"turn": {{"id": "turn-1"}}}})
+    continue
+if request_id is not None:
+    fail(request_id, "unexpected method")
+"#,
+            path = seen.to_str().unwrap(),
+        ),
+    );
+
+    let adapter = CodexAdapter::new(&stub, root.path()).with_model(Some("gpt-5.6-sol".into()));
+    adapter
+        .start(ConversationKind::Project, None)
+        .await
+        .unwrap();
+    // A different thread, so the send has to resume rather than reuse the one
+    // just started.
+    adapter
+        .send("thread-from-before", "probe".into(), Vec::new())
+        .await
+        .unwrap();
+
+    let recorded = std::fs::read_to_string(&seen).unwrap();
+    assert!(
+        recorded.contains("thread/start=gpt-5.6-sol"),
+        "a new thread must be started on the configured model: {recorded:?}"
+    );
+    assert!(
+        recorded.contains("thread/resume=gpt-5.6-sol"),
+        "resuming must carry it too, or an old thread keeps its retired model: {recorded:?}"
+    );
+}
+
+#[tokio::test]
+async fn without_a_configured_model_a_thread_keeps_its_own() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let root = tempfile::tempdir().unwrap();
+    let stub = root.path().join("stub-app-server.py");
+    let seen = root.path().join("models.txt");
+    write_app_server_stub(
+        &stub,
+        &format!(
+            r#"if method in ("thread/resume", "thread/start"):
+    with open({path:?}, "a") as handle:
+        handle.write(method + "=" + str(params.get("model")) + "\n")
+    reply(request_id, {{"thread": {{"id": "thread-1"}}}})
+    continue
+if request_id is not None:
+    fail(request_id, "unexpected method")
+"#,
+            path = seen.to_str().unwrap(),
+        ),
+    );
+
+    let adapter = CodexAdapter::new(&stub, root.path());
+    adapter
+        .start(ConversationKind::Project, None)
+        .await
+        .unwrap();
+
+    assert!(
+        std::fs::read_to_string(&seen).unwrap().contains("=None"),
+        "no override means the provider decides, as it did before"
+    );
+}
