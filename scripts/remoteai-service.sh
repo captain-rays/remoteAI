@@ -96,6 +96,14 @@ render() {
 
 bootout() {
     launchctl bootout "$domain/$1" 2>/dev/null || true
+    # launchd releases the label asynchronously; bootstrapping before it has
+    # done so fails with a bare "Input/output error".
+    local waited=0
+    while launchctl print "$domain/$1" >/dev/null 2>&1; do
+        sleep 1
+        waited=$((waited + 1))
+        [ "$waited" -lt 15 ] || die "launchd still holds $1 after ${waited}s"
+    done
 }
 
 do_install() {
