@@ -91,6 +91,14 @@ public final class ConversationViewModel {
     public private(set) var isRunning = false
     public private(set) var failedDraft: String?
     public private(set) var hasMoreHistory = false
+    /// A history read is in flight. Opening a real conversation takes long
+    /// enough that a blank screen reads as "empty" rather than "loading".
+    public private(set) var isLoadingHistory = false
+    /// Whether the first page has landed. Until it has, the transcript keeps
+    /// itself pinned to the newest end: a page arriving all at once moves the
+    /// end further than a reader ever could, and must not be mistaken for the
+    /// reader scrolling away from it.
+    public private(set) var hasLoadedHistoryOnce = false
 
     /// Mirrors `AppModel.isOnline`; offline is read-only.
     public var isOnline = true
@@ -174,6 +182,14 @@ public final class ConversationViewModel {
     }
 
     private func fetchHistory(cursor: String?, limit: Int) async {
+        let isFirstPage = cursor == nil
+        if isFirstPage { isLoadingHistory = true }
+        defer {
+            if isFirstPage {
+                isLoadingHistory = false
+                hasLoadedHistoryOnce = true
+            }
+        }
         do {
             let page = try await client.history(
                 provider: conversation.provider,

@@ -50,6 +50,9 @@ pub struct GatewayState {
     pub audit: AuditLog,
     pub diagnostics: Arc<Diagnostics>,
     mac_private_key: Arc<RwLock<Option<Zeroizing<[u8; 32]>>>>,
+    /// Where paired devices outlive the process. Absent in tests that only
+    /// exercise the in-memory registry.
+    devices: Arc<RwLock<Option<Arc<crate::store::Store>>>>,
 }
 
 #[derive(Clone)]
@@ -83,7 +86,17 @@ impl GatewayState {
                 Vec::<ProviderHealth>::new(),
             )),
             mac_private_key: Arc::new(RwLock::new(None)),
+            devices: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Keep paired devices across restarts.
+    pub async fn set_device_store(&self, store: Arc<crate::store::Store>) {
+        *self.devices.write().await = Some(store);
+    }
+
+    async fn device_store(&self) -> Option<Arc<crate::store::Store>> {
+        self.devices.read().await.clone()
     }
 
     pub async fn set_sessions(&self, provider: ProviderId, sessions: Vec<ConversationSummary>) {
@@ -221,7 +234,16 @@ async fn pair(State(state): State<GatewayState>, Json(request): Json<PairRequest
         Utc::now(),
     );
     match result {
-        Ok(()) => StatusCode::OK.into_response(),
+        Ok(device) => {
+            if let Some(store) = state.device_store().await
+                && let Err(error) = store.upsert_device(&device).await
+            {
+                // The device is paired in memory either way; say so rather
+                // than let it silently need pairing again after a restart.
+                eprintln!("could not persist paired device {}: {error}", device.id);
+            }
+            StatusCode::OK.into_response()
+        }
         Err(PairingError::SecretAlreadyUsed) => StatusCode::CONFLICT.into_response(),
         Err(PairingError::SecretExpired) => StatusCode::GONE.into_response(),
         Err(_) => StatusCode::UNAUTHORIZED.into_response(),
@@ -643,13 +665,26 @@ struct RevokeRequest {
 }
 
 async fn revoke(State(state): State<GatewayState>, Json(request): Json<RevokeRequest>) -> Response {
+    let revoked_at = Utc::now();
     match state
         .pairing
         .write()
         .await
-        .revoke(&request.device_id, Utc::now())
+        .revoke(&request.device_id, revoked_at)
     {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            if let Some(store) = state.device_store().await
+                && let Err(error) = store
+                    .set_device_revoked(&request.device_id, revoked_at)
+                    .await
+            {
+                eprintln!(
+                    "could not persist revocation of {}: {error}",
+                    request.device_id
+                );
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(PairingError::DeviceUnknown) => StatusCode::NOT_FOUND.into_response(),
         Err(_) => StatusCode::BAD_REQUEST.into_response(),
     }
@@ -700,6 +735,10 @@ async fn websocket(
 }
 
 async fn websocket_loop(mut socket: WebSocket, mut session: GatewaySession) {
+    // The phone opens a socket per request, so connection churn is normal and
+    // worth seeing: an event emitted while no socket is open reaches nobody.
+    let opened_at = std::time::Instant::now();
+    eprintln!("ws open device={}", session.device_id);
     let mut events_open = true;
     loop {
         let keep_running = if events_open {
@@ -733,6 +772,12 @@ async fn websocket_loop(mut socket: WebSocket, mut session: GatewaySession) {
             break;
         }
     }
+    eprintln!(
+        "ws close device={} after {:?} events_sent={}",
+        session.device_id,
+        opened_at.elapsed(),
+        session.events_sent
+    );
 }
 
 async fn process_socket_message(
@@ -853,6 +898,7 @@ pub struct GatewaySession {
     outbound_counter: u64,
     event_rx: mpsc::Receiver<(ProviderId, ConversationEvent)>,
     active_conversations: HashMap<ProviderId, String>,
+    events_sent: usize,
 }
 
 impl GatewaySession {
@@ -891,6 +937,7 @@ impl GatewaySession {
             outbound_counter: 0,
             event_rx,
             active_conversations: HashMap::new(),
+            events_sent: 0,
         }
     }
 
@@ -1165,6 +1212,7 @@ impl GatewaySession {
         routing: &RoutingMetadata,
     ) -> Result<Vec<u8>, GatewayBusinessError> {
         let (message_type, payload) = event_parts(event);
+        self.events_sent += 1;
         let conversation_id = payload
             .get("conversationId")
             .and_then(Value::as_str)
@@ -1181,6 +1229,7 @@ impl GatewaySession {
                 &conversation_id,
                 serde_json::json!({"type": message_type, "payload": payload}),
             );
+        eprintln!("ws event type={message_type} conversation={conversation_id}");
         let event_routing = RoutingMetadata {
             device_id: routing.device_id.clone(),
             conversation_id: Some(conversation_id.clone()),

@@ -8,9 +8,9 @@ import XCTest
 /// scrolls up — is exercised deterministically.
 final class TranscriptPagingUITests: XCTestCase {
 
-    private func launchMockedApp() -> XCUIApplication {
+    private func launchMockedApp(slowHistory: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-UseMockAgent"]
+        app.launchArguments = ["-UseMockAgent"] + (slowHistory ? ["-SlowHistory"] : [])
         app.launch()
         return app
     }
@@ -87,6 +87,33 @@ final class TranscriptPagingUITests: XCTestCase {
             app.descendants(matching: .any).matching(identifier: "earlier-history")
                 .firstMatch.exists,
             "once the first turn is loaded there is no earlier page to offer"
+        )
+    }
+
+    func testAConversationWhoseHistoryArrivesLateStillOpensAtTheNewestTurn() throws {
+        // The device symptom: the first page lands after the screen is up, and
+        // it is taller than the screen. That must not be read as the reader
+        // having scrolled away from the newest end.
+        let app = launchMockedApp(slowHistory: true)
+        app.segmentedControls["provider-switcher"].buttons["Claude"].tap()
+        app.tabBars.buttons["Projects"].tap()
+        let project = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "project-row-"))
+            .firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 20))
+        project.tap()
+        let session = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "project-session-"))
+            .firstMatch
+        XCTAssertTrue(session.waitForExistence(timeout: 20))
+        session.tap()
+
+        let newest = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS %@", "answer 20")
+        ).firstMatch
+        XCTAssertTrue(
+            newest.waitForExistence(timeout: 20),
+            "a transcript must open on its newest turn even when its history is slow"
         )
     }
 }

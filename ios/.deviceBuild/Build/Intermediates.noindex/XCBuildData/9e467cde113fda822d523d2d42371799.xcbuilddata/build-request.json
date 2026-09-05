@@ -1,0 +1,71 @@
+{
+  "buildCommand" : {
+    "command" : "build",
+    "skipDependencies" : false,
+    "style" : "buildOnly"
+  },
+  "configuredTargets" : [
+    {
+      "guid" : "ebdd4c1b1d8a36c703180cc6f7f33042493cc70777efbc1fdbe092e2acb4d091"
+    }
+  ],
+  "containerPath" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI.xcodeproj",
+  "continueBuildingAfterErrors" : false,
+  "dependencyScope" : "workspace",
+  "enableIndexBuildArena" : false,
+  "hideShellScriptEnvironment" : false,
+  "parameters" : {
+    "action" : "build",
+    "activeArchitecture" : "undefined_arch",
+    "activeRunDestination" : {
+      "disableOnlyActiveArch" : true,
+      "hostTargetedPlatform" : null,
+      "platform" : "iphoneos",
+      "sdk" : "iphoneos26.5",
+      "sdkVariant" : "iphoneos",
+      "supportedArchitectures" : [
+        "armv4t",
+        "armv5",
+        "armv6",
+        "armv7",
+        "armv7f",
+        "armv7s",
+        "armv7k",
+        "arm64",
+        "arm64e"
+      ],
+      "targetArchitecture" : "undefined_arch"
+    },
+    "arenaInfo" : {
+      "buildIntermediatesPath" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex",
+      "buildProductsPath" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Products",
+      "derivedDataPath" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild",
+      "indexDataStoreFolderPath" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Index.noindex/DataStore",
+      "indexEnableDataStore" : true,
+      "indexPCHPath" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Index.noindex/PrecompiledHeaders",
+      "pchPath" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/PrecompiledHeaders"
+    },
+    "configurationName" : "Debug",
+    "overrides" : {
+      "commandLine" : {
+        "table" : {
+          "CODE_SIGN_STYLE" : "Automatic",
+          "DEVELOPMENT_TEAM" : "4SMQQ4HMYL"
+        }
+      },
+      "synthesized" : {
+        "table" : {
+          "ACTION" : "build",
+          "ENABLE_PREVIEWS" : "NO",
+          "ENABLE_XOJIT_PREVIEWS" : "YES"
+        }
+      }
+    }
+  },
+  "schemeCommand" : "launch",
+  "showNonLoggedProgress" : true,
+  "useDryRun" : false,
+  "useImplicitDependencies" : true,
+  "useLegacyBuildLocations" : false,
+  "useParallelTargets" : true
+}

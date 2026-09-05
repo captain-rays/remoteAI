@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>logFormatVersion</key>
+	<integer>12</integer>
+	<key>logs</key>
+	<dict>
+		<key>DA31D46A-FF64-4EAA-BD0F-4E8DF1B6D585</key>
+		<dict>
+			<key>className</key>
+			<string>IDECommandLineBuildLog</string>
+			<key>documentTypeString</key>
+			<string>&lt;nil&gt;</string>
+			<key>domainType</key>
+			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
+			<key>fileName</key>
+			<string>DA31D46A-FF64-4EAA-BD0F-4E8DF1B6D585.xcactivitylog</string>
+			<key>hasPrimaryLog</key>
+			<true/>
+			<key>primaryObservable</key>
+			<dict>
+				<key>highLevelStatus</key>
+				<string>E</string>
+				<key>totalNumberOfAnalyzerIssues</key>
+				<integer>0</integer>
+				<key>totalNumberOfErrors</key>
+				<integer>2</integer>
+				<key>totalNumberOfTestFailures</key>
+				<integer>0</integer>
+				<key>totalNumberOfWarnings</key>
+				<integer>0</integer>
+			</dict>
+			<key>schemeIdentifier-containerName</key>
+			<string>RemoteAI project</string>
+			<key>schemeIdentifier-schemeName</key>
+			<string>RemoteAI</string>
+			<key>schemeIdentifier-sharedScheme</key>
+			<integer>1</integer>
+			<key>signature</key>
+			<string>Building project RemoteAI with scheme RemoteAI</string>
+			<key>timeStartedRecording</key>
+			<real>810284854.09849596</real>
+			<key>timeStoppedRecording</key>
+			<real>810284857.36291397</real>
+			<key>title</key>
+			<string>Building project RemoteAI with scheme RemoteAI</string>
+			<key>uniqueIdentifier</key>
+			<string>DA31D46A-FF64-4EAA-BD0F-4E8DF1B6D585</string>
+		</dict>
+	</dict>
+</dict>
+</plist>

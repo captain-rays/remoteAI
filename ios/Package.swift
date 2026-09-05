@@ -21,7 +21,9 @@ let package = Package(
         .target(
             name: "RemoteAIKit",
             path: "RemoteAI",
-            exclude: ["App/RemoteAIApp.swift"]
+            // The app target owns the icon; the library must not try to
+            // compile an asset catalog it never uses.
+            exclude: ["App/RemoteAIApp.swift", "Assets.xcassets"]
         ),
         .target(
             name: "RemoteAITestKit",

@@ -82,12 +82,19 @@ public final class AppDependencies {
         // Lane B ships against the mock agent by design. Integration replaces
         // this with a WebSocket-backed AgentClient driven by
         // ConnectionCoordinator + CryptoBox; nothing else in the app changes.
+        // `-SlowHistory` makes the mock answer a history read the way a real
+        // Mac does — after a moment — so the transcript's behaviour when its
+        // first page lands late is exercisable.
+        let mock = MockAgentClient()
+        if arguments.contains("-SlowHistory") {
+            Task { await mock.setHistoryDelay(.milliseconds(1500)) }
+        }
         let client: AgentClient = useMock
-            ? MockAgentClient()
+            ? mock
             : RemoteAgentClient(store: store)
         let pairingService: PairingService = useMock
             ? MockPairingService()
-            : RemotePairingService(origin: URL(string: publicOrigin)!)
+            : RemotePairingService()
         let dependencies = AppDependencies(
             client: client,
             preferences: preferences,

@@ -109,6 +109,10 @@ public struct ConversationView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
                         earlierHistoryRow
+                        if model.isLoadingHistory {
+                            LoadingRow(message: "Loading this conversation…")
+                                .accessibilityIdentifier("transcript-loading")
+                        }
                         ForEach(model.items) { item in
                             switch item {
                             case let .message(message):
@@ -151,7 +155,11 @@ public struct ConversationView: View {
                     }
                     if measured.isAtNewestEnd {
                         isFollowingNewest = true
-                    } else if measured.hasLeftTheNewestEnd {
+                    } else if measured.hasLeftTheNewestEnd, model.hasLoadedHistoryOnce {
+                        // Before the first page lands the content grows in one
+                        // jump, which moves the newest end further away than a
+                        // reader ever could. Giving up on following there is
+                        // why a conversation opened part-way up the history.
                         isFollowingNewest = false
                     }
                     if measured.isNearOldestLoaded, !measured.isAtNewestEnd {
@@ -203,8 +211,10 @@ public struct ConversationView: View {
         let pinned = anchorAboveEarlierPage
         anchorAboveEarlierPage = nil
 
-        guard hasOpenedAtNewest else {
-            hasOpenedAtNewest = true
+        // Only count the transcript as opened once its first page is in: an
+        // empty or cached-only render would otherwise consume the one jump.
+        guard hasOpenedAtNewest, model.hasLoadedHistoryOnce else {
+            hasOpenedAtNewest = model.hasLoadedHistoryOnce
             proxy.scrollTo(Self.newestAnchor, anchor: .bottom)
             return
         }

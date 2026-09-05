@@ -33,6 +33,12 @@ public actor MockAgentClient: AgentClient {
     private var history: [String: [EventEnvelope]] = [:]
     /// Events per history page: five exchanges, matching what the agent serves.
     private static let historyPageEvents = 10
+    /// Delay before a history page is answered. Real conversations do not load
+    /// instantly, and several transcript behaviours only go wrong when the
+    /// first page lands after the screen is already on show.
+    private var historyDelay: Duration = .zero
+
+    public func setHistoryDelay(_ delay: Duration) { historyDelay = delay }
     private var pendingApprovals: [String: ApprovalRequest] = [:]
     private var activeTurns: [String: String] = [:]
     /// Conversations whose scripted `fail` rejection has already been served.
@@ -435,6 +441,7 @@ public actor MockAgentClient: AgentClient {
             throw AgentClientError.notFound("conversation:\(conversationId)")
         }
         guard conversation.provider == provider else { throw AgentClientError.providerMismatch }
+        if historyDelay > .zero { try? await Task.sleep(for: historyDelay) }
 
         // The newest page first, then the page before it. The cursor names the
         // oldest event already delivered, so it is read as an upper bound —

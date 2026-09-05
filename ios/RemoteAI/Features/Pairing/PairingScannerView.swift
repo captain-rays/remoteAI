@@ -13,6 +13,7 @@ import SwiftUI
 public struct PairingScannerView: View {
     @Bindable private var model: PairingViewModel
     @State private var pastedText = ""
+    @State private var camera: CameraAvailability = .needsPermission
     @Environment(\.dismiss) private var dismiss
 
     public init(model: PairingViewModel) {
@@ -23,17 +24,33 @@ public struct PairingScannerView: View {
         NavigationStack {
             VStack(spacing: 16) {
                 #if os(iOS)
-                    QRScannerRepresentable { scanned in
-                        Task { await model.pair(scannedText: scanned) }
+                    if camera.showsViewfinder {
+                        QRScannerRepresentable(
+                            onScan: { scanned in
+                                Task { await model.pair(scannedText: scanned) }
+                            },
+                            onUnavailable: { camera = .unavailable }
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: 320)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    } else if let message = camera.message {
+                        // Never a black rectangle: say what stopped the camera
+                        // and what to do instead.
+                        Label(message, systemImage: "video.slash")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityIdentifier("pairing-camera-unavailable")
                     }
-                    .frame(maxWidth: .infinity, maxHeight: 320)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
                 #endif
 
-                Text("Point the camera at the pairing code shown on your Mac. The code is valid for five minutes and can be used once.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+                if camera.showsViewfinder {
+                    Text("Point the camera at the pairing code shown on your Mac. The code is valid for five minutes and can be used once.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
 
                 TextField("Or paste the pairing code", text: $pastedText, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
@@ -70,8 +87,41 @@ public struct PairingScannerView: View {
             .onChange(of: model.state) { _, state in
                 if state == .paired { dismiss() }
             }
+            .task { await resolveCameraAccess() }
         }
     }
+
+    /// Ask for the camera once, and record what the answer means.
+    ///
+    /// Without this the capture session simply produced no frames when access
+    /// had been refused, which on screen is indistinguishable from a camera
+    /// pointed at an unreadable code.
+    private func resolveCameraAccess() async {
+        #if os(iOS)
+            let status = AVCaptureDevice.authorizationStatus(for: .video)
+            let hasCamera = AVCaptureDevice.default(for: .video) != nil
+            if status == .notDetermined {
+                let granted = await AVCaptureDevice.requestAccess(for: .video)
+                camera = CameraAvailability.of(granted ? .granted : .denied, hasCamera: hasCamera)
+                return
+            }
+            camera = CameraAvailability.of(Self.permission(for: status), hasCamera: hasCamera)
+        #else
+            camera = .unavailable
+        #endif
+    }
+
+    #if os(iOS)
+        private static func permission(for status: AVAuthorizationStatus) -> CameraPermission {
+            switch status {
+            case .authorized: return .granted
+            case .denied: return .denied
+            case .restricted: return .restricted
+            case .notDetermined: return .undetermined
+            @unknown default: return .denied
+            }
+        }
+    #endif
 }
 
 #if os(iOS)
@@ -81,12 +131,14 @@ public struct PairingScannerView: View {
     /// on-device integration.
     struct QRScannerRepresentable: UIViewControllerRepresentable {
         let onScan: (String) -> Void
+        let onUnavailable: () -> Void
 
         func makeCoordinator() -> Coordinator { Coordinator(onScan: onScan) }
 
         func makeUIViewController(context: Context) -> ScannerViewController {
             let controller = ScannerViewController()
             controller.delegate = context.coordinator
+            controller.onUnavailable = onUnavailable
             return controller
         }
 
@@ -118,37 +170,57 @@ public struct PairingScannerView: View {
 
     final class ScannerViewController: UIViewController {
         weak var delegate: AVCaptureMetadataOutputObjectsDelegate?
+        /// Called when the camera cannot be opened, so the screen can say so
+        /// instead of showing an empty rectangle for ever.
+        var onUnavailable: (() -> Void)?
         private let session = AVCaptureSession()
+        private var preview: AVCaptureVideoPreviewLayer?
 
         override func viewDidLoad() {
             super.viewDidLoad()
+            view.backgroundColor = .black
             guard let device = AVCaptureDevice.default(for: .video),
                 let input = try? AVCaptureDeviceInput(device: device),
                 session.canAddInput(input)
-            else { return }
+            else {
+                onUnavailable?()
+                return
+            }
             session.addInput(input)
 
             let output = AVCaptureMetadataOutput()
-            guard session.canAddOutput(output) else { return }
+            guard session.canAddOutput(output) else {
+                onUnavailable?()
+                return
+            }
             session.addOutput(output)
             output.setMetadataObjectsDelegate(delegate, queue: .main)
             output.metadataObjectTypes = [.qr]
 
-            let layer = AVCaptureVideoPreviewLayer(session: session)
-            layer.videoGravity = .resizeAspectFill
-            layer.frame = view.bounds
-            view.layer.addSublayer(layer)
+            let preview = AVCaptureVideoPreviewLayer(session: session)
+            preview.videoGravity = .resizeAspectFill
+            view.layer.addSublayer(preview)
+            self.preview = preview
+        }
+
+        /// `viewDidLoad` runs before the view has its final size, so the layer
+        /// has to follow the layout rather than be sized once.
+        override func viewDidLayoutSubviews() {
+            super.viewDidLayoutSubviews()
+            preview?.frame = view.bounds
         }
 
         override func viewWillAppear(_ animated: Bool) {
             super.viewWillAppear(animated)
-            guard !session.isRunning else { return }
+            guard preview != nil, !session.isRunning else { return }
+            // Starting a session blocks; never on the main thread.
             Task.detached { [session] in session.startRunning() }
         }
 
         override func viewWillDisappear(_ animated: Bool) {
             super.viewWillDisappear(animated)
-            session.stopRunning()
+            guard session.isRunning else { return }
+            Task.detached { [session] in session.stopRunning() }
         }
     }
 #endif

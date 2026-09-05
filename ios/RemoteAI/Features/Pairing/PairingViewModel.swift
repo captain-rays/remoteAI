@@ -34,18 +34,17 @@ public final class RemotePairingService: PairingService, @unchecked Sendable {
         let devicePublicKey: [UInt8]
     }
 
-    private let origin: URL
     private let session: URLSession
     private let deviceId: String?
     private let deviceLabel: String
 
+    /// No origin: where to pair is whatever the scanned code says, so there is
+    /// nothing here that could disagree with it.
     public init(
-        origin: URL,
         deviceId: String? = nil,
         deviceLabel: String = "iPhone",
         session: URLSession = .shared
     ) {
-        self.origin = origin
         self.session = session
         self.deviceId = deviceId
         self.deviceLabel = deviceLabel
@@ -59,7 +58,31 @@ public final class RemotePairingService: PairingService, @unchecked Sendable {
         return "phone-" + digest.prefix(16).map { String(format: "%02x", $0) }.joined()
     }
 
+    /// Address the pairing request to the Mac the scanned code names.
+    ///
+    /// The origin lives in the QR because only the code knows where the Mac
+    /// is reachable — a tunnel address changes every session. Posting to an
+    /// origin the app was built with instead sends the request to the phone's
+    /// own loopback, which no Mac ever answers.
     public static func makePairRequest(
+        payload: PairingPayload,
+        deviceId: String,
+        deviceLabel: String,
+        phonePublicKey: Data
+    ) throws -> URLRequest {
+        guard let origin = URL(string: payload.origin) else {
+            throw RemotePairingError.invalidOrigin
+        }
+        return try makePairRequest(
+            origin: origin,
+            payload: payload,
+            deviceId: deviceId,
+            deviceLabel: deviceLabel,
+            phonePublicKey: phonePublicKey
+        )
+    }
+
+    static func makePairRequest(
         origin: URL,
         payload: PairingPayload,
         deviceId: String,
@@ -91,7 +114,6 @@ public final class RemotePairingService: PairingService, @unchecked Sendable {
         payload: PairingPayload, phonePublicKey: Data
     ) async throws -> Bool {
         let request = try Self.makePairRequest(
-            origin: origin,
             payload: payload,
             deviceId: deviceId ?? Self.deterministicDeviceId(publicKey: phonePublicKey),
             deviceLabel: deviceLabel,
@@ -195,6 +217,12 @@ public final class PairingViewModel {
             } else {
                 state = .failed("Pairing could not be completed.")
             }
+        } catch let error as URLError {
+            // The request never reached the Mac. Saying so — with the address
+            // it tried — is the difference between a five-second fix and a
+            // hunt: this is usually a tunnel that is down, or a phone on a
+            // network that cannot resolve it.
+            state = .failed(Self.unreachableMessage(origin: payload.origin, error: error))
         } catch {
             state = .failed("Pairing could not be completed.")
         }
@@ -203,6 +231,27 @@ public final class PairingViewModel {
     public func revoke() async {
         try? store.deleteAll()
         state = .idle
+    }
+
+    /// Wording for a pairing request that never got a reply.
+    nonisolated public static func unreachableMessage(
+        origin: String, error: URLError
+    ) -> String {
+        let host = URL(string: origin)?.host ?? origin
+        switch error.code {
+        case .cannotFindHost, .dnsLookupFailed:
+            return
+                "Could not find \(host). If your Mac's address is a tunnel, check it is still "
+                + "running, and that this phone's network can resolve it — a VPN often cannot."
+        case .notConnectedToInternet:
+            return "This phone is offline."
+        case .timedOut:
+            return "\(host) did not answer in time. Check the Mac agent is still running."
+        default:
+            return
+                "Could not reach \(host). Check the Mac agent is running and this phone can "
+                + "reach that address."
+        }
     }
 
     static func message(for error: CryptoError) -> String {

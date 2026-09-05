@@ -137,7 +137,7 @@ public enum PairingViewModelSuite {
                 try expectEqual(await model.state, .idle)
             },
 
-            TestCase("remote pairing request targets the configured origin") {
+            TestCase("remote pairing request carries the secret and device identity") {
                 let payload = PairingPayload(
                     origin: "https://tunnel.example",
                     macId: "mac-1",
@@ -146,7 +146,6 @@ public enum PairingViewModelSuite {
                     expiresAt: now
                 )
                 let request = try RemotePairingService.makePairRequest(
-                    origin: URL(string: "https://tunnel.example")!,
                     payload: payload,
                     deviceId: "phone-1",
                     deviceLabel: "Test iPhone",
@@ -252,6 +251,125 @@ public enum SettingsViewModelSuite {
                 await model.reload()
                 try expectEqual(await client.transferRequestCount, 0)
             },
+            TestCase("a camera the phone will not allow explains itself") {
+                // A scanner that fails silently is indistinguishable from one
+                // pointed at a code it cannot read.
+                for permission in [CameraPermission.denied, CameraPermission.restricted] {
+                    let availability = CameraAvailability.of(permission, hasCamera: true)
+                    let message = try expectNotNil(availability.message)
+                    try expectFalse(message.isEmpty)
+                    try expectFalse(
+                        availability.showsViewfinder,
+                        "a viewfinder that can never show a frame is a black rectangle"
+                    )
+                }
+                try expectEqual(
+                    CameraAvailability.of(CameraPermission.denied, hasCamera: true).message?
+                        .contains("Settings"),
+                    true,
+                    "a denied camera is fixed in Settings, so say so"
+                )
+            },
+
+            TestCase("a phone with no camera falls back to pasting") {
+                let availability = CameraAvailability.of(CameraPermission.granted, hasCamera: false)
+                try expectEqual(availability, .unavailable)
+                try expectEqual(
+                    availability.message?.contains("Paste the pairing code"), true
+                )
+            },
+
+            TestCase("a granted camera shows the viewfinder and says nothing") {
+                let availability = CameraAvailability.of(CameraPermission.granted, hasCamera: true)
+                try expectEqual(availability, .ready)
+                try expectNil(availability.message)
+                try expectTrue(availability.showsViewfinder)
+            },
+
+            TestCase("an unasked camera is not an error") {
+                // The system prompt has not been shown yet; that is not a
+                // failure to report, it is a question to ask.
+                let availability = CameraAvailability.of(CameraPermission.undetermined, hasCamera: true)
+                try expectEqual(availability, .needsPermission)
+                try expectNil(availability.message)
+            },
+
+            TestCase("a pairing request that never arrives names the address") {
+                let message = PairingViewModel.unreachableMessage(
+                    origin: "https://example-tunnel.trycloudflare.com",
+                    error: URLError(.cannotFindHost)
+                )
+                try expectTrue(
+                    message.contains("example-tunnel.trycloudflare.com"),
+                    "the address that failed is the first thing to check: \(message)"
+                )
+                try expectTrue(
+                    message.contains("VPN"),
+                    "a host that will not resolve is usually the phone's network: \(message)"
+                )
+                try expectFalse(
+                    message.contains("could not be completed"),
+                    "\"could not be completed\" says nothing actionable"
+                )
+            },
+
+            TestCase("a timeout and an offline phone read differently") {
+                let timedOut = PairingViewModel.unreachableMessage(
+                    origin: "https://mac.example.com", error: URLError(.timedOut)
+                )
+                let offline = PairingViewModel.unreachableMessage(
+                    origin: "https://mac.example.com", error: URLError(.notConnectedToInternet)
+                )
+                try expectTrue(timedOut.contains("did not answer"))
+                try expectTrue(offline.contains("offline"))
+                try expectFalse(timedOut == offline)
+            },
+
+            TestCase("pairing is addressed to the Mac named in the scanned code") {
+                // The QR carries where the Mac is; that is the whole point of
+                // putting an origin in it. Addressing a preconfigured origin
+                // instead sends the request to whatever the app was built
+                // with — on a real phone, its own loopback.
+                let payload = PairingPayload(
+                    origin: "https://tunnel.example.com",
+                    macId: "mac-1",
+                    macPublicKey: Data([4, 2]),
+                    pairingSecret: Data("secret-1".utf8),
+                    expiresAt: Date(timeIntervalSince1970: 4_000_000_000)
+                )
+                let request = try RemotePairingService.makePairRequest(
+                    payload: payload,
+                    deviceId: "device-1",
+                    deviceLabel: "iPhone",
+                    phonePublicKey: Data([4, 9])
+                )
+                try expectEqual(request.url?.host, "tunnel.example.com")
+                try expectEqual(request.url?.scheme, "https")
+                try expectEqual(request.url?.path, "/v1/pair")
+                try expectFalse(
+                    request.url?.absoluteString.contains("127.0.0.1") ?? true,
+                    "the phone's own loopback is never the Mac"
+                )
+            },
+
+            TestCase("a scanned code with an unusable origin is refused") {
+                let payload = PairingPayload(
+                    origin: "not a url at all",
+                    macId: "mac-1",
+                    macPublicKey: Data([4, 2]),
+                    pairingSecret: Data("secret-1".utf8),
+                    expiresAt: Date(timeIntervalSince1970: 4_000_000_000)
+                )
+                try await expectThrows {
+                    _ = try RemotePairingService.makePairRequest(
+                        payload: payload,
+                        deviceId: "device-1",
+                        deviceLabel: "iPhone",
+                        phonePublicKey: Data([4, 9])
+                    )
+                }
+            },
+
         ]
     )
 }

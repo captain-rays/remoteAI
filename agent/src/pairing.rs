@@ -86,7 +86,7 @@ impl PairingRegistry {
         label: &str,
         public_key: Vec<u8>,
         now: DateTime<Utc>,
-    ) -> Result<(), PairingError> {
+    ) -> Result<PairedDevice, PairingError> {
         let pending = self
             .pending
             .get_mut(secret)
@@ -98,16 +98,26 @@ impl PairingRegistry {
             return Err(PairingError::SecretExpired);
         }
         pending.used = true;
-        self.devices.insert(
-            device_id.to_owned(),
-            PairedDevice {
-                id: device_id.to_owned(),
-                label: label.to_owned(),
-                public_key,
-                revoked_at: None,
-            },
-        );
-        Ok(())
+        let device = PairedDevice {
+            id: device_id.to_owned(),
+            label: label.to_owned(),
+            public_key,
+            revoked_at: None,
+        };
+        self.devices.insert(device_id.to_owned(), device.clone());
+        // Returned so the caller can persist it: a phone should pair once.
+        Ok(device)
+    }
+
+    /// Rebuild the known devices after a restart.
+    ///
+    /// Pending one-time secrets are deliberately not restored — a secret that
+    /// outlived the process that issued it could be replayed against the new
+    /// one.
+    pub fn restore(&mut self, devices: Vec<PairedDevice>) {
+        for device in devices {
+            self.devices.insert(device.id.clone(), device);
+        }
     }
 
     pub fn authenticate(&self, device_id: &str) -> Result<(), PairingError> {

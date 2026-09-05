@@ -82,8 +82,10 @@ fn pairing_secret_is_five_minute_single_use_and_revocable() {
         .pair("one-time-secret", "phone-1", "My iPhone", vec![4, 2], now)
         .unwrap();
     assert_eq!(
-        registry.pair("one-time-secret", "phone-2", "Other", vec![4, 3], now,),
-        Err(PairingError::SecretAlreadyUsed)
+        registry
+            .pair("one-time-secret", "phone-2", "Other", vec![4, 3], now,)
+            .unwrap_err(),
+        PairingError::SecretAlreadyUsed
     );
 
     registry.revoke("phone-1", now).unwrap();
@@ -94,14 +96,16 @@ fn pairing_secret_is_five_minute_single_use_and_revocable() {
 
     let expired = registry.issue("expired", now);
     assert_eq!(
-        registry.pair(
-            &expired.pairing_secret,
-            "phone-3",
-            "Late",
-            vec![4, 4],
-            now + Duration::minutes(6),
-        ),
-        Err(PairingError::SecretExpired)
+        registry
+            .pair(
+                &expired.pairing_secret,
+                "phone-3",
+                "Late",
+                vec![4, 4],
+                now + Duration::minutes(6),
+            )
+            .unwrap_err(),
+        PairingError::SecretExpired
     );
 }
 

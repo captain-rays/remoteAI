@@ -677,6 +677,65 @@ public enum ConversationViewModelSuite {
 
                 try expectEqual(await client.transferRequestCount, 0)
             },
+            TestCase("a conversation says it is loading while the page is in flight") {
+                // The state the transcript shows a spinner for. Asserting it
+                // after the load has finished would pass on a client that
+                // never sets it at all.
+                let client = ControlledSendClient(mode: .suspendedHistory)
+                let model = await makeViewModel(client: client)
+
+                let load = Task { await model.loadHistory() }
+                var sawLoading = false
+                for _ in 0..<50 where !sawLoading {
+                    sawLoading = await model.isLoadingHistory
+                    try? await Task.sleep(nanoseconds: 20_000_000)
+                }
+                load.cancel()
+                try expectTrue(
+                    sawLoading,
+                    "a read that has not answered yet must show as loading"
+                )
+                try expectFalse(
+                    await model.hasLoadedHistoryOnce,
+                    "nothing has landed, so the transcript is not settled"
+                )
+            },
+
+            TestCase("a conversation reports that it is loading its first page") {
+                // Opening a real conversation is not instant; without this the
+                // screen is blank and indistinguishable from an empty one.
+                let page = HistoryPage(
+                    events: [
+                        event(
+                            1, "conversation.user_message",
+                            .userMessage(
+                                MessagePayload(messageId: "u1", role: .user, text: "hi")
+                            )
+                        )
+                    ],
+                    hasMore: false, nextCursor: nil
+                )
+                let client = ControlledSendClient(mode: .history([page]))
+                let model = await makeViewModel(client: client)
+
+                try expectFalse(await model.isLoadingHistory, "nothing has been asked for yet")
+                await model.loadHistory()
+                try expectFalse(
+                    await model.isLoadingHistory, "the load finished, so the spinner stops"
+                )
+                try expectTrue(await model.hasLoadedHistoryOnce)
+            },
+
+            TestCase("a conversation has not finished loading until its first page lands") {
+                // The flag the transcript uses to decide whether it may stop
+                // following the newest end.
+                let model = await makeViewModel()
+                try expectFalse(
+                    await model.hasLoadedHistoryOnce,
+                    "an unopened conversation must not look settled"
+                )
+            },
+
         ]
     )
 }
@@ -686,6 +745,9 @@ private actor ControlledSendClient: AgentClient {
         case suspended
         case failure(AgentClientError)
         case history([HistoryPage])
+        /// A history read that never answers, for observing the state a
+        /// transcript is in while it waits.
+        case suspendedHistory
     }
 
     nonisolated let events = AsyncStream<EventEnvelope> { continuation in
@@ -718,7 +780,7 @@ private actor ControlledSendClient: AgentClient {
             await withCheckedContinuation { sendContinuation = $0 }
         case let .failure(error):
             throw error
-        case .history:
+        case .history, .suspendedHistory:
             return
         }
     }
@@ -736,6 +798,10 @@ private actor ControlledSendClient: AgentClient {
     func history(
         provider: ProviderId, conversationId: String, cursor: String?, limit: Int
     ) async throws -> HistoryPage {
+        if case .suspendedHistory = mode {
+            try await Task.sleep(nanoseconds: 60_000_000_000)
+            throw AgentClientError.offline
+        }
         guard case let .history(pages) = mode, historyIndex < pages.count else {
             throw AgentClientError.offline
         }
@@ -778,4 +844,5 @@ private actor ControlledSendClient: AgentClient {
     func listAudit(limit: Int) async throws -> [AuditEntry] { throw AgentClientError.offline }
     func diagnostics() async throws -> Diagnostics { throw AgentClientError.offline }
     func revokeDevice() async throws { throw AgentClientError.offline }
+
 }

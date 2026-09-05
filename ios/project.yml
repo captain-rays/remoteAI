@@ -29,13 +29,16 @@ targets:
     platform: iOS
     sources:
       - path: RemoteAI/App/RemoteAIApp.swift
+      - path: RemoteAI/Assets.xcassets
     dependencies:
       - package: RemoteAI
         product: RemoteAIKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: live.jaco.remoteai
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: P5QXSVF4WP
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_CFBundleDisplayName: RemoteAI

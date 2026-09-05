@@ -226,7 +226,7 @@ async fn discover_runtime_adapters(home: PathBuf) -> Vec<Arc<dyn ProviderAdapter
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let config = AgentConfig::default();
-    let store = Store::open(&config.state_dir).await?;
+    let store = Arc::new(Store::open(&config.state_dir).await?);
     let key = load_or_create_private_key(store.private_key_path())?;
     let public_key = key.public_key().to_encoded_point(false).as_bytes().to_vec();
     let mut pairing = PairingRegistry::new("mac-local", &config.public_origin, public_key);
@@ -238,7 +238,15 @@ async fn main() -> anyhow::Result<()> {
     } else {
         eprintln!("pairing payload not persisted; set REMOTEAI_PAIRING_FILE for local handoff");
     }
+    // Devices paired before this start are still paired: the phone should
+    // scan a code once, not once per agent restart.
+    let known = store.load_devices().await?;
+    if !known.is_empty() {
+        println!("restored {} paired device(s)", known.len());
+    }
+    pairing.restore(known);
     let state = GatewayState::new(Arc::new(tokio::sync::RwLock::new(pairing)), 256);
+    state.set_device_store(store.clone()).await;
     state.set_mac_private_key(key.to_bytes().into()).await;
     let home = resolve_home();
     state

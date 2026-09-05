@@ -1,0 +1,359 @@
+{
+  "" : {
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/RemoteAIKit-primary.dia",
+    "emit-module-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/RemoteAIKit-primary-emit-module.d",
+    "emit-module-diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/RemoteAIKit-primary-emit-module.dia",
+    "pch" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/RemoteAIKit-primary-Bridging-header.pch",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/RemoteAIKit-primary.swiftdeps"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/App/AppDependencies.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppDependencies.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppDependencies.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppDependencies.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppDependencies.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppDependencies.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppDependencies.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppDependencies.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppDependencies~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/App/AppModel.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppModel.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppModel.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppModel.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppModel.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppModel.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppModel.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppModel.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppModel~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Core/AgentClient.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AgentClient.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AgentClient.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AgentClient.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AgentClient.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AgentClient.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AgentClient.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AgentClient.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AgentClient~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Core/AppMetadata.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppMetadata.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppMetadata.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppMetadata.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppMetadata.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppMetadata.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppMetadata.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppMetadata.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AppMetadata~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Core/CacheStore.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/CacheStore.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/CacheStore.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/CacheStore.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/CacheStore.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/CacheStore.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/CacheStore.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/CacheStore.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/CacheStore~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Core/ConnectionCoordinator.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConnectionCoordinator.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConnectionCoordinator.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConnectionCoordinator.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConnectionCoordinator.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConnectionCoordinator.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConnectionCoordinator.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConnectionCoordinator.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConnectionCoordinator~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Core/CryptoBox.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/CryptoBox.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/CryptoBox.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/CryptoBox.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/CryptoBox.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/CryptoBox.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/CryptoBox.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/CryptoBox.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/CryptoBox~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Core/EventFanout.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/EventFanout.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/EventFanout.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/EventFanout.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/EventFanout.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/EventFanout.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/EventFanout.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/EventFanout.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/EventFanout~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Core/KeychainStore.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/KeychainStore.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/KeychainStore.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/KeychainStore.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/KeychainStore.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/KeychainStore.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/KeychainStore.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/KeychainStore.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/KeychainStore~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Core/MockAgentClient.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/MockAgentClient.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/MockAgentClient.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/MockAgentClient.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/MockAgentClient.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/MockAgentClient.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/MockAgentClient.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/MockAgentClient.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/MockAgentClient~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Core/ProtocolModels.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProtocolModels.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProtocolModels.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProtocolModels.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProtocolModels.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProtocolModels.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProtocolModels.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProtocolModels.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProtocolModels~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Core/RemoteAgentClient.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/RemoteAgentClient.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/RemoteAgentClient.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/RemoteAgentClient.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/RemoteAgentClient.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/RemoteAgentClient.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/RemoteAgentClient.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/RemoteAgentClient.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/RemoteAgentClient~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Core/TransferClient.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TransferClient.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TransferClient.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TransferClient.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TransferClient.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TransferClient.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TransferClient.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TransferClient.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TransferClient~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Features/Conversations/ApprovalCard.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ApprovalCard.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ApprovalCard.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ApprovalCard.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ApprovalCard.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ApprovalCard.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ApprovalCard.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ApprovalCard.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ApprovalCard~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Features/Conversations/ConversationView.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConversationView.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConversationView.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConversationView.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConversationView.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConversationView.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConversationView.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConversationView.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConversationView~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Features/Conversations/ConversationViewModel.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConversationViewModel.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConversationViewModel.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConversationViewModel.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConversationViewModel.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConversationViewModel.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConversationViewModel.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConversationViewModel.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConversationViewModel~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Features/Conversations/DailyConversationListView.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/DailyConversationListView.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/DailyConversationListView.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/DailyConversationListView.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/DailyConversationListView.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/DailyConversationListView.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/DailyConversationListView.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/DailyConversationListView.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/DailyConversationListView~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Features/Conversations/EventViews.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/EventViews.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/EventViews.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/EventViews.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/EventViews.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/EventViews.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/EventViews.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/EventViews.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/EventViews~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Features/Conversations/TranscriptRenderer.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TranscriptRenderer.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TranscriptRenderer.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TranscriptRenderer.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TranscriptRenderer.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TranscriptRenderer.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TranscriptRenderer.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TranscriptRenderer.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TranscriptRenderer~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Features/Files/FileBrowserView.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FileBrowserView.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FileBrowserView.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FileBrowserView.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FileBrowserView.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FileBrowserView.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FileBrowserView.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FileBrowserView.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FileBrowserView~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Features/Files/FileBrowserViewModel.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FileBrowserViewModel.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FileBrowserViewModel.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FileBrowserViewModel.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FileBrowserViewModel.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FileBrowserViewModel.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FileBrowserViewModel.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FileBrowserViewModel.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FileBrowserViewModel~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Features/Files/FilePreviewView.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FilePreviewView.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FilePreviewView.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FilePreviewView.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FilePreviewView.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FilePreviewView.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FilePreviewView.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FilePreviewView.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/FilePreviewView~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Features/Files/TransferSheet.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TransferSheet.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TransferSheet.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TransferSheet.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TransferSheet.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TransferSheet.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TransferSheet.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TransferSheet.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/TransferSheet~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Features/Pairing/PairingScannerView.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/PairingScannerView.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/PairingScannerView.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/PairingScannerView.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/PairingScannerView.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/PairingScannerView.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/PairingScannerView.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/PairingScannerView.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/PairingScannerView~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Features/Pairing/PairingViewModel.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/PairingViewModel.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/PairingViewModel.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/PairingViewModel.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/PairingViewModel.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/PairingViewModel.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/PairingViewModel.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/PairingViewModel.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/PairingViewModel~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Features/Projects/ProjectDetailView.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProjectDetailView.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProjectDetailView.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProjectDetailView.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProjectDetailView.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProjectDetailView.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProjectDetailView.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProjectDetailView.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProjectDetailView~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Features/Projects/ProjectListView.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProjectListView.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProjectListView.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProjectListView.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProjectListView.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProjectListView.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProjectListView.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProjectListView.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProjectListView~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Features/Settings/AuditLogView.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AuditLogView.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AuditLogView.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AuditLogView.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AuditLogView.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AuditLogView.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AuditLogView.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AuditLogView.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/AuditLogView~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Features/Settings/DiagnosticsView.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/DiagnosticsView.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/DiagnosticsView.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/DiagnosticsView.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/DiagnosticsView.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/DiagnosticsView.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/DiagnosticsView.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/DiagnosticsView.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/DiagnosticsView~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Features/Settings/SettingsView.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/SettingsView.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/SettingsView.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/SettingsView.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/SettingsView.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/SettingsView.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/SettingsView.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/SettingsView.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/SettingsView~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Features/Settings/SettingsViewModel.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/SettingsViewModel.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/SettingsViewModel.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/SettingsViewModel.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/SettingsViewModel.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/SettingsViewModel.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/SettingsViewModel.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/SettingsViewModel.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/SettingsViewModel~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Features/Shell/ConnectionBanner.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConnectionBanner.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConnectionBanner.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConnectionBanner.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConnectionBanner.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConnectionBanner.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConnectionBanner.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConnectionBanner.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ConnectionBanner~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Features/Shell/LoadingRow.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/LoadingRow.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/LoadingRow.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/LoadingRow.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/LoadingRow.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/LoadingRow.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/LoadingRow.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/LoadingRow.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/LoadingRow~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Features/Shell/ProviderSwitcher.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProviderSwitcher.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProviderSwitcher.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProviderSwitcher.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProviderSwitcher.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProviderSwitcher.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProviderSwitcher.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProviderSwitcher.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/ProviderSwitcher~partial.swiftmodule"
+  },
+  "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/RemoteAI/Features/Shell/RootView.swift" : {
+    "const-values" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/RootView.swiftconstvalues",
+    "dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/RootView.d",
+    "diagnostics" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/RootView.dia",
+    "index-unit-output-path" : "/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/RootView.o",
+    "llvm-bc" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/RootView.bc",
+    "object" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/RootView.o",
+    "swift-dependencies" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/RootView.swiftdeps",
+    "swiftmodule" : "/Users/kangle/remoteAICli/.claude/worktrees/claude+ios-v1/ios/.deviceBuild/Build/Intermediates.noindex/RemoteAI.build/Debug-iphoneos/RemoteAIKit.build/Objects-normal/arm64/RootView~partial.swiftmodule"
+  }
+}

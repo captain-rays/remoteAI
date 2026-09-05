@@ -1,0 +1,4 @@
+module RemoteAIKit {
+header "RemoteAIKit-Swift.h"
+export *
+}

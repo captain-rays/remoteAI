@@ -1,0 +1,6 @@
+Target dependency graph (3 targets)
+Target 'RemoteAI' in project 'RemoteAI'
+➜ Explicit dependency on target 'RemoteAIKit' in project 'RemoteAI'
+Target 'RemoteAIKit' in project 'RemoteAI'
+➜ Explicit dependency on target 'RemoteAIKit' in project 'RemoteAI'
+Target 'RemoteAIKit' in project 'RemoteAI' (no dependencies)
