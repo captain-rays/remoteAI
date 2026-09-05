@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Keeps the named Cloudflare tunnel up, so the phone always has one stable
+  address for this Mac.
+
+  A *named* tunnel, not a quick one: a quick tunnel gets a new random hostname
+  every start, and the phone stores the address it paired against — a new
+  hostname means pairing again. The named tunnel's hostname never changes, so
+  pairing is done once.
+
+  Rendered by scripts/remoteai-service.sh — @PLACEHOLDER@ values are filled in
+  at install time, so nothing machine-specific is committed.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>live.jaco.remoteai.tunnel</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>@CLOUDFLARED@</string>
+        <string>tunnel</string>
+        <string>--url</string>
+        <string>@AGENT_URL@</string>
+        <string>run</string>
+        <string>@TUNNEL_NAME@</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>@LOG_DIR@/tunnel.log</string>
+    <key>StandardErrorPath</key>
+    <string>@LOG_DIR@/tunnel.log</string>
+    <key>WorkingDirectory</key>
+    <string>@HOME@</string>
+</dict>
+</plist>

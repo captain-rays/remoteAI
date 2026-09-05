@@ -98,6 +98,21 @@ Mac Agent 保留各工具的原始会话 ID，并将工具专属事件映射为�
 
 Mac 离线时，iOS 只展示已缓存内容，禁止发送消息、提交授权或浏览未缓存文件。CLI 崩溃或协议不兼容时，仅禁用对应 AI，另一个 AI 与文件功能保持可用。
 
+## 6.1 常驻运行（2026-09-05）
+
+Agent 与隧道都以当前登录用户的 LaunchAgent 常驻，开机自启、退出即拉起：
+`live.jaco.remoteai.agent` 与 `live.jaco.remoteai.tunnel`。用 LaunchAgent 而非
+LaunchDaemon，是因为 Agent 要读该用户的 Codex/Claude 会话，必须以其身份、其
+HOME 与登录钥匙串运行。
+
+隧道必须是 **命名隧道**：快速隧道每次启动都换随机域名，而手机在配对时会存下当时
+的地址——域名一变就得重新配对。命名隧道域名固定，配对只需一次。配合已落盘的配
+对记录（`devices` 表），重启 Agent、隧道或整机都不需要再扫码。
+
+安装、卸载、查看状态见 `scripts/remoteai-service.sh`；每台机器自己的取值（隧道
+域名、模型覆盖）放在 `~/.config/remoteai/agent.env`，不进版本库，样例见
+`deploy/remoteai.env.example`。
+
 ## 7. 文件传输
 
 文件传输采用分块 HTTPS：

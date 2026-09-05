@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Keeps the RemoteAI Agent running for the logged-in user.
+
+  A LaunchAgent, not a LaunchDaemon: the agent reads this user's Codex and
+  Claude sessions and must run as them, with their HOME and their login
+  keychain. It listens on 127.0.0.1 only; reaching it from a phone is the
+  tunnel's job.
+
+  Rendered by scripts/remoteai-service.sh — @PLACEHOLDER@ values are filled in
+  at install time, so nothing machine-specific is committed.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>live.jaco.remoteai.agent</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>@AGENT_BINARY@</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+@AGENT_ENVIRONMENT@
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <!-- Restart if it exits: an agent that died is a phone that cannot reach
+         this Mac, with nothing on screen to say why. -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>@LOG_DIR@/agent.log</string>
+    <key>StandardErrorPath</key>
+    <string>@LOG_DIR@/agent.log</string>
+    <key>WorkingDirectory</key>
+    <string>@HOME@</string>
+</dict>
+</plist>
