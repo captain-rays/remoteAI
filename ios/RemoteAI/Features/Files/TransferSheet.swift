@@ -84,11 +84,14 @@ struct TransferRow: View {
                 Spacer()
                 Text(statusText).font(.caption).foregroundStyle(.secondary)
             }
-            Text(transfer.destinationPath)
+            // A download's destination is a sandbox path nobody can act on;
+            // name the place the Files app shows instead.
+            Text(destinationText)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.head)
+                .accessibilityIdentifier("transfer-destination-\(transfer.id)")
 
             if transfer.status == .running {
                 ProgressView(value: transfer.progress.fraction)
@@ -124,6 +127,13 @@ struct TransferRow: View {
             }
         }
         .accessibilityIdentifier("transfer-\(transfer.id)")
+    }
+
+    private var destinationText: String {
+        guard transfer.direction == .download else { return transfer.destinationPath }
+        return TransferCoordinator.downloadLocationDescription(
+            for: URL(fileURLWithPath: transfer.destinationPath)
+        )
     }
 
     private var statusText: String {

@@ -87,6 +87,10 @@ iOS 与 Mac 使用版本化 JSON 消息协议。实时消息走单条 WebSocket�
 - v1 只允许浏览、预览和传输 `$HOME` 本身及其后代路径；绝对路径与根目录相对路径在 Agent 端统一规范化，根目录外路径和通过符号链接逃逸的路径一律拒绝。
 - 支持路径跳转、最近目录、收藏目录、搜索和常见文件预览。
 - 支持手动下载 Mac 文件到 iPhone，以及手动上传 iPhone 文件到指定 Mac 目录。
+- 下载落到 App 自己的 Documents 目录，并开启 `UIFileSharingEnabled` 与
+  `LSSupportsOpeningDocumentsInPlace`，使其在「文件」App 中显示为
+  「我的 iPhone › RemoteAI」。不开这两个键，文件会写到手机上却无法被任何方式取用。
+  传输列表显示的也是这个名字，而不是沙盒路径。
 - 同名上传必须选择“保留两份”或“覆盖”，不得自动决定。
 - 首版不支持在手机端直接编辑、删除、移动或重命名 Mac 文件。
 

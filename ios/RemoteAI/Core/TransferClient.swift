@@ -193,6 +193,23 @@ public final class TransferCoordinator {
 
     // MARK: - Download
 
+    /// Where downloads land on this phone: the app's own Documents folder,
+    /// which the Files app shows as "On My iPhone › RemoteAI".
+    public nonisolated static var downloadsDirectory: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    }
+
+    /// Human-readable form of where a download went, for the transfer row.
+    public nonisolated static func downloadLocationDescription(for destination: URL) -> String {
+        let root = downloadsDirectory.standardizedFileURL.path
+        let path = destination.standardizedFileURL.path
+        guard path.hasPrefix(root) else { return destination.lastPathComponent }
+        let relative = String(path.dropFirst(root.count)).trimmingCharacters(
+            in: CharacterSet(charactersIn: "/")
+        )
+        return "On My iPhone › RemoteAI › \(relative)"
+    }
+
     /// Called from the download button after the user chose a destination.
     public func startDownload(_ entry: FileEntry, to destination: URL) async {
         let directory = FileBrowserViewModel.parentPath(of: entry.path) ?? "/"

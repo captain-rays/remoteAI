@@ -259,6 +259,39 @@ public enum TransferSuite {
                 try expectEqual(samples, samples.sorted())
                 try expectEqual(samples.last, 1.0)
             },
+            TestCase("a download says where on the phone it landed") {
+                // The raw destination is a sandbox path like
+                // /var/mobile/Containers/…/Documents/report.pdf, which nobody
+                // can act on — the reader needs the name Files shows.
+                let destination = TransferCoordinator.downloadsDirectory
+                    .appendingPathComponent("report.pdf")
+                let described = TransferCoordinator.downloadLocationDescription(for: destination)
+                try expectEqual(described, "On My iPhone › RemoteAI › report.pdf")
+                try expectFalse(
+                    described.contains("/var/"),
+                    "a container path is not an answer to \"where did it go\""
+                )
+            },
+
+            TestCase("a nested download keeps its folder in the description") {
+                let destination = TransferCoordinator.downloadsDirectory
+                    .appendingPathComponent("logs")
+                    .appendingPathComponent("today.txt")
+                try expectEqual(
+                    TransferCoordinator.downloadLocationDescription(for: destination),
+                    "On My iPhone › RemoteAI › logs/today.txt"
+                )
+            },
+
+            TestCase("a destination outside the app falls back to the file name") {
+                try expectEqual(
+                    TransferCoordinator.downloadLocationDescription(
+                        for: URL(fileURLWithPath: "/tmp/elsewhere/report.pdf")
+                    ),
+                    "report.pdf"
+                )
+            },
+
         ]
     )
 }

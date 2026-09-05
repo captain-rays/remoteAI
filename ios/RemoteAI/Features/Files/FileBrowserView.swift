@@ -210,7 +210,7 @@ public struct FileBrowserView: View {
 
     /// Called only from the Download button.
     private func startDownload(_ entry: FileEntry) {
-        let destination = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let destination = TransferCoordinator.downloadsDirectory
             .appendingPathComponent(entry.name)
         Task { await transfers.startDownload(entry, to: destination) }
     }
