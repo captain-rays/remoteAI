@@ -28,7 +28,7 @@ fn maps_stream_json_lifecycle_and_unknown_events() {
 }
 
 #[test]
-fn command_spec_requires_manual_permissions_and_resume_is_explicit() {
+fn command_spec_runs_unattended_and_resume_is_explicit() {
     let adapter = ClaudeAdapter::new("/usr/local/bin/claude", "/Users/test");
     let start = adapter.command_spec(None);
     assert_eq!(
@@ -43,7 +43,12 @@ fn command_spec_requires_manual_permissions_and_resume_is_explicit() {
             "--include-partial-messages",
             "--include-hook-events",
             "--permission-mode",
-            "manual"
+            // The CLI cannot forward a permission prompt to a remote client:
+            // `manual` denies with "This command requires approval" and emits
+            // no `control_request` for the phone to answer, so `git fetch`
+            // could not be run from the phone at all. The phone is a
+            // convenience client and runs unattended by decision.
+            "bypassPermissions"
         ]
     );
     let resume = adapter.command_spec(Some("session-1"));
@@ -52,8 +57,35 @@ fn command_spec_requires_manual_permissions_and_resume_is_explicit() {
             .args
             .ends_with(&["--resume".into(), "session-1".into()])
     );
+    // The mode is passed as a value, never as the blanket skip flag, so it
+    // stays one word to change.
     let joined = start.args.join(" ");
-    assert!(!joined.contains("dangerously-skip-permissions"));
+    assert!(!joined.contains("--dangerously-skip-permissions"));
+}
+
+#[test]
+fn the_permission_mode_can_be_dialled_back_without_a_rebuild() {
+    let adapter = ClaudeAdapter::new("/usr/local/bin/claude", "/Users/test")
+        .with_permission_mode(Some("manual".into()));
+    let args = adapter.command_spec(None).args;
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["--permission-mode", "manual"]),
+        "an operator must be able to restore refusal: {args:?}"
+    );
+
+    // An unset or blank override leaves the default in place.
+    for blank in [None, Some(String::new()), Some("   ".into())] {
+        let adapter =
+            ClaudeAdapter::new("/usr/local/bin/claude", "/Users/test").with_permission_mode(blank);
+        assert!(
+            adapter
+                .command_spec(None)
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--permission-mode", "bypassPermissions"])
+        );
+    }
 }
 
 /// The CLI refuses `--print --output-format stream-json` unless `--verbose` is

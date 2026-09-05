@@ -78,6 +78,10 @@ iOS 与 Mac 使用版本化 JSON 消息协议。实时消息走单条 WebSocket�
 - 权限请求以卡片展示 AI、会话、工作目录、完整命令或文件操作及风险提示。
 - 首版只提供“仅本次允许”和“拒绝”，不提供永久允许。
 
+**Claude 的实际情况（2026-09-05，claude 2.1.210）**：Claude Code 无法把权限提示转发给远程客户端。在 `--permission-mode manual` 下它不发 `control_request`，而是直接把工具调用判为失败并返回 “This command requires approval”，因此手机上的审批卡片对 Claude 永远不会出现，`git fetch` 这类命令在手机端一次也跑不成。该 CLI 也没有 `--permission-prompt-tool` 之类的转发机制。
+
+据此，手机发起的 Claude 会话按“便利客户端、无人值守”运行，默认 `--permission-mode bypassPermissions`；`REMOTEAI_CLAUDE_PERMISSION_MODE` 可在不重新编译的情况下调回（`manual` 恢复拒绝，`auto` 逐次放行但保留工作目录沙箱）。这是明确的取舍：手机端因此没有人工闸门。Codex 不受影响——它的 app-server 会发 `item/commandExecution/requestApproval`，审批卡片按原设计工作。
+
 ### 5.4 文件
 
 - v1 只允许浏览、预览和传输 `$HOME` 本身及其后代路径；绝对路径与根目录相对路径在 Agent 端统一规范化，根目录外路径和通过符号链接逃逸的路径一律拒绝。

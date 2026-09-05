@@ -183,7 +183,10 @@ fn adapters_from_statuses(
                         ClaudeAdapter::new(executable, home.clone())
                             // Opt-in override for a Mac whose configured
                             // default model the account cannot use.
-                            .with_model(std::env::var("REMOTEAI_CLAUDE_MODEL").ok()),
+                            .with_model(std::env::var("REMOTEAI_CLAUDE_MODEL").ok())
+                            .with_permission_mode(
+                                std::env::var("REMOTEAI_CLAUDE_PERMISSION_MODE").ok(),
+                            ),
                     ) as Arc<dyn ProviderAdapter>,
                 }
             });

@@ -21,6 +21,16 @@ use crate::protocol::{
 const MAX_METADATA_LINE_BYTES: usize = 64 * 1024;
 /// Upper bound on how much of the CLI's own complaint is forwarded.
 const MAX_STDERR_REPORT_CHARS: usize = 500;
+/// Permission mode phone-started sessions run in.
+///
+/// This CLI cannot forward a permission prompt to a remote client: under
+/// `manual` it answers "This command requires approval" and denies, with no
+/// `control_request` for anyone to answer, so a phone could not run `git
+/// fetch` at all. The product decision is that the phone is a convenience
+/// client and runs unattended. `REMOTEAI_CLAUDE_PERMISSION_MODE` dials it back
+/// without a rebuild — `manual` restores refusal, `auto` approves each request
+/// but keeps the working-directory sandbox.
+const DEFAULT_PERMISSION_MODE: &str = "bypassPermissions";
 const MAX_DESKTOP_DEPTH: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,6 +170,7 @@ pub struct ClaudeAdapter {
     /// an operator sets it when that default is not usable for phone-started
     /// turns.
     model: Option<String>,
+    permission_mode: String,
 }
 
 #[derive(Debug, Clone)]
@@ -345,7 +356,18 @@ impl ClaudeAdapter {
             adopted_ids: Arc::new(RwLock::new(HashMap::new())),
             history_turns: DEFAULT_HISTORY_TURNS,
             model: None,
+            permission_mode: DEFAULT_PERMISSION_MODE.to_owned(),
         }
+    }
+
+    /// Run sessions in a different permission mode than the default.
+    pub fn with_permission_mode(mut self, mode: Option<String>) -> Self {
+        if let Some(mode) = mode.map(|mode| mode.trim().to_owned())
+            && !mode.is_empty()
+        {
+            self.permission_mode = mode;
+        }
+        self
     }
 
     /// Run every session this adapter starts on an explicit model.
@@ -383,12 +405,11 @@ impl ClaudeAdapter {
             "stream-json",
             "--include-partial-messages",
             "--include-hook-events",
-            "--permission-mode",
-            "manual",
         ]
         .into_iter()
         .map(str::to_owned)
         .collect::<Vec<_>>();
+        args.extend(["--permission-mode".to_owned(), self.permission_mode.clone()]);
         if let Some(model) = self.model.as_deref() {
             args.extend(["--model".into(), model.into()]);
         }
