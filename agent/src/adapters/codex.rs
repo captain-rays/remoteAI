@@ -106,6 +106,8 @@ impl CodexMapper {
             status: "idle".to_owned(),
             write_state: None,
             write_block_code: None,
+            source: None,
+            working_path: None,
         })
     }
 
@@ -331,6 +333,8 @@ impl CodexMapper {
                 .to_owned(),
             write_state: None,
             write_block_code: None,
+            source: None,
+            working_path: None,
         })
     }
 

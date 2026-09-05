@@ -130,6 +130,8 @@ async fn authenticated_catalog_route_exposes_only_requested_provider_daily_sessi
                 status: "idle".into(),
                 write_state: None,
                 write_block_code: None,
+                source: None,
+                working_path: None,
             }],
         )
         .await;
@@ -169,6 +171,8 @@ async fn project_conversations_route_filters_by_provider_and_project_id() {
                 status: "idle".into(),
                 write_state: None,
                 write_block_code: None,
+                source: None,
+                working_path: None,
             }],
         )
         .await;

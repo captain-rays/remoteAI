@@ -178,6 +178,32 @@ public struct ProjectSummary: Codable, Sendable, Hashable, Identifiable {
     }
 }
 
+/// Which of a provider's front ends recorded a conversation.
+///
+/// The phone lists everything on the Mac; the desktop app lists only its own.
+/// Naming the difference is what stops a project full of terminal sessions
+/// reading as phantom data.
+public enum ConversationSource: String, Codable, Sendable, Hashable {
+    case desktop
+    case terminal
+    case unknown
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = ConversationSource(rawValue: raw) ?? .unknown
+    }
+
+    /// Short enough for a list row. `nil` where the provider has one front end
+    /// and the distinction would be noise.
+    public var label: String? {
+        switch self {
+        case .desktop: return "Desktop"
+        case .terminal: return "Terminal"
+        case .unknown: return nil
+        }
+    }
+}
+
 public struct ConversationSummary: Codable, Sendable, Hashable, Identifiable {
     public let id: String
     public let provider: ProviderId
@@ -189,6 +215,11 @@ public struct ConversationSummary: Codable, Sendable, Hashable, Identifiable {
     public let status: ConversationStatus
     public let writeState: ConversationWriteState?
     public let writeBlockCode: String?
+    public let source: ConversationSource?
+    /// Where the conversation actually ran, when that is not the project's own
+    /// directory — a git worktree belongs to the project above it, but the
+    /// reader should still be able to tell.
+    public let workingPath: String?
 
     public init(
         id: String,
@@ -200,7 +231,9 @@ public struct ConversationSummary: Codable, Sendable, Hashable, Identifiable {
         updatedAt: Date,
         status: ConversationStatus,
         writeState: ConversationWriteState? = nil,
-        writeBlockCode: String? = nil
+        writeBlockCode: String? = nil,
+        source: ConversationSource? = nil,
+        workingPath: String? = nil
     ) {
         self.id = id
         self.provider = provider
@@ -208,6 +241,8 @@ public struct ConversationSummary: Codable, Sendable, Hashable, Identifiable {
         self.title = title
         self.projectId = projectId
         self.projectPath = projectPath
+        self.source = source
+        self.workingPath = workingPath
         self.updatedAt = updatedAt
         self.status = status
         self.writeState = writeState

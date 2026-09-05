@@ -137,6 +137,8 @@ impl ProviderAdapter for MockAdapter {
                 status: "idle".into(),
                 write_state: None,
                 write_block_code: None,
+                source: None,
+                working_path: None,
             },
         );
         self.emit(ConversationEvent::Started(json!({"conversationId": id})));

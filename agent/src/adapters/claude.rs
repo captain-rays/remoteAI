@@ -14,8 +14,8 @@ use tokio::sync::{Mutex, RwLock, broadcast};
 
 use super::{ConversationPage, DEFAULT_HISTORY_TURNS, ProviderAdapter, history_turn_page};
 use crate::protocol::{
-    ApprovalDecision, ConversationEvent, ConversationKind, ConversationSummary, ProviderId,
-    ProviderStatus, WriteState,
+    ApprovalDecision, ConversationEvent, ConversationKind, ConversationSource, ConversationSummary,
+    ProviderId, ProviderStatus, WriteState,
 };
 
 const MAX_METADATA_LINE_BYTES: usize = 64 * 1024;
@@ -618,6 +618,11 @@ impl ClaudeAdapter {
         project_id: Option<String>,
         project_path: Option<String>,
     ) -> ConversationSummary {
+        // Only worth showing when it differs from the project's own directory.
+        let working_path = {
+            let cwd = canonical_or_normalized(&desktop.cwd);
+            (Some(cwd.as_str()) != project_path.as_deref()).then_some(cwd)
+        };
         ConversationSummary {
             id: desktop.desktop_id.clone(),
             provider: ProviderId::Claude,
@@ -636,6 +641,8 @@ impl ClaudeAdapter {
                 .cli_id
                 .is_none()
                 .then(|| "claude_cli_session_unavailable".into()),
+            source: Some(ConversationSource::Desktop),
+            working_path,
         }
     }
 }
@@ -757,6 +764,10 @@ impl ProviderAdapter for ClaudeAdapter {
                 summary.kind = ConversationKind::Project;
                 summary.project_id = Some(project.id.clone());
                 summary.project_path = Some(project.canonical_path.clone());
+                // A worktree or subdirectory belongs to the project above it,
+                // but the reader should still be able to tell them apart.
+                summary.working_path =
+                    (session.cwd != project.canonical_path).then(|| session.cwd.clone());
                 conversations.push(summary);
             }
         }
@@ -1271,6 +1282,9 @@ fn read_conversation_metadata(
         status: "idle".into(),
         write_state: None,
         write_block_code: None,
+        source: Some(ConversationSource::Terminal),
+        // Filled in by the index once the enclosing project is known.
+        working_path: Some(cwd.to_string_lossy().into_owned()),
     }))
 }
 

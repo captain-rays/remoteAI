@@ -425,6 +425,8 @@ mod tests {
             status: "idle".into(),
             write_state: Some(WriteState::Busy),
             write_block_code: Some("probe_busy".into()),
+            source: None,
+            working_path: None,
         };
         let status = ProviderStatus {
             provider,

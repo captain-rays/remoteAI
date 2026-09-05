@@ -30,6 +30,8 @@ fn summary(
         status: "idle".into(),
         write_state: None,
         write_block_code: None,
+        source: None,
+        working_path: None,
     }
 }
 

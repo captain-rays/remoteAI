@@ -20,6 +20,21 @@ pub enum ConversationKind {
     Project,
 }
 
+/// Which of a provider's two front ends recorded a conversation.
+///
+/// The phone lists everything on the Mac, and the desktop app only lists its
+/// own — so most of what the phone shows for a project is invisible there.
+/// Saying where a conversation came from is what makes that difference legible
+/// rather than alarming.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationSource {
+    /// Recorded by the provider's desktop application.
+    Desktop,
+    /// Recorded by the command-line tool.
+    Terminal,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WriteState {
@@ -60,6 +75,13 @@ pub struct ConversationSummary {
     pub write_state: Option<WriteState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub write_block_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<ConversationSource>,
+    /// The directory the conversation actually ran in, when that is not the
+    /// project's own directory — a git worktree or a subdirectory belongs to
+    /// the project above it, but the reader should still be able to tell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

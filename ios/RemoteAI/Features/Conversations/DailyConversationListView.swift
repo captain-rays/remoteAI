@@ -76,7 +76,17 @@ struct ConversationRow: View {
                 .font(.body)
             HStack(spacing: 6) {
                 Text(conversation.updatedAt, style: .date)
-                if let path = conversation.projectPath {
+                // Which front end recorded it. Most of what the phone lists
+                // for a project was recorded by the terminal and so is not in
+                // the desktop app at all; saying so makes that legible.
+                if let source = conversation.source?.label {
+                    Text(source)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(.secondary.opacity(0.15), in: Capsule())
+                        .accessibilityIdentifier("conversation-source-\(conversation.id)")
+                }
+                if let path = conversation.workingPath ?? conversation.projectPath {
                     Text(path).lineLimit(1).truncationMode(.head)
                 }
                 if conversation.status == .running {

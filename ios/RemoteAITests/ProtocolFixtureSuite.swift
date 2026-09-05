@@ -408,6 +408,46 @@ public enum ProtocolFixtureSuite {
                 try expectEqual(object["conversationId"] as? String, "codex-daily-1")
                 try expectFalse((object["messageId"] as? String ?? "").isEmpty)
             },
+            TestCase("a conversation row decodes where it came from and where it ran") {
+                let json = """
+                    {"id":"s1","provider":"claude","kind":"project","title":"Work",
+                     "projectId":"p1","projectPath":"/Users/dev/app",
+                     "updatedAt":"2026-09-05T10:00:00Z","status":"idle",
+                     "source":"terminal","workingPath":"/Users/dev/app/.worktrees/x"}
+                    """
+                let summary = try ProtocolCoding.decoder.decode(
+                    ConversationSummary.self, from: Data(json.utf8)
+                )
+                try expectEqual(summary.source, .terminal)
+                try expectEqual(summary.source?.label, "Terminal")
+                try expectEqual(summary.workingPath, "/Users/dev/app/.worktrees/x")
+            },
+
+            TestCase("a row from an agent that says nothing about origin still decodes") {
+                // Codex has one front end, so its rows carry neither field.
+                let json = """
+                    {"id":"s1","provider":"codex","kind":"daily","title":"Chat",
+                     "updatedAt":"2026-09-05T10:00:00Z","status":"idle"}
+                    """
+                let summary = try ProtocolCoding.decoder.decode(
+                    ConversationSummary.self, from: Data(json.utf8)
+                )
+                try expectNil(summary.source)
+                try expectNil(summary.workingPath)
+            },
+
+            TestCase("an origin this build does not know is not a decode failure") {
+                let json = """
+                    {"id":"s1","provider":"claude","kind":"daily","title":"Chat",
+                     "updatedAt":"2026-09-05T10:00:00Z","status":"idle","source":"web"}
+                    """
+                let summary = try ProtocolCoding.decoder.decode(
+                    ConversationSummary.self, from: Data(json.utf8)
+                )
+                try expectEqual(summary.source, .unknown)
+                try expectNil(summary.source?.label, "an unknown origin is not worth a badge")
+            },
+
         ]
     )
 

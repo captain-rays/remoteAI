@@ -1325,3 +1325,47 @@ async fn reports_the_first_history_page_of_a_real_session() {
     );
     assert!(turns <= 5, "a page carries at most five turns");
 }
+
+#[tokio::test]
+async fn a_session_says_which_front_end_recorded_it_and_where_it_ran() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+    use remote_ai_agent::catalog::project_id_for_path;
+    use remote_ai_agent::protocol::ConversationSource;
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = write_nested_cli_sessions(temp.path());
+    let adapter = ClaudeAdapter::new("claude", temp.path());
+
+    let conversations = adapter
+        .list_project_conversations(&project_id_for_path(
+            ProviderId::Claude,
+            &canonical(&fixture.designated),
+        ))
+        .await
+        .unwrap();
+
+    let desktop = conversations
+        .iter()
+        .find(|conversation| conversation.id == "desktop-1")
+        .expect("the desktop session");
+    assert_eq!(desktop.source, Some(ConversationSource::Desktop));
+    assert_eq!(
+        desktop.working_path, None,
+        "a session in the project's own directory needs no second location"
+    );
+
+    let nested = conversations
+        .iter()
+        .find(|conversation| conversation.id == "nested-session")
+        .expect("the worktree session");
+    assert_eq!(
+        nested.source,
+        Some(ConversationSource::Terminal),
+        "the desktop app never recorded this one, which is why it is not in it"
+    );
+    assert_eq!(
+        nested.working_path.as_deref(),
+        Some(canonical(&fixture.nested).as_str()),
+        "a worktree rolls up into its project, but must still say where it ran"
+    );
+}
