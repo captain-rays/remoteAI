@@ -66,7 +66,9 @@ public final class AppDependencies {
         // the credential was still in the keychain and the agent still knew
         // the device. If the Mac cannot be reached, the first request says so.
         if (try? store.load()) ?? nil != nil {
-            self.connectionState = .online
+            // Through the setter, so the app model learns too: the banner
+            // reads one and sending is gated on the other.
+            setConnectionState(.online)
         }
     }
 

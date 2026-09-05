@@ -299,6 +299,14 @@ public enum AppDependenciesSuite {
                     await dependencies.connectionState, .online,
                     "a stored identity is a completed pairing; nothing more is needed"
                 )
+                // The banner reads one of these and sending is gated on the
+                // other, so a launch state that reaches only one leaves the
+                // app looking online while refusing to send — or the reverse.
+                try expectEqual(await dependencies.appModel.connectionState, .online)
+                try expectTrue(
+                    await dependencies.appModel.isOnline,
+                    "a paired phone must be allowed to send"
+                )
             },
 
             TestCase("a phone with no identity still starts disconnected") {
