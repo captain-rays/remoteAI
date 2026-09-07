@@ -6,6 +6,9 @@ import Observation
 @Observable
 public final class SettingsViewModel {
     public private(set) var diagnostics: Diagnostics?
+    /// Why the last diagnostics read produced nothing. `nil` while it has
+    /// either worked or not been attempted.
+    public private(set) var diagnosticsFailure: String?
     public private(set) var auditEntries: [AuditEntry] = []
     public private(set) var isRevoked = false
     public private(set) var errorMessage: String?
@@ -26,8 +29,12 @@ public final class SettingsViewModel {
             auditEntries = try await client.listAudit(limit: auditLimit)
                 .sorted { $0.timestamp > $1.timestamp }
             errorMessage = nil
+            diagnosticsFailure = nil
         } catch {
             errorMessage = "\(error)"
+            // The screen showed "not available while offline" for every
+            // failure, including ones where the Mac answered. Keep the reason.
+            diagnosticsFailure = AppModel.userMessage(for: error)
         }
     }
 

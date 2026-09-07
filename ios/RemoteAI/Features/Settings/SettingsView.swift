@@ -47,7 +47,10 @@ public struct SettingsView: View {
                 }
 
                 Section("Diagnostics") {
-                    DiagnosticsView(diagnostics: settings.diagnostics)
+                    DiagnosticsView(
+                        diagnostics: settings.diagnostics,
+                        failure: settings.diagnosticsFailure
+                    )
                 }
 
                 Section("Cache") {

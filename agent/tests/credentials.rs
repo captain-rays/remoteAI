@@ -128,3 +128,32 @@ fn the_real_keychain_round_trips_a_snapshot() {
     keychain.delete(service, "probe").unwrap();
     assert!(keychain.get(service, "probe").unwrap().is_none());
 }
+
+/// Whether the agent can read Claude's live credential without macOS asking
+/// the person at the Mac to approve it.
+///
+/// The item was created by another program, and a keychain item can be
+/// restricted to the applications on its access list. If reading it prompts,
+/// every account operation stalls behind a dialog on the Mac — which is the
+/// one thing this client is not allowed to cause. Ignored by default: it
+/// depends on that Mac being signed in to Claude.
+///
+///     cargo test --test credentials -- --ignored the_agent_can_read
+#[test]
+#[ignore = "reads this Mac's live Claude credential"]
+fn the_agent_can_read_claudes_live_credential_without_a_prompt() {
+    let user = std::env::var("USER").expect("a login name");
+    let claude = LiveCredential::claude(&user);
+    let read = claude
+        .read(&Keychain)
+        .expect("reading the keychain must not fail");
+    // The value is never printed, only measured.
+    match read {
+        Some(secret) => assert!(
+            secret.len() > 64,
+            "a credential should be longer than {} bytes",
+            secret.len()
+        ),
+        None => eprintln!("this Mac is not signed in to Claude; nothing to read"),
+    }
+}

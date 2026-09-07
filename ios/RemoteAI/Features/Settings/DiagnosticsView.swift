@@ -3,9 +3,12 @@ import SwiftUI
 @MainActor
 public struct DiagnosticsView: View {
     private let diagnostics: Diagnostics?
+    /// Why the read did not produce anything, if it failed.
+    private let failure: String?
 
-    public init(diagnostics: Diagnostics?) {
+    public init(diagnostics: Diagnostics?, failure: String? = nil) {
         self.diagnostics = diagnostics
+        self.failure = failure
     }
 
     @ViewBuilder
@@ -28,8 +31,13 @@ public struct DiagnosticsView: View {
             }
             .accessibilityIdentifier("diagnostics")
         } else {
-            Text("Diagnostics are not available while offline.")
+            // "Offline" was a guess: this reads the same whether the Mac was
+            // unreachable, the request failed, or nothing has asked yet.
+            // Saying which is the difference between an explanation and a
+            // wrong explanation.
+            Text(failure ?? "Diagnostics have not loaded yet.")
                 .foregroundStyle(.secondary)
+                .accessibilityIdentifier("diagnostics-unavailable")
         }
     }
 }

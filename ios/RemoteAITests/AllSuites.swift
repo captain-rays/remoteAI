@@ -22,5 +22,6 @@ public enum AllSuites {
         AppDependenciesSuite.suite,
         ProviderHealthSuite.suite,
         AccountsViewModelSuite.suite,
+        DiagnosticsWordingSuite.suite,
     ]
 }

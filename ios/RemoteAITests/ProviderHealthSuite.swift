@@ -196,3 +196,55 @@ private actor StatusStubClient: StubAgentClient {
     func listDailyConversations(provider: ProviderId) async throws -> [ConversationSummary] { [] }
     func listProjects(provider: ProviderId) async throws -> [ProjectSummary] { [] }
 }
+
+/// The Settings screen's diagnostics placeholder used to claim the phone was
+/// offline for every failure, including ones the Mac answered.
+public enum DiagnosticsWordingSuite {
+    public static let suite = TestSuite(
+        name: "DiagnosticsWordingSuite",
+        cases: [
+            TestCase("a diagnostics read that has not happened is not called offline") {
+                let model = await MainActor.run {
+                    SettingsViewModel(
+                        client: MockAgentClient(), cache: InMemoryCatalogCache(),
+                        store: InMemorySecretStore()
+                    )
+                }
+                try expectNil(await model.diagnosticsFailure)
+            },
+
+            TestCase("a failed diagnostics read keeps the reason it failed") {
+                let model = await MainActor.run {
+                    SettingsViewModel(
+                        client: RefusingDiagnosticsClient(), cache: InMemoryCatalogCache(),
+                        store: InMemorySecretStore()
+                    )
+                }
+                await model.reload()
+
+                try expectEqual(
+                    await model.diagnosticsFailure, "The Mac could not be reached."
+                )
+            },
+
+            TestCase("a diagnostics read that works leaves no complaint behind") {
+                let model = await MainActor.run {
+                    SettingsViewModel(
+                        client: MockAgentClient(), cache: InMemoryCatalogCache(),
+                        store: InMemorySecretStore()
+                    )
+                }
+                await model.reload()
+
+                try expectNotNil(await model.diagnostics)
+                try expectNil(await model.diagnosticsFailure)
+            },
+        ]
+    )
+}
+
+private actor RefusingDiagnosticsClient: StubAgentClient {
+    func diagnostics() async throws -> Diagnostics {
+        throw AgentClientError.transport("the tunnel is down")
+    }
+}

@@ -453,3 +453,77 @@ async fn switching_accounts_does_not_run_the_clis_logout() {
         "an explicit sign-out goes through the CLI"
     );
 }
+
+/// The live write path: this Mac's real Claude CLI and real login keychain.
+///
+/// Everything above runs against a stand-in, which proves the logic but not
+/// that this Mac will let the agent read the credential the CLI is using and
+/// keep a copy in the keychain. Saving only reads the live credential, so it
+/// cannot disturb the sign-in. Ignored by default — it needs this Mac to be
+/// signed in to Claude, and it writes (then removes) one keychain item.
+///
+///     cargo test --test provider_accounts -- --ignored saving_this_macs
+#[tokio::test]
+#[ignore = "uses this Mac's real Claude CLI and login keychain"]
+async fn saving_this_macs_real_claude_account_keeps_a_working_copy() {
+    use remote_ai_agent::credentials::Keychain;
+
+    let claude = match std::process::Command::new("which").arg("claude").output() {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).trim().to_owned()
+        }
+        _ => {
+            eprintln!("claude is not installed here; nothing to check");
+            return;
+        }
+    };
+    let user = std::env::var("USER").expect("a login name");
+    let live = LiveCredential::claude(&user);
+    let state = tempfile::tempdir().unwrap();
+    let vault = Arc::new(AccountVault::keychain());
+    let label = "remoteai-selftest";
+    let service = AccountService::new(
+        ProviderId::Claude,
+        claude,
+        live,
+        vault.clone(),
+        Arc::new(Store::open(state.path()).await.unwrap()),
+        Arc::new(LoginProbe::claude(
+            std::env::var("REMOTEAI_CLAUDE_BIN").unwrap_or_else(|_| "claude".into()),
+        )),
+        tokio::sync::broadcast::channel(8).0,
+    );
+
+    let before = service.view().await.unwrap();
+    if before.login.state != LoginState::LoggedIn {
+        eprintln!("this Mac is not signed in to Claude; nothing to save");
+        return;
+    }
+    assert!(
+        before.login.account.is_some(),
+        "the CLI names the account it is signed in as"
+    );
+
+    let after = service.save_current(label).await.unwrap();
+    let saved = after
+        .accounts
+        .iter()
+        .find(|account| account.label == label)
+        .expect("the account was filed");
+    assert!(saved.is_current);
+    assert!(
+        saved.has_credential,
+        "the copy is in this Mac's keychain and readable back"
+    );
+    assert_eq!(saved.display, before.login.account);
+
+    // Leave the keychain as it was found.
+    vault.delete(ProviderId::Claude, label).unwrap();
+    assert!(vault.load(ProviderId::Claude, label).unwrap().is_none());
+    assert_eq!(
+        service.view().await.unwrap().login.state,
+        LoginState::LoggedIn,
+        "saving a copy never disturbs the sign-in"
+    );
+    let _ = Keychain;
+}
