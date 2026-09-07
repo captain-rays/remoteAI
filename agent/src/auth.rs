@@ -141,6 +141,7 @@ pub struct LoginProbe {
     args: Vec<String>,
     parse: fn(&str) -> ProviderLogin,
     cached: Arc<Mutex<Option<(Instant, ProviderLogin)>>>,
+    cache_for: Duration,
 }
 
 impl LoginProbe {
@@ -166,7 +167,19 @@ impl LoginProbe {
             args: args.iter().map(|argument| (*argument).to_owned()).collect(),
             parse,
             cached: Arc::new(Mutex::new(None)),
+            cache_for: CACHE_FOR,
         }
+    }
+
+    /// Change how long an answer is reused.
+    ///
+    /// Production keeps the default: the phone asks for provider status on
+    /// every catalog reload, and each answer costs a process spawn. A test
+    /// that changes a credential behind the CLI's back sets this to zero, so
+    /// what it is checking is the logic and not the clock.
+    pub fn with_cache_for(mut self, cache_for: Duration) -> Self {
+        self.cache_for = cache_for;
+        self
     }
 
     /// Drop the remembered answer, so the next read asks the CLI again. Called
@@ -178,7 +191,7 @@ impl LoginProbe {
     pub async fn read(&self) -> ProviderLogin {
         let mut cached = self.cached.lock().await;
         if let Some((measured_at, login)) = cached.as_ref()
-            && measured_at.elapsed() < CACHE_FOR
+            && measured_at.elapsed() < self.cache_for
         {
             return login.clone();
         }

@@ -89,7 +89,9 @@ async fn harness(signed_in_as: Option<&str>) -> Harness {
         LiveCredential::File(credential.clone()),
         Arc::new(AccountVault::new(Box::new(InMemorySecrets::default()))),
         store,
-        Arc::new(LoginProbe::claude(program)),
+        // No cached answers: several tests change the credential behind the
+        // CLI's back, and a minute-old answer would be what they measured.
+        Arc::new(LoginProbe::claude(program).with_cache_for(std::time::Duration::ZERO)),
         events,
     ));
     Harness {
@@ -380,11 +382,15 @@ async fn signing_in_while_signed_in_signs_out_first_and_keeps_the_old_account() 
     };
     service.send_login_line(&session, "GOOD-CODE").await.unwrap();
 
+    // Wait for the *filing* to land, not merely for the new login to show:
+    // the sign-in becomes visible a moment before the account it belongs to
+    // has been written down, so waiting on the login would be waiting on the
+    // wrong thing.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         let view = service.view().await.unwrap();
-        if view.login.account.as_deref() == Some("new@example.com") {
-            assert_eq!(view.accounts.len(), 2);
+        if view.accounts.len() == 2 {
+            assert_eq!(view.login.account.as_deref(), Some("new@example.com"));
             break;
         }
         assert!(std::time::Instant::now() < deadline, "login did not finish");
@@ -526,4 +532,41 @@ async fn saving_this_macs_real_claude_account_keeps_a_working_copy() {
         "saving a copy never disturbs the sign-in"
     );
     let _ = Keychain;
+}
+
+#[tokio::test]
+async fn an_account_stops_being_current_when_the_cli_signs_itself_out() {
+    // The case this whole feature exists for: away from the Mac, Codex has
+    // logged itself out, and the phone is the only way back in. Nothing tells
+    // the agent that happened — a token expires, or the person signs out
+    // somewhere else — so the "current" flag in its own index goes stale.
+    //
+    // Reporting the stale flag is worse than reporting nothing: the screen
+    // says "not signed in" at the top and puts a tick next to a saved account
+    // at the same time, and the tick is what tells the reader there is
+    // nothing to do.
+    let harness = harness(Some("first@example.com")).await;
+    let service = &harness.service;
+    service.save_current("first").await.unwrap();
+    assert!(service.view().await.unwrap().accounts[0].is_current);
+
+    // The CLI loses its credential without going through us.
+    std::fs::remove_file(&harness.credential).unwrap();
+
+    let view = service.view().await.unwrap();
+    assert_eq!(view.login.state, LoginState::LoggedOut);
+    assert_eq!(view.accounts.len(), 1, "the saved copy is still offered");
+    assert!(
+        view.accounts[0].has_credential,
+        "and it still has a credential, so it is worth tapping"
+    );
+    assert!(
+        !view.accounts[0].is_current,
+        "nothing can be in use while the CLI is signed out"
+    );
+
+    // Switching to it is the way back, and it makes it current again.
+    let view = service.activate("first").await.unwrap();
+    assert_eq!(view.login.state, LoginState::LoggedIn);
+    assert!(view.accounts[0].is_current);
 }

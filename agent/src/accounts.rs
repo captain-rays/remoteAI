@@ -150,6 +150,14 @@ impl AccountService {
             .provider_accounts(self.provider)
             .await
             .map_err(|_| AccountError::Failed)?;
+        let login = self.probe.read().await;
+        // Nothing tells us when a CLI loses its credential on its own — a
+        // token expires, or someone signs out elsewhere — so the index's
+        // "current" flag goes stale. The CLI's own answer decides: while it
+        // says signed out, no saved account is in use. Showing the stale tick
+        // would tell the reader there is nothing to do at the exact moment
+        // tapping that account is the way back in.
+        let anything_in_use = login.state == LoginState::LoggedIn;
         let mut accounts = Vec::with_capacity(stored.len());
         for account in stored {
             let has_credential = self
@@ -160,14 +168,14 @@ impl AccountService {
             accounts.push(AccountEntry {
                 label: account.label,
                 display: account.display,
-                is_current: account.is_current,
+                is_current: account.is_current && anything_in_use,
                 has_credential,
             });
         }
         Ok(AccountsView {
             provider: self.provider,
             accounts,
-            login: self.probe.read().await,
+            login,
             login_in_progress: self.session.lock().await.is_some(),
             last_login_message: self.last_login_message.lock().await.clone(),
         })
