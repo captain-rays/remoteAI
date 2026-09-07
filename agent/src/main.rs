@@ -10,6 +10,7 @@ use p256::elliptic_curve::sec1::ToEncodedPoint;
 use remote_ai_agent::adapters::claude::ClaudeAdapter;
 use remote_ai_agent::adapters::codex::CodexAdapter;
 use remote_ai_agent::adapters::{ConversationPage, ProviderAdapter};
+use remote_ai_agent::auth::LoginProbe;
 use remote_ai_agent::config::AgentConfig;
 use remote_ai_agent::config::resolve_home;
 use remote_ai_agent::crypto::load_or_create_private_key;
@@ -227,6 +228,28 @@ async fn discover_runtime_adapters(home: PathBuf) -> Vec<Arc<dyn ProviderAdapter
     adapters_from_statuses(home, statuses)
 }
 
+/// Teach the gateway how to ask each installed CLI who is signed in.
+///
+/// Only a provider whose executable was actually found gets a probe: without
+/// one the phone is told nothing about the account, which is honest, where
+/// spawning a program that is not there would report everyone as logged out.
+async fn register_login_probes(state: &GatewayState) {
+    let adapters = state.provider_adapters.read().await.clone();
+    for adapter in adapters {
+        let status = adapter.status().await;
+        let Some(executable) = status.executable_path.clone() else {
+            continue;
+        };
+        let probe = match status.provider {
+            ProviderId::Claude => LoginProbe::claude(executable),
+            ProviderId::Codex => LoginProbe::codex(executable),
+        };
+        state
+            .set_login_probe(status.provider, Arc::new(probe))
+            .await;
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let config = AgentConfig::default();
@@ -256,6 +279,7 @@ async fn main() -> anyhow::Result<()> {
     state
         .configure_runtime_state(&home, discover_runtime_adapters(home.clone()).await)
         .await;
+    register_login_probes(&state).await;
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     println!(
         "{} listening on {}",

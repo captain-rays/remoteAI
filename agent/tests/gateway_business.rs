@@ -582,3 +582,137 @@ fn business_router_does_not_add_plaintext_http_business_endpoint() {
     let _ = Request::get("/v1/ws").body(Body::empty()).unwrap();
     let _ = ConversationKind::Daily;
 }
+
+#[tokio::test]
+async fn a_turn_that_fails_for_lack_of_credit_is_reported_against_the_provider() {
+    // A failed turn shows up in its own conversation, which cannot express
+    // "and every other conversation of this provider will fail the same way
+    // until you top up". The phone learns that from provider status.
+    let state = state();
+    let codex = Arc::new(MockAdapter::new(ProviderId::Codex));
+    let claude = Arc::new(MockAdapter::new(ProviderId::Claude));
+    state
+        .set_provider_adapters(vec![
+            codex.clone() as Arc<dyn ProviderAdapter>,
+            claude as Arc<dyn ProviderAdapter>,
+        ])
+        .await;
+    let inbound = CryptoBox::new([9; 32], *b"IOS>");
+    let outbound = CryptoBox::new([9; 32], *b"MAC>");
+    let mut session =
+        GatewaySession::new(state, "phone-1", inbound.receiver(), outbound.clone()).await;
+
+    let status_of = |frames: Vec<Vec<u8>>, outbound: &CryptoBox| -> Value {
+        decode_frames(frames, outbound)
+            .into_iter()
+            .find(|value| value["type"] == "provider.status.result")
+            .expect("a status response")["payload"]
+            .clone()
+    };
+
+    let before = session
+        .handle_frame(&request_frame(
+            &inbound,
+            1,
+            "provider.status",
+            json!({"provider":"codex"}),
+        ))
+        .await
+        .unwrap();
+    let before = status_of(before, &outbound);
+    assert_eq!(before["provider"], "codex", "the old shape is still there");
+    assert!(before.get("problem").is_none(), "nothing has failed yet");
+
+    codex.emit_event(remote_ai_agent::protocol::ConversationEvent::TurnFailed(
+        json!({
+            "conversationId": "codex-daily-1",
+            "message": "You've hit your usage limit. Visit \
+                        https://chatgpt.com/codex/settings/usage to purchase \
+                        more credits or try again at 9:49 PM.",
+        }),
+    ));
+
+    // The event reaches the phone on the next exchange, and is classified as
+    // it passes through.
+    let failure = session
+        .handle_frame(&request_frame(
+            &inbound,
+            2,
+            "provider.status",
+            json!({"provider":"codex"}),
+        ))
+        .await
+        .unwrap();
+    assert!(
+        decode_frames(failure, &outbound)
+            .iter()
+            .any(|value| value["type"] == "turn.failed"),
+        "the turn failure still reaches the transcript"
+    );
+
+    let after = session
+        .handle_frame(&request_frame(
+            &inbound,
+            3,
+            "provider.status",
+            json!({"provider":"codex"}),
+        ))
+        .await
+        .unwrap();
+    let after = status_of(after, &outbound);
+    assert_eq!(after["problem"]["code"], "quota_exhausted");
+    assert!(
+        after["problem"]["message"]
+            .as_str()
+            .expect("the provider's own words")
+            .contains("purchase"),
+        "the message keeps the part the person needs to act on"
+    );
+
+    let other = session
+        .handle_frame(&request_frame(
+            &inbound,
+            4,
+            "provider.status",
+            json!({"provider":"claude"}),
+        ))
+        .await
+        .unwrap();
+    assert!(
+        status_of(other, &outbound).get("problem").is_none(),
+        "Codex running out of credit says nothing about Claude"
+    );
+}
+
+#[tokio::test]
+async fn a_provider_with_no_installed_cli_is_not_reported_as_logged_out() {
+    // No probe is registered for a CLI that was never found. Reporting
+    // "logged out" there would send someone to re-authenticate a program
+    // they have not installed.
+    let state = state();
+    state
+        .set_provider_adapters(vec![
+            Arc::new(MockAdapter::new(ProviderId::Codex)) as Arc<dyn ProviderAdapter>,
+        ])
+        .await;
+    let inbound = CryptoBox::new([11; 32], *b"IOS>");
+    let outbound = CryptoBox::new([11; 32], *b"MAC>");
+    let mut session =
+        GatewaySession::new(state, "phone-1", inbound.receiver(), outbound.clone()).await;
+
+    let frames = session
+        .handle_frame(&request_frame(
+            &inbound,
+            1,
+            "provider.status",
+            json!({"provider":"codex"}),
+        ))
+        .await
+        .unwrap();
+    let payload = decode_frames(frames, &outbound)
+        .into_iter()
+        .find(|value| value["type"] == "provider.status.result")
+        .expect("a status response")["payload"]
+        .clone();
+    assert!(payload.get("login").is_none());
+}

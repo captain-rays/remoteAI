@@ -49,6 +49,13 @@ pub struct GatewayState {
     pub provider_adapters: Arc<RwLock<Vec<Arc<dyn ProviderAdapter>>>>,
     pub audit: AuditLog,
     pub diagnostics: Arc<Diagnostics>,
+    /// Why each provider is currently refusing, if it is. Shared by every
+    /// connection so two phones are told the same thing.
+    pub problems: Arc<crate::health::ProblemLog>,
+    /// How to ask each provider's CLI who is logged in. Empty until the
+    /// startup wiring registers them, which is also how a test opts out of
+    /// spawning anything.
+    logins: Arc<RwLock<HashMap<ProviderId, Arc<crate::auth::LoginProbe>>>>,
     mac_private_key: Arc<RwLock<Option<Zeroizing<[u8; 32]>>>>,
     /// Where paired devices outlive the process. Absent in tests that only
     /// exercise the in-memory registry.
@@ -85,9 +92,27 @@ impl GatewayState {
                 crate::agent_name(),
                 Vec::<ProviderHealth>::new(),
             )),
+            problems: Arc::new(crate::health::ProblemLog::default()),
+            logins: Arc::new(RwLock::new(HashMap::new())),
             mac_private_key: Arc::new(RwLock::new(None)),
             devices: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Register how to ask a provider's CLI who is signed in.
+    pub async fn set_login_probe(
+        &self,
+        provider: ProviderId,
+        probe: Arc<crate::auth::LoginProbe>,
+    ) {
+        self.logins.write().await.insert(provider, probe);
+    }
+
+    pub async fn login_probe(
+        &self,
+        provider: ProviderId,
+    ) -> Option<Arc<crate::auth::LoginProbe>> {
+        self.logins.read().await.get(&provider).cloned()
     }
 
     /// Keep paired devices across restarts.
@@ -1102,11 +1127,21 @@ impl GatewaySession {
                         serde_json::json!({"requestId": id, "provider": provider}),
                     )
                 }
-                "provider.status" => (
-                    "provider.status.result",
-                    serde_json::to_value(adapter.status().await)
+                "provider.status" => {
+                    let login = match self.state.login_probe(provider).await {
+                        Some(probe) => Some(probe.read().await),
+                        None => None,
+                    };
+                    (
+                        "provider.status.result",
+                        serde_json::to_value(crate::protocol::ProviderState {
+                            status: adapter.status().await,
+                            login,
+                            problem: self.state.problems.problem(provider),
+                        })
                         .map_err(|_| GatewayBusinessError::InvalidPayload)?,
-                ),
+                    )
+                }
                 _ => return Err(GatewayBusinessError::UnsupportedRequest),
             })
         }
@@ -1212,6 +1247,14 @@ impl GatewaySession {
         routing: &RoutingMetadata,
     ) -> Result<Vec<u8>, GatewayBusinessError> {
         let (message_type, payload) = event_parts(event);
+        // Every provider event passes through here, which makes this the one
+        // place that can tell "this turn broke" from "this provider will
+        // refuse everything until the account is dealt with".
+        match message_type.as_str() {
+            "turn.failed" => self.state.problems.record_turn_failure(provider, &payload),
+            "turn.completed" => self.state.problems.record_turn_completed(provider),
+            _ => {}
+        }
         self.events_sent += 1;
         let conversation_id = payload
             .get("conversationId")

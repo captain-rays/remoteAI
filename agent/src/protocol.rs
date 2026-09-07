@@ -60,6 +60,27 @@ pub struct ProviderStatus {
     pub reason: Option<String>,
 }
 
+/// A provider's status together with everything the phone needs to explain a
+/// provider that will not work.
+///
+/// `ProviderStatus` answers "is this CLI installed and runnable"; it is built
+/// once at startup and every adapter constructs one. Login state and standing
+/// problems are neither static nor the adapter's business, so they are
+/// attached here instead, flattened onto the same JSON object so a client that
+/// only knows about `ProviderStatus` keeps decoding it unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderState {
+    #[serde(flatten)]
+    pub status: ProviderStatus,
+    /// Which account the CLI is signed in as. Absent when nothing has asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login: Option<crate::auth::ProviderLogin>,
+    /// Why this provider is currently refusing, if it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub problem: Option<crate::health::ProviderProblem>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationSummary {

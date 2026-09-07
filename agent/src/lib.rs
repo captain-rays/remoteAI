@@ -1,5 +1,6 @@
 pub mod adapters;
 pub mod audit;
+pub mod auth;
 pub mod catalog;
 pub mod config;
 pub mod crypto;
@@ -8,6 +9,7 @@ pub mod discovery;
 pub mod event_buffer;
 pub mod files;
 pub mod gateway;
+pub mod health;
 pub mod pairing;
 pub mod protocol;
 pub mod provider_wiring;
