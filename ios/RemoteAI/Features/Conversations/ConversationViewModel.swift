@@ -389,6 +389,11 @@ public final class ConversationViewModel {
         case let .reasoningCompleted(payload):
             upsertReasoning(payload, streaming: false, replaceText: true)
 
+        case .providerLoginProgress, .providerLoginCompleted:
+            // Signing a provider in belongs to the accounts screen. A
+            // transcript showing it would be showing another screen's work.
+            break
+
         case let .toolStarted(payload), let .toolUpdated(payload), let .toolCompleted(payload):
             upsertTool(payload)
 

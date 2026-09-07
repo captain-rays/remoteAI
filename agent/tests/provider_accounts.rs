@@ -283,6 +283,10 @@ async fn signing_in_from_the_phone_relays_the_flow_and_files_the_credential() {
     assert!(view.accounts[0].has_credential, "and its credential kept");
     assert!(view.accounts[0].is_current);
     assert!(!view.login_in_progress, "the login slot is free again");
+    assert_eq!(
+        view.last_login_message, None,
+        "a sign-in that worked leaves no complaint behind"
+    );
 }
 
 #[tokio::test]
@@ -323,6 +327,13 @@ async fn a_rejected_code_is_reported_as_a_failed_login_with_the_clis_reason() {
     let view = service.view().await.unwrap();
     assert_eq!(view.login.state, LoginState::LoggedOut);
     assert!(view.accounts.is_empty(), "a failed login files nothing");
+    // And a phone that only asks afterwards still learns why: its socket
+    // lives for one request, so the outcome event may have had nobody to
+    // reach.
+    assert_eq!(
+        view.last_login_message.as_deref(),
+        Some("That code was rejected")
+    );
 }
 
 #[tokio::test]

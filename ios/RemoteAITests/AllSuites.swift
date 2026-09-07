@@ -20,5 +20,7 @@ public enum AllSuites {
         PairingViewModelSuite.suite,
         SettingsViewModelSuite.suite,
         AppDependenciesSuite.suite,
+        ProviderHealthSuite.suite,
+        AccountsViewModelSuite.suite,
     ]
 }

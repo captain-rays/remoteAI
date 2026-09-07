@@ -69,6 +69,34 @@ extension StubAgentClient {
     }
     func cancelTransfer(transferId: String) async throws { throw AgentClientError.offline }
 
+    func accounts(provider: ProviderId) async throws -> AccountsView {
+        throw AgentClientError.offline
+    }
+    func saveAccount(provider: ProviderId, label: String) async throws -> AccountsView {
+        throw AgentClientError.offline
+    }
+    func deleteAccount(provider: ProviderId, label: String) async throws -> AccountsView {
+        throw AgentClientError.offline
+    }
+    func activateAccount(provider: ProviderId, label: String) async throws -> AccountsView {
+        throw AgentClientError.offline
+    }
+    func logout(provider: ProviderId) async throws -> AccountsView {
+        throw AgentClientError.offline
+    }
+    func startLogin(provider: ProviderId, label: String?) async throws -> LoginProgress {
+        throw AgentClientError.offline
+    }
+    func loginProgress(provider: ProviderId) async throws -> LoginProgress? {
+        throw AgentClientError.offline
+    }
+    func sendLoginInput(provider: ProviderId, sessionId: String, text: String) async throws {
+        throw AgentClientError.offline
+    }
+    func cancelLogin(provider: ProviderId, sessionId: String) async throws {
+        throw AgentClientError.offline
+    }
+
     func listAudit(limit: Int) async throws -> [AuditEntry] { throw AgentClientError.offline }
     func diagnostics() async throws -> Diagnostics { throw AgentClientError.offline }
     func revokeDevice() async throws { throw AgentClientError.offline }

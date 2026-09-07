@@ -84,6 +84,28 @@ public func expectNotNil<T>(
     return value
 }
 
+/// Waits for a condition that another task is expected to bring about.
+///
+/// The alternative — sleeping for a guessed interval — either flakes on a
+/// loaded machine or wastes the wait on every run.
+public func expectEventually(
+    _ note: String = "",
+    within timeout: Duration = .seconds(5),
+    file: StaticString = #filePath,
+    line: UInt = #line,
+    _ condition: () async -> Bool
+) async throws {
+    let deadline = ContinuousClock.now + timeout
+    while ContinuousClock.now < deadline {
+        if await condition() { return }
+        try? await Task.sleep(for: .milliseconds(10))
+    }
+    let suffix = note.isEmpty ? "" : " — \(note)"
+    throw ExpectationFailure(
+        message: "condition never held within \(timeout)\(suffix)", file: file, line: line
+    )
+}
+
 /// Asserts that `body` throws, and returns the thrown error for inspection.
 @discardableResult
 public func expectThrows(

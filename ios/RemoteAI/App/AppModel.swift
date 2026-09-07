@@ -117,6 +117,34 @@ public final class AppModel {
         providerStatuses[provider]?.available ?? true
     }
 
+    /// Why a provider is refusing everything, if it is.
+    public func problem(for provider: ProviderId) -> ProviderProblem? {
+        providerStatuses[provider]?.problem
+    }
+
+    /// Which account a provider is signed in as, when the Mac could tell.
+    public func login(for provider: ProviderId) -> ProviderLogin? {
+        providerStatuses[provider]?.login
+    }
+
+    /// Re-read provider status without reloading the whole catalog.
+    ///
+    /// Used after a turn fails: the Mac classifies a failure it recognises
+    /// into a standing provider problem, and this is how that reaches the
+    /// banner without waiting for the next catalog reload.
+    public func refreshProviderStatuses() async {
+        guard canAttemptRead else { return }
+        do {
+            let statuses = try await client.providerStatus()
+            providerStatuses = Dictionary(
+                uniqueKeysWithValues: statuses.map { ($0.provider, $0) }
+            )
+            noteReachable()
+        } catch {
+            noteFailure(error)
+        }
+    }
+
     /// Called on every change of `connectionState`, however it came about —
     /// this setter, or the app noticing for itself that a request did not
     /// arrive. `AppDependencies` hangs the other screens' read-only flags off
@@ -347,6 +375,17 @@ public final class AppModel {
                 !dailyConversations.contains(where: { $0.id == conversation.id })
             {
                 dailyConversations.insert(conversation, at: 0)
+            }
+        case .turnFailed:
+            // The failure itself belongs to the transcript, which is showing
+            // it already. What this adds is the question the transcript
+            // cannot answer: was that this turn, or the whole provider?
+            Task { await refreshProviderStatuses() }
+        case .turnCompleted:
+            // A turn getting through is the Mac's evidence that a standing
+            // problem is over, so the banner has to be re-read to clear.
+            if providerStatuses[selectedProvider]?.problem != nil {
+                Task { await refreshProviderStatuses() }
             }
         case .unsupported:
             // A schema addition must never disturb the app.

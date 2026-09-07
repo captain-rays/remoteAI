@@ -883,6 +883,7 @@ fn gateway_error_code(error: &GatewayBusinessError) -> &'static str {
         GatewayBusinessError::ProviderUnavailable => "provider_unavailable",
         GatewayBusinessError::Provider(_) => "provider_operation",
         GatewayBusinessError::SessionBusy => "session_busy",
+        GatewayBusinessError::Account(reason) => reason.code(),
     }
 }
 
@@ -936,6 +937,11 @@ pub enum GatewayBusinessError {
     Provider(String),
     #[error("session has another active writer")]
     SessionBusy,
+    /// An account or sign-in request that could not be done, with a cause the
+    /// phone can act on. Distinct from `Provider` because its wording is the
+    /// agent's own — no provider text crosses the boundary.
+    #[error("account operation failed: {0}")]
+    Account(#[from] crate::accounts::AccountError),
 }
 
 /// Authenticated business dispatcher for one device WebSocket session.
@@ -1192,6 +1198,7 @@ impl GatewaySession {
                 | "provider.account.activate"
                 | "provider.logout"
                 | "provider.login.start"
+                | "provider.login.status"
                 | "provider.login.input"
                 | "provider.login.cancel" => {
                     let accounts = self
@@ -1199,8 +1206,7 @@ impl GatewaySession {
                         .account_service(provider)
                         .await
                         .ok_or(GatewayBusinessError::ProviderUnavailable)?;
-                    let failed =
-                        |error: anyhow::Error| GatewayBusinessError::Provider(error.to_string());
+                    let failed = GatewayBusinessError::Account;
                     match request.message_type.as_str() {
                         "provider.accounts" => (
                             "provider.accounts.result",
@@ -1260,6 +1266,23 @@ impl GatewaySession {
                                 .map_err(|_| GatewayBusinessError::InvalidPayload)?,
                             )
                         }
+                        "provider.login.status" => {
+                            // The phone asks rather than listens. Its socket
+                            // lives for one request, so an event emitted
+                            // while nothing is connected would be lost, and a
+                            // login flow is slow and human-paced enough that
+                            // asking is the simpler contract.
+                            // `progress` absent means no login is running,
+                            // which is a different answer from one that has
+                            // printed nothing yet.
+                            (
+                                "provider.login.status.result",
+                                serde_json::json!({
+                                    "provider": provider,
+                                    "progress": accounts.login_progress().await,
+                                }),
+                            )
+                        }
                         "provider.login.input" => {
                             let session = payload_string(&request.payload, "sessionId")?;
                             let text = payload_string(&request.payload, "text")?;
@@ -1298,28 +1321,19 @@ impl GatewaySession {
         let (response_type, payload) = match operation {
             Ok(result) => result,
             Err(error) => {
-                // The reason travels with the code. An account operation that
-                // failed because "nothing is signed in, so there is nothing to
-                // save" is only actionable if the phone can say so, and this
-                // path is already inside the encrypted session with a paired
-                // device.
-                let reason = match &error {
-                    GatewayBusinessError::Provider(reason) => Some(reason.clone()),
-                    _ => None,
-                };
+                // Only a stable code crosses this boundary. A provider's own
+                // words can carry prompt text and stderr, so an account
+                // failure gets a code of its own instead — enough for the
+                // phone to say what went wrong, with nothing borrowed from
+                // the CLI.
                 let error_kind = match error {
+                    GatewayBusinessError::Account(reason) => reason.code(),
                     GatewayBusinessError::Provider(_) => "provider_operation_failed",
                     GatewayBusinessError::ProviderUnavailable => "provider_unavailable",
                     GatewayBusinessError::SessionBusy => "session_busy",
                     GatewayBusinessError::UnsupportedRequest => "unsupported_request",
                     _ => "invalid_request",
                 };
-                let mut payload = serde_json::json!({"code": error_kind});
-                if let Some(reason) = reason
-                    && let Some(object) = payload.as_object_mut()
-                {
-                    object.insert("message".into(), Value::String(reason));
-                }
                 return Ok(vec![self.encrypt_json(
                     &routing,
                     &serde_json::json!({
@@ -1328,7 +1342,7 @@ impl GatewaySession {
                         "kind": "response",
                         "requestId": request_id,
                         "type": "error",
-                        "payload": payload,
+                        "payload": {"code": error_kind},
                     }),
                 )?]);
             }

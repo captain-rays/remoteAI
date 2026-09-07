@@ -27,6 +27,25 @@ public struct SettingsView: View {
                     }
                 }
 
+                Section {
+                    // One screen per provider: an account list that merged the
+                    // two would suggest an account could serve both.
+                    ForEach(ProviderId.allCases) { provider in
+                        NavigationLink(provider.displayName) {
+                            ProviderAccountsView(
+                                model: AccountsViewModel(
+                                    provider: provider, client: appModel.client
+                                )
+                            )
+                        }
+                        .accessibilityIdentifier("accounts-\(provider.rawValue)")
+                    }
+                } header: {
+                    Text("Accounts")
+                } footer: {
+                    Text("Sign in, switch accounts, and see which one each CLI is using.")
+                }
+
                 Section("Diagnostics") {
                     DiagnosticsView(diagnostics: settings.diagnostics)
                 }

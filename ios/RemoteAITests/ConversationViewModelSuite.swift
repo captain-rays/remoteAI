@@ -740,7 +740,7 @@ public enum ConversationViewModelSuite {
     )
 }
 
-private actor ControlledSendClient: AgentClient {
+private actor ControlledSendClient: StubAgentClient {
     enum Mode: Sendable {
         case suspended
         case failure(AgentClientError)

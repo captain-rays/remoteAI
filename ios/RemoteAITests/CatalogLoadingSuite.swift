@@ -91,7 +91,7 @@ public enum CatalogLoadingSuite {
 }
 
 /// Blocks `listProjects` until released, so the loading state is observable.
-private actor GatedCatalogClient: AgentClient {
+private actor GatedCatalogClient: StubAgentClient {
     nonisolated let events = AsyncStream<EventEnvelope> { $0.finish() }
 
     private let projects: [ProjectSummary]

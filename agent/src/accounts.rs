@@ -23,6 +23,46 @@ use crate::login::{LoginOutcome, LoginProgress, LoginSession, logout_command};
 use crate::protocol::{ConversationEvent, ProviderId};
 use crate::store::Store;
 
+/// Why an account operation could not be done.
+///
+/// A closed set with a stable code each, because the code is all that crosses
+/// to the phone: a provider's own error text can carry prompt content and
+/// stderr, and the wording a person reads is the app's to choose anyway. Every
+/// variant names something the person can act on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AccountError {
+    #[error("nothing is signed in, so there is nothing to save")]
+    NothingSignedIn,
+    #[error("that account's credential is no longer saved")]
+    CredentialMissing,
+    #[error("the restored credential was refused by the CLI")]
+    CredentialRejected,
+    #[error("that login is no longer running")]
+    LoginNotRunning,
+    #[error("that account name cannot be used")]
+    InvalidLabel,
+    #[error("the sign-in flow could not be started")]
+    LoginNotStarted,
+    #[error("the Mac could not complete that")]
+    Failed,
+}
+
+impl AccountError {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::NothingSignedIn => "nothing_signed_in",
+            Self::CredentialMissing => "account_credential_missing",
+            Self::CredentialRejected => "account_credential_rejected",
+            Self::LoginNotRunning => "login_not_running",
+            Self::InvalidLabel => "invalid_account_label",
+            Self::LoginNotStarted => "login_not_started",
+            Self::Failed => "account_operation_failed",
+        }
+    }
+}
+
+type Result<T> = std::result::Result<T, AccountError>;
+
 /// One saved account as the phone lists it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,6 +89,14 @@ pub struct AccountsView {
     pub login: ProviderLogin,
     /// Whether a login attempt is running for this provider right now.
     pub login_in_progress: bool,
+    /// Why the last sign-in did not take, if one did not.
+    ///
+    /// Kept here rather than delivered only as an event, because a phone's
+    /// socket lives for one request: an outcome that arrived while nothing
+    /// was connected would otherwise be lost, and the accounts screen would
+    /// have nothing to show but a login that silently stopped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_login_message: Option<String>,
 }
 
 /// The account operations for one provider.
@@ -64,6 +112,8 @@ pub struct AccountService {
     /// One login at a time: two flows racing would each replace the other's
     /// credential, and neither would be the one the person finished.
     session: Arc<Mutex<Option<Arc<LoginSession>>>>,
+    /// Why the last sign-in failed, for a phone that asks after the fact.
+    last_login_message: Arc<Mutex<Option<String>>>,
     events: broadcast::Sender<(ProviderId, ConversationEvent)>,
 }
 
@@ -85,6 +135,7 @@ impl AccountService {
             store,
             probe,
             session: Arc::new(Mutex::new(None)),
+            last_login_message: Arc::new(Mutex::new(None)),
             events,
         }
     }
@@ -93,13 +144,18 @@ impl AccountService {
         self.provider
     }
 
-    pub async fn view(&self) -> anyhow::Result<AccountsView> {
-        let stored = self.store.provider_accounts(self.provider).await?;
+    pub async fn view(&self) -> Result<AccountsView> {
+        let stored = self
+            .store
+            .provider_accounts(self.provider)
+            .await
+            .map_err(|_| AccountError::Failed)?;
         let mut accounts = Vec::with_capacity(stored.len());
         for account in stored {
             let has_credential = self
                 .vault
-                .load(self.provider, &account.label)?
+                .load(self.provider, &account.label)
+                .map_err(|_| AccountError::Failed)?
                 .is_some();
             accounts.push(AccountEntry {
                 label: account.label,
@@ -113,6 +169,7 @@ impl AccountService {
             accounts,
             login: self.probe.read().await,
             login_in_progress: self.session.lock().await.is_some(),
+            last_login_message: self.last_login_message.lock().await.clone(),
         })
     }
 
@@ -121,41 +178,43 @@ impl AccountService {
     /// This is how an account that was set up on the Mac becomes switchable
     /// from the phone, and it is deliberately explicit: the agent never
     /// snapshots a credential on its own.
-    pub async fn save_current(&self, label: &str) -> anyhow::Result<AccountsView> {
-        AccountVault::validate_label(label)?;
+    pub async fn save_current(&self, label: &str) -> Result<AccountsView> {
+        AccountVault::validate_label(label).map_err(|_| AccountError::InvalidLabel)?;
         let secret = self
             .live
-            .read(&crate::credentials::Keychain)?
-            .ok_or_else(|| anyhow::anyhow!("nothing is signed in, so there is nothing to save"))?;
+            .read(&crate::credentials::Keychain)
+            .map_err(|_| AccountError::Failed)?
+            .ok_or(AccountError::NothingSignedIn)?;
         let login = self.probe.read().await;
-        self.vault.save(self.provider, label, &secret)?;
-        self.store
-            .upsert_provider_account(self.provider, label, login.account.as_deref())
-            .await?;
-        self.store
-            .set_current_provider_account(self.provider, Some(label))
-            .await?;
+        self.vault
+            .save(self.provider, label, &secret)
+            .map_err(|_| AccountError::Failed)?;
+        self.record(label, login.account.as_deref()).await?;
         self.view().await
     }
 
     /// Forget a saved account. The live credential is untouched: deleting the
     /// copy of the account you are using should not sign you out of it.
-    pub async fn delete(&self, label: &str) -> anyhow::Result<AccountsView> {
-        AccountVault::validate_label(label)?;
-        self.vault.delete(self.provider, label)?;
+    pub async fn delete(&self, label: &str) -> Result<AccountsView> {
+        AccountVault::validate_label(label).map_err(|_| AccountError::InvalidLabel)?;
+        self.vault
+            .delete(self.provider, label)
+            .map_err(|_| AccountError::Failed)?;
         self.store
             .delete_provider_account(self.provider, label)
-            .await?;
+            .await
+            .map_err(|_| AccountError::Failed)?;
         self.view().await
     }
 
     /// Make a saved account the one the CLI uses.
-    pub async fn activate(&self, label: &str) -> anyhow::Result<AccountsView> {
-        AccountVault::validate_label(label)?;
+    pub async fn activate(&self, label: &str) -> Result<AccountsView> {
+        AccountVault::validate_label(label).map_err(|_| AccountError::InvalidLabel)?;
         let wanted = self
             .vault
-            .load(self.provider, label)?
-            .ok_or_else(|| anyhow::anyhow!("that account's credential is no longer saved"))?;
+            .load(self.provider, label)
+            .map_err(|_| AccountError::Failed)?
+            .ok_or(AccountError::CredentialMissing)?;
 
         // Take a fresh copy of the account being left first. Both CLIs
         // refresh their tokens in place, so the snapshot taken when it was
@@ -166,30 +225,39 @@ impl AccountService {
         // Log out through the CLI rather than by deleting its credential, so
         // whatever else it keeps alongside is dealt with too.
         self.run_logout().await?;
-        self.live.write(&crate::credentials::Keychain, &wanted)?;
+        self.live
+            .write(&crate::credentials::Keychain, &wanted)
+            .map_err(|_| AccountError::Failed)?;
         self.probe.forget().await;
 
         let login = self.probe.read().await;
-        anyhow::ensure!(
-            login.state != LoginState::LoggedOut,
-            "that account's credential was restored but the CLI rejected it; sign in again"
-        );
-        self.store
-            .upsert_provider_account(self.provider, label, login.account.as_deref())
-            .await?;
-        self.store
-            .set_current_provider_account(self.provider, Some(label))
-            .await?;
+        if login.state == LoginState::LoggedOut {
+            return Err(AccountError::CredentialRejected);
+        }
+        self.record(label, login.account.as_deref()).await?;
         self.view().await
     }
 
-    pub async fn logout(&self) -> anyhow::Result<AccountsView> {
+    /// Note an account as saved and as the one in use.
+    async fn record(&self, label: &str, display: Option<&str>) -> Result<()> {
+        self.store
+            .upsert_provider_account(self.provider, label, display)
+            .await
+            .map_err(|_| AccountError::Failed)?;
+        self.store
+            .set_current_provider_account(self.provider, Some(label))
+            .await
+            .map_err(|_| AccountError::Failed)
+    }
+
+    pub async fn logout(&self) -> Result<AccountsView> {
         self.snapshot_current_account().await;
         self.run_logout().await?;
         self.probe.forget().await;
         self.store
             .set_current_provider_account(self.provider, None)
-            .await?;
+            .await
+            .map_err(|_| AccountError::Failed)?;
         self.view().await
     }
 
@@ -198,9 +266,9 @@ impl AccountService {
     /// If something is already signed in, it is signed out first: both CLIs
     /// treat login as a replacement, and doing it explicitly means the
     /// account being replaced is snapshotted before it goes.
-    pub async fn start_login(&self, label: Option<String>) -> anyhow::Result<LoginProgress> {
+    pub async fn start_login(&self, label: Option<String>) -> Result<LoginProgress> {
         if let Some(label) = label.as_deref() {
-            AccountVault::validate_label(label)?;
+            AccountVault::validate_label(label).map_err(|_| AccountError::InvalidLabel)?;
         }
         let mut held = self.session.lock().await;
         if let Some(existing) = held.as_ref() {
@@ -215,6 +283,8 @@ impl AccountService {
             self.probe.forget().await;
         }
 
+        // A new attempt is not the place to keep the previous one's failure.
+        *self.last_login_message.lock().await = None;
         let events = self.events.clone();
         let provider = self.provider;
         // The id is minted here, not inside the session: a login command
@@ -235,7 +305,7 @@ impl AccountService {
                 ));
             },
             self.exit_handler(session_id, label),
-        )?);
+        ).map_err(|_| AccountError::LoginNotStarted)?);
         let progress = session.progress();
         *held = Some(session.clone());
         drop(held);
@@ -270,6 +340,7 @@ impl AccountService {
         let live = self.live.clone();
         let events = self.events.clone();
         let slot = self.session.clone();
+        let last_message = self.last_login_message.clone();
 
         move |succeeded, tail| {
             runtime.spawn(async move {
@@ -309,6 +380,7 @@ impl AccountService {
                     succeeded: signed_in,
                     message: (!signed_in).then(|| failure_reason(succeeded, &tail)),
                 };
+                *last_message.lock().await = outcome.message.clone();
                 let _ = events.send((
                     provider,
                     ConversationEvent::ProviderLoginCompleted(
@@ -319,16 +391,18 @@ impl AccountService {
         }
     }
 
-    pub async fn send_login_line(&self, session_id: &str, line: &str) -> anyhow::Result<()> {
+    pub async fn send_login_line(&self, session_id: &str, line: &str) -> Result<()> {
         let held = self.session.lock().await;
         let session = held
             .as_ref()
             .filter(|session| session.id == session_id)
-            .ok_or_else(|| anyhow::anyhow!("that login is no longer running"))?;
-        session.send_line(line)
+            .ok_or(AccountError::LoginNotRunning)?;
+        session
+            .send_line(line)
+            .map_err(|_| AccountError::LoginNotRunning)
     }
 
-    pub async fn cancel_login(&self, session_id: &str) -> anyhow::Result<()> {
+    pub async fn cancel_login(&self, session_id: &str) -> Result<()> {
         let mut held = self.session.lock().await;
         if let Some(session) = held.as_ref().filter(|session| session.id == session_id) {
             session.cancel();
@@ -359,7 +433,7 @@ impl AccountService {
         }
     }
 
-    async fn run_logout(&self) -> anyhow::Result<()> {
+    async fn run_logout(&self) -> Result<()> {
         let (program, args) = logout_command(self.provider, &self.program);
         let output = tokio::process::Command::new(program)
             .args(args)
@@ -373,7 +447,9 @@ impl AccountService {
         // the old credential in place, because the next login would silently
         // keep using it.
         if !output.is_ok_and(|output| output.status.success()) {
-            self.live.clear(&crate::credentials::Keychain)?;
+            self.live
+                .clear(&crate::credentials::Keychain)
+                .map_err(|_| AccountError::Failed)?;
         }
         Ok(())
     }

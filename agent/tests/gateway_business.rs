@@ -718,10 +718,11 @@ async fn a_provider_with_no_installed_cli_is_not_reported_as_logged_out() {
 }
 
 #[tokio::test]
-async fn account_requests_reach_the_provider_and_failures_carry_their_reason() {
-    // `provider_operation_failed` alone is unactionable on a phone. An
-    // account request that failed because nothing is signed in has to say
-    // that, or the accounts screen can only shrug.
+async fn account_requests_reach_the_provider_and_failures_name_their_cause() {
+    // `provider_operation_failed` alone is unactionable on a phone: it names
+    // no way out. Account failures get a code of their own instead — enough
+    // for the phone to say what to do, with no provider text borrowed, which
+    // is the boundary the rest of this API keeps.
     let home = tempfile::tempdir().unwrap();
     let credential = home.path().join("credential");
     let program = home.path().join("fake-claude");
@@ -800,13 +801,10 @@ async fn account_requests_reach_the_provider_and_failures_carry_their_reason() {
         .find(|value| value["type"] == "error")
         .expect("a rejection")["payload"]
         .clone();
-    assert_eq!(error["code"], "provider_operation_failed");
+    assert_eq!(error["code"], "nothing_signed_in");
     assert!(
-        error["message"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("nothing is signed in"),
-        "the reason travels with the code: {error}"
+        error.get("message").is_none(),
+        "no provider text crosses this boundary: {error}"
     );
 
     // A label that could address another provider's keychain entry is
@@ -825,7 +823,7 @@ async fn account_requests_reach_the_provider_and_failures_carry_their_reason() {
         .find(|value| value["type"] == "error")
         .expect("a rejection")["payload"]
         .clone();
-    assert_eq!(error["code"], "provider_operation_failed");
+    assert_eq!(error["code"], "invalid_account_label");
 }
 
 #[tokio::test]

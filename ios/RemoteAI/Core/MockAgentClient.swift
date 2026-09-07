@@ -46,6 +46,21 @@ public actor MockAgentClient: AgentClient {
     private var tickets: [String: TransferTicket] = [:]
     private var uploadedChunks: [String: [Int: Data]] = [:]
     private var audit: [AuditEntry] = []
+    /// Accounts the mac has snapshots for, per provider.
+    private var savedAccounts: [ProviderId: [AccountEntry]] = [
+        .codex: [
+            AccountEntry(label: "work", display: "work@example.com", isCurrent: true)
+        ],
+        .claude: [],
+    ]
+    private var providerLogins: [ProviderId: ProviderLogin] = [
+        .codex: ProviderLogin(state: .loggedIn, account: "work@example.com"),
+        .claude: ProviderLogin(
+            state: .loggedIn, account: "someone@example.com", detail: "Mock org · team"
+        ),
+    ]
+    private var mockLogins: [ProviderId: MockLogin] = [:]
+    private var lastLoginMessages: [ProviderId: String] = [:]
 
     /// Number of `transfers.*` calls this client has been asked to perform.
     /// The regression test for "no automatic synchronisation" asserts this is
@@ -727,6 +742,176 @@ public actor MockAgentClient: AgentClient {
         transferRequestCount += 1
         tickets.removeValue(forKey: transferId)
         uploadedChunks.removeValue(forKey: transferId)
+    }
+
+    // MARK: - Accounts
+    //
+    // Mirrors the agent's rules, which the accounts screen depends on: one
+    // current account per provider, signing in replaces the current
+    // credential, deleting a saved account does not sign out of it, and the
+    // sign-in flow shows a link and wants a code back.
+
+    /// The code the scripted sign-in accepts. Anything else is rejected the
+    /// way a real one would be.
+    public static let mockLoginCode = "123456"
+
+    private struct MockLogin: Sendable {
+        let sessionId: String
+        let label: String?
+        var output: String
+        var awaitingInput: Bool
+    }
+
+    public func accounts(provider: ProviderId) async throws -> AccountsView {
+        accountsView(provider)
+    }
+
+    public func saveAccount(provider: ProviderId, label: String) async throws -> AccountsView {
+        guard let login = providerLogins[provider], login.state == .loggedIn else {
+            throw AgentClientError.rejected("nothing_signed_in")
+        }
+        var saved = savedAccounts[provider] ?? []
+        saved.removeAll { $0.label == label }
+        saved.append(
+            AccountEntry(label: label, display: login.account, isCurrent: true)
+        )
+        savedAccounts[provider] = saved.map {
+            AccountEntry(
+                label: $0.label, display: $0.display, isCurrent: $0.label == label,
+                hasCredential: $0.hasCredential
+            )
+        }
+        return accountsView(provider)
+    }
+
+    public func deleteAccount(provider: ProviderId, label: String) async throws -> AccountsView {
+        savedAccounts[provider] = (savedAccounts[provider] ?? []).filter { $0.label != label }
+        return accountsView(provider)
+    }
+
+    public func activateAccount(provider: ProviderId, label: String) async throws -> AccountsView {
+        let saved = savedAccounts[provider] ?? []
+        guard let wanted = saved.first(where: { $0.label == label }), wanted.hasCredential else {
+            throw AgentClientError.rejected("account_credential_missing")
+        }
+        savedAccounts[provider] = saved.map {
+            AccountEntry(
+                label: $0.label, display: $0.display, isCurrent: $0.label == label,
+                hasCredential: $0.hasCredential
+            )
+        }
+        providerLogins[provider] = ProviderLogin(
+            state: .loggedIn, account: wanted.display ?? wanted.label
+        )
+        return accountsView(provider)
+    }
+
+    public func logout(provider: ProviderId) async throws -> AccountsView {
+        providerLogins[provider] = ProviderLogin(state: .loggedOut)
+        savedAccounts[provider] = (savedAccounts[provider] ?? []).map {
+            AccountEntry(
+                label: $0.label, display: $0.display, isCurrent: false,
+                hasCredential: $0.hasCredential
+            )
+        }
+        return accountsView(provider)
+    }
+
+    public func startLogin(provider: ProviderId, label: String?) async throws -> LoginProgress {
+        if let running = mockLogins[provider] {
+            return progress(provider, running)
+        }
+        // Asked for explicitly: signing in replaces whatever is signed in, so
+        // the sign-out happens first and is visible.
+        _ = try await logout(provider: provider)
+        let session = MockLogin(
+            sessionId: "mock-login-\(provider.rawValue)",
+            label: label,
+            output: """
+                Open this link in your browser and sign in
+                https://auth.example.com/device
+                Enter this one-time code: MOCK-CODE1
+                Paste the code here:
+                """,
+            awaitingInput: true
+        )
+        mockLogins[provider] = session
+        lastLoginMessages[provider] = nil
+        return progress(provider, session)
+    }
+
+    public func loginProgress(provider: ProviderId) async throws -> LoginProgress? {
+        mockLogins[provider].map { progress(provider, $0) }
+    }
+
+    public func sendLoginInput(
+        provider: ProviderId, sessionId: String, text: String
+    ) async throws {
+        guard let session = mockLogins[provider], session.sessionId == sessionId else {
+            throw AgentClientError.rejected("login_not_running")
+        }
+        mockLogins[provider] = nil
+        let succeeded = text == Self.mockLoginCode
+        lastLoginMessages[provider] = succeeded ? nil : "That code was rejected"
+        if succeeded {
+            providerLogins[provider] = ProviderLogin(
+                state: .loggedIn, account: "mock@example.com", detail: "Mock org · team"
+            )
+            if let label = session.label {
+                var saved = (savedAccounts[provider] ?? []).map {
+                    AccountEntry(
+                        label: $0.label, display: $0.display, isCurrent: false,
+                        hasCredential: $0.hasCredential
+                    )
+                }
+                saved.removeAll { $0.label == label }
+                saved.append(
+                    AccountEntry(label: label, display: "mock@example.com", isCurrent: true)
+                )
+                savedAccounts[provider] = saved
+            }
+        }
+        _ = emit(
+            .providerLoginCompleted(
+                LoginOutcome(
+                    sessionId: sessionId,
+                    provider: provider,
+                    succeeded: succeeded,
+                    message: succeeded ? nil : "That code was rejected"
+                )
+            ),
+            rawType: "provider.login.completed",
+            // Login belongs to no conversation, so it gets a channel of its
+            // own rather than landing in whichever one is open.
+            conversationId: "login:\(provider.rawValue)"
+        )
+    }
+
+    public func cancelLogin(provider: ProviderId, sessionId: String) async throws {
+        if mockLogins[provider]?.sessionId == sessionId {
+            mockLogins[provider] = nil
+        }
+    }
+
+    private func accountsView(_ provider: ProviderId) -> AccountsView {
+        AccountsView(
+            provider: provider,
+            accounts: (savedAccounts[provider] ?? []).sorted { $0.label < $1.label },
+            login: providerLogins[provider] ?? ProviderLogin(state: .unknown),
+            loginInProgress: mockLogins[provider] != nil,
+            lastLoginMessage: lastLoginMessages[provider]
+        )
+    }
+
+    private func progress(_ provider: ProviderId, _ session: MockLogin) -> LoginProgress {
+        LoginProgress(
+            sessionId: session.sessionId,
+            provider: provider,
+            output: session.output,
+            verificationUrl: "https://auth.example.com/device",
+            userCode: "MOCK-CODE1",
+            awaitingInput: session.awaitingInput
+        )
     }
 
     public func listAudit(limit: Int) async throws -> [AuditEntry] {

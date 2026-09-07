@@ -730,6 +730,94 @@ public actor RemoteAgentClient: AgentClient {
         return (identity, deviceId, phoneBox, macBox)
     }
 
+    // MARK: - Accounts
+
+    private struct AccountRequest: Encodable, Sendable {
+        let provider: ProviderId
+        var label: String?
+        var sessionId: String?
+        var text: String?
+    }
+
+    private struct LoginStatusResponse: Decodable, Sendable {
+        let progress: LoginProgress?
+    }
+
+    public func accounts(provider: ProviderId) async throws -> AccountsView {
+        try await accountRequest(.providerAccounts, AccountRequest(provider: provider))
+    }
+
+    public func saveAccount(provider: ProviderId, label: String) async throws -> AccountsView {
+        try await accountRequest(
+            .providerAccountSave, AccountRequest(provider: provider, label: label)
+        )
+    }
+
+    public func deleteAccount(provider: ProviderId, label: String) async throws -> AccountsView {
+        try await accountRequest(
+            .providerAccountDelete, AccountRequest(provider: provider, label: label)
+        )
+    }
+
+    public func activateAccount(provider: ProviderId, label: String) async throws -> AccountsView {
+        try await accountRequest(
+            .providerAccountActivate, AccountRequest(provider: provider, label: label)
+        )
+    }
+
+    public func logout(provider: ProviderId) async throws -> AccountsView {
+        try await accountRequest(.providerLogout, AccountRequest(provider: provider))
+    }
+
+    public func startLogin(provider: ProviderId, label: String?) async throws -> LoginProgress {
+        try await request(
+            type: .providerLoginStart,
+            conversationId: nil,
+            payload: AccountRequest(provider: provider, label: label),
+            response: LoginProgress.self
+        )
+    }
+
+    public func loginProgress(provider: ProviderId) async throws -> LoginProgress? {
+        try await request(
+            type: .providerLoginStatus,
+            conversationId: nil,
+            payload: AccountRequest(provider: provider),
+            response: LoginStatusResponse.self
+        )
+        .progress
+    }
+
+    public func sendLoginInput(
+        provider: ProviderId, sessionId: String, text: String
+    ) async throws {
+        _ = try await request(
+            type: .providerLoginInput,
+            conversationId: nil,
+            payload: AccountRequest(provider: provider, sessionId: sessionId, text: text),
+            response: EmptyResponse.self
+        )
+    }
+
+    public func cancelLogin(provider: ProviderId, sessionId: String) async throws {
+        _ = try await request(
+            type: .providerLoginCancel,
+            conversationId: nil,
+            payload: AccountRequest(provider: provider, sessionId: sessionId),
+            response: EmptyResponse.self
+        )
+    }
+
+    private func accountRequest(
+        _ type: RequestType, _ payload: AccountRequest
+    ) async throws -> AccountsView {
+        let view: AccountsView = try await request(
+            type: type, conversationId: nil, payload: payload, response: AccountsView.self
+        )
+        guard view.provider == payload.provider else { throw AgentClientError.providerMismatch }
+        return view
+    }
+
     private func request<Payload: Encodable & Sendable, Response: Decodable & Sendable>(
         type: RequestType,
         conversationId: String?,

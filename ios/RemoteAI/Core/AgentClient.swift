@@ -244,6 +244,24 @@ public protocol AgentClient: Sendable {
     func finishTransfer(transferId: String) async throws -> TransferReceipt
     func cancelTransfer(transferId: String) async throws
 
+    /// Which accounts the Mac has saved for a provider, and which is in use.
+    func accounts(provider: ProviderId) async throws -> AccountsView
+    /// Save whatever the provider's CLI is signed in as now under `label`.
+    func saveAccount(provider: ProviderId, label: String) async throws -> AccountsView
+    /// Forget a saved account. Does not sign out of it.
+    func deleteAccount(provider: ProviderId, label: String) async throws -> AccountsView
+    /// Make a saved account the one the CLI uses.
+    func activateAccount(provider: ProviderId, label: String) async throws -> AccountsView
+    func logout(provider: ProviderId) async throws -> AccountsView
+    /// Begin the CLI's own sign-in flow on the Mac. `label` is where the
+    /// credential is filed if it succeeds.
+    func startLogin(provider: ProviderId, label: String?) async throws -> LoginProgress
+    /// Where a running sign-in has got to; `nil` when none is running.
+    func loginProgress(provider: ProviderId) async throws -> LoginProgress?
+    /// Answer a sign-in flow's prompt — typically the verification code.
+    func sendLoginInput(provider: ProviderId, sessionId: String, text: String) async throws
+    func cancelLogin(provider: ProviderId, sessionId: String) async throws
+
     func listAudit(limit: Int) async throws -> [AuditEntry]
     func diagnostics() async throws -> Diagnostics
     func revokeDevice() async throws

@@ -5,6 +5,7 @@ public struct RootView: View {
     @Bindable private var dependencies: AppDependencies
     @Bindable private var model: AppModel
     @State private var selectedTab = Tab.chat
+    @State private var signingInTo: ProviderId?
 
     enum Tab: Hashable {
         case chat, projects, files, settings
@@ -19,6 +20,17 @@ public struct RootView: View {
         VStack(spacing: 0) {
             ProviderSwitcher(model: model)
             ConnectionBanner(state: dependencies.connectionState)
+            // A reachable Mac whose provider refuses every turn is a
+            // different problem from an unreachable Mac, and both can be
+            // true, so the two banners are independent.
+            ProviderProblemBanner(
+                provider: model.selectedProvider,
+                problem: model.problem(for: model.selectedProvider),
+                // An expired login is the one provider problem the phone can
+                // actually fix, so the banner opens the screen that fixes it
+                // rather than leaving the reader to find it.
+                onSignIn: { signingInTo = model.selectedProvider }
+            )
             Text("Connection: \(dependencies.connectionState.rawValue)")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -56,6 +68,13 @@ public struct RootView: View {
                 )
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(Tab.settings)
+            }
+        }
+        .sheet(item: $signingInTo) { provider in
+            NavigationStack {
+                ProviderAccountsView(
+                    model: AccountsViewModel(provider: provider, client: model.client)
+                )
             }
         }
         .task {

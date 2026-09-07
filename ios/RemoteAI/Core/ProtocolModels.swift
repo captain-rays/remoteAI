@@ -2,9 +2,11 @@ import Foundation
 
 // MARK: - Frozen enumerations
 
-public enum ProviderId: String, Codable, Sendable, Hashable, CaseIterable {
+public enum ProviderId: String, Codable, Sendable, Hashable, CaseIterable, Identifiable {
     case codex
     case claude
+
+    public var id: String { rawValue }
 
     public var displayName: String {
         switch self {
@@ -118,12 +120,96 @@ public enum ProtocolError: Error, Equatable, Sendable {
 
 // MARK: - Core data structures
 
+/// Whether a provider's CLI is signed in.
+///
+/// `unknown` is not a synonym for `loggedOut`: the Mac reports it when the CLI
+/// could not be asked, and telling someone their login expired on that basis
+/// sends them to re-authenticate for nothing.
+public enum LoginState: String, Codable, Sendable, Hashable {
+    case loggedIn = "logged_in"
+    case loggedOut = "logged_out"
+    case unknown
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = LoginState(rawValue: raw) ?? .unknown
+    }
+}
+
+public struct ProviderLogin: Codable, Sendable, Hashable {
+    public let state: LoginState
+    /// How the person would recognise this account — an email, or the sign-in
+    /// method where there is no email.
+    public let account: String?
+    /// Organisation and plan, when the provider reports them.
+    public let detail: String?
+
+    public init(state: LoginState, account: String? = nil, detail: String? = nil) {
+        self.state = state
+        self.account = account
+        self.detail = detail
+    }
+}
+
+/// Why a provider will keep refusing until something is done about it.
+public enum ProviderProblemCode: String, Codable, Sendable, Hashable {
+    case quotaExhausted = "quota_exhausted"
+    case rateLimited = "rate_limited"
+    case loginExpired = "login_expired"
+    case modelUnavailable = "model_unavailable"
+    /// A code this build does not know. Shown with the Mac's own message
+    /// rather than swallowed.
+    case unknown
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = ProviderProblemCode(rawValue: raw) ?? .unknown
+    }
+}
+
+public struct ProviderProblem: Codable, Sendable, Hashable {
+    public let code: ProviderProblemCode
+    /// The provider's own words. Usually carries what the person needs — a
+    /// link, or the hour a limit resets — so it is shown verbatim.
+    public let message: String
+    public let observedAt: Date?
+
+    public init(code: ProviderProblemCode, message: String, observedAt: Date? = nil) {
+        self.code = code
+        self.message = message
+        self.observedAt = observedAt
+    }
+
+    /// A one-line reason, naming the provider, for the top of the screen.
+    ///
+    /// The message alone is the provider's, written for a terminal; it says
+    /// what happened but not which of the two providers it happened to.
+    public func headline(for provider: ProviderId) -> String {
+        let name = provider.displayName
+        switch code {
+        case .quotaExhausted: return "\(name) has run out of credit"
+        case .rateLimited: return "\(name) is rate limited"
+        case .loginExpired: return "\(name) needs to be signed in again"
+        case .modelUnavailable: return "\(name) cannot use this model"
+        case .unknown: return "\(name) reported a problem"
+        }
+    }
+
+    /// Whether signing in again is what would fix this.
+    public var needsLogin: Bool { code == .loginExpired }
+}
+
 public struct ProviderStatus: Codable, Sendable, Hashable, Identifiable {
     public let provider: ProviderId
     public let available: Bool
     public let executablePath: String?
     public let version: String?
     public let reason: String?
+    /// Which account the CLI is signed in as. `nil` when the Mac has not
+    /// been able to ask — an unavailable CLI is never reported as logged out.
+    public let login: ProviderLogin?
+    /// Why this provider is refusing, if it is.
+    public let problem: ProviderProblem?
 
     public var id: ProviderId { provider }
 
@@ -132,13 +218,114 @@ public struct ProviderStatus: Codable, Sendable, Hashable, Identifiable {
         available: Bool,
         executablePath: String? = nil,
         version: String? = nil,
-        reason: String? = nil
+        reason: String? = nil,
+        login: ProviderLogin? = nil,
+        problem: ProviderProblem? = nil
     ) {
         self.provider = provider
         self.available = available
         self.executablePath = executablePath
         self.version = version
         self.reason = reason
+        self.login = login
+        self.problem = problem
+    }
+}
+
+/// One account the Mac has a saved credential for.
+public struct AccountEntry: Codable, Sendable, Hashable, Identifiable {
+    /// The name the person gave it. Unique per provider, and the handle every
+    /// account request uses.
+    public let label: String
+    /// What the CLI called the account when it was saved — an email, usually.
+    public let display: String?
+    /// Whether this is the account the CLI is using now.
+    public let isCurrent: Bool
+    /// Whether the credential is still in the Mac's keychain. An entry can
+    /// outlive its secret, and offering to switch to one that is gone would
+    /// only fail.
+    public let hasCredential: Bool
+
+    public var id: String { label }
+
+    public init(
+        label: String, display: String? = nil, isCurrent: Bool = false,
+        hasCredential: Bool = true
+    ) {
+        self.label = label
+        self.display = display
+        self.isCurrent = isCurrent
+        self.hasCredential = hasCredential
+    }
+}
+
+/// Everything the accounts screen shows for one provider.
+public struct AccountsView: Codable, Sendable, Hashable {
+    public let provider: ProviderId
+    public let accounts: [AccountEntry]
+    public let login: ProviderLogin
+    /// Whether a sign-in is running on the Mac right now — possibly one this
+    /// phone did not start.
+    public let loginInProgress: Bool
+    /// Why the last sign-in did not take, if one did not. Comes from the view
+    /// rather than only from an event, because this phone's socket lives for
+    /// one request and may not have been connected when it ended.
+    public let lastLoginMessage: String?
+
+    public init(
+        provider: ProviderId, accounts: [AccountEntry], login: ProviderLogin,
+        loginInProgress: Bool = false, lastLoginMessage: String? = nil
+    ) {
+        self.provider = provider
+        self.accounts = accounts
+        self.login = login
+        self.loginInProgress = loginInProgress
+        self.lastLoginMessage = lastLoginMessage
+    }
+}
+
+/// A sign-in flow in progress on the Mac, as the phone sees it.
+public struct LoginProgress: Codable, Sendable, Hashable {
+    public let sessionId: String
+    public let provider: ProviderId
+    /// Everything the CLI has printed, terminal codes already removed. Shown
+    /// verbatim: it is the only account of what the flow is doing.
+    public let output: String
+    /// The link to open, once the CLI has printed one.
+    public let verificationUrl: String?
+    /// The code to enter at that link. Codex shows one; Claude asks for one.
+    public let userCode: String?
+    /// Whether the CLI is waiting for something to be typed.
+    public let awaitingInput: Bool
+
+    public init(
+        sessionId: String, provider: ProviderId, output: String = "",
+        verificationUrl: String? = nil, userCode: String? = nil, awaitingInput: Bool = false
+    ) {
+        self.sessionId = sessionId
+        self.provider = provider
+        self.output = output
+        self.verificationUrl = verificationUrl
+        self.userCode = userCode
+        self.awaitingInput = awaitingInput
+    }
+}
+
+/// How a sign-in ended.
+public struct LoginOutcome: Codable, Sendable, Hashable {
+    public let sessionId: String
+    public let provider: ProviderId
+    public let succeeded: Bool
+    /// Why it did not, in the CLI's own words.
+    public let message: String?
+
+    public init(
+        sessionId: String, provider: ProviderId, succeeded: Bool, message: String? = nil
+    ) {
+        self.sessionId = sessionId
+        self.provider = provider
+        self.succeeded = succeeded
+        self.message = message
     }
 }
 
@@ -547,6 +734,8 @@ public enum ConversationEvent: Sendable, Hashable {
     case turnFailed(TurnFailure)
     case turnInterrupted(TurnPayload)
     case providerStatusChanged(ProviderStatus)
+    case providerLoginProgress(LoginProgress)
+    case providerLoginCompleted(LoginOutcome)
     /// Any type this build does not understand, or a known type whose payload
     /// failed to decode. Safe to ignore; must never break the connection.
     case unsupported(rawType: String)
@@ -613,6 +802,15 @@ public enum RequestType: String, Codable, Sendable, CaseIterable {
     case auditList = "audit.list"
     case diagnosticsGet = "diagnostics.get"
     case deviceRevoke = "device.revoke"
+    case providerAccounts = "provider.accounts"
+    case providerAccountSave = "provider.account.save"
+    case providerAccountDelete = "provider.account.delete"
+    case providerAccountActivate = "provider.account.activate"
+    case providerLogout = "provider.logout"
+    case providerLoginStart = "provider.login.start"
+    case providerLoginStatus = "provider.login.status"
+    case providerLoginInput = "provider.login.input"
+    case providerLoginCancel = "provider.login.cancel"
 }
 
 public struct RequestEnvelope<Payload: Encodable & Sendable>: Encodable, Sendable {
@@ -729,6 +927,7 @@ public enum ProtocolCoding {
             let code = payload?["code"] as? String ?? "unknown"
             // Gateway business errors intentionally expose only a stable code;
             // provider stderr, prompts, and credentials never cross this API.
+            // Wording for each code is the app's own — see `RejectionReason`.
             throw ProtocolError.agentError(code: code, message: "")
         }
 
@@ -793,6 +992,8 @@ public enum ProtocolCoding {
             payloadData = try encoder.encode(payload)
         case let .turnFailed(payload): payloadData = try encoder.encode(payload)
         case let .providerStatusChanged(payload): payloadData = try encoder.encode(payload)
+        case let .providerLoginProgress(payload): payloadData = try encoder.encode(payload)
+        case let .providerLoginCompleted(payload): payloadData = try encoder.encode(payload)
         case .unsupported:
             payloadData = Data("{}".utf8)
         }
@@ -851,6 +1052,12 @@ public enum ProtocolCoding {
                 ?? .unsupported(rawType: rawType)
         case "approval.resolved":
             return decode(ApprovalResolution.self).map(ConversationEvent.approvalResolved)
+                ?? .unsupported(rawType: rawType)
+        case "provider.login.progress":
+            return decode(LoginProgress.self).map(ConversationEvent.providerLoginProgress)
+                ?? .unsupported(rawType: rawType)
+        case "provider.login.completed":
+            return decode(LoginOutcome.self).map(ConversationEvent.providerLoginCompleted)
                 ?? .unsupported(rawType: rawType)
         case "turn.completed":
             return decode(TurnPayload.self).map(ConversationEvent.turnCompleted)
