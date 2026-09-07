@@ -15,7 +15,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{RwLock, broadcast, mpsc};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -56,6 +56,13 @@ pub struct GatewayState {
     /// startup wiring registers them, which is also how a test opts out of
     /// spawning anything.
     logins: Arc<RwLock<HashMap<ProviderId, Arc<crate::auth::LoginProbe>>>>,
+    /// Account switching and signing in, per provider. Absent for a provider
+    /// whose CLI was not found.
+    accounts: Arc<RwLock<crate::accounts::AccountServices>>,
+    /// Events that belong to no conversation — a login flow's output. They
+    /// travel the same encrypted path as conversation events, so a phone
+    /// needs no second channel to watch a sign-in.
+    out_of_band: broadcast::Sender<(ProviderId, ConversationEvent)>,
     mac_private_key: Arc<RwLock<Option<Zeroizing<[u8; 32]>>>>,
     /// Where paired devices outlive the process. Absent in tests that only
     /// exercise the in-memory registry.
@@ -94,6 +101,8 @@ impl GatewayState {
             )),
             problems: Arc::new(crate::health::ProblemLog::default()),
             logins: Arc::new(RwLock::new(HashMap::new())),
+            accounts: Arc::new(RwLock::new(crate::accounts::AccountServices::default())),
+            out_of_band: broadcast::channel(64).0,
             mac_private_key: Arc::new(RwLock::new(None)),
             devices: Arc::new(RwLock::new(None)),
         }
@@ -113,6 +122,22 @@ impl GatewayState {
         provider: ProviderId,
     ) -> Option<Arc<crate::auth::LoginProbe>> {
         self.logins.read().await.get(&provider).cloned()
+    }
+
+    pub async fn set_account_service(&self, service: Arc<crate::accounts::AccountService>) {
+        self.accounts.write().await.insert(service);
+    }
+
+    pub async fn account_service(
+        &self,
+        provider: ProviderId,
+    ) -> Option<Arc<crate::accounts::AccountService>> {
+        self.accounts.read().await.get(provider)
+    }
+
+    /// Where an account service publishes login progress.
+    pub fn out_of_band_events(&self) -> broadcast::Sender<(ProviderId, ConversationEvent)> {
+        self.out_of_band.clone()
     }
 
     /// Keep paired devices across restarts.
@@ -953,6 +978,25 @@ impl GatewaySession {
                 }
             });
         }
+        {
+            // Login progress belongs to no conversation, so it does not come
+            // from an adapter. It reaches the phone the same way regardless.
+            let mut receiver = state.out_of_band.subscribe();
+            let sender = event_tx.clone();
+            tokio::spawn(async move {
+                loop {
+                    match receiver.recv().await {
+                        Ok((provider, event)) => {
+                            if sender.send((provider, event)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+        }
         drop(event_tx);
         Self {
             state,
@@ -1142,6 +1186,102 @@ impl GatewaySession {
                         .map_err(|_| GatewayBusinessError::InvalidPayload)?,
                     )
                 }
+                "provider.accounts"
+                | "provider.account.save"
+                | "provider.account.delete"
+                | "provider.account.activate"
+                | "provider.logout"
+                | "provider.login.start"
+                | "provider.login.input"
+                | "provider.login.cancel" => {
+                    let accounts = self
+                        .state
+                        .account_service(provider)
+                        .await
+                        .ok_or(GatewayBusinessError::ProviderUnavailable)?;
+                    let failed =
+                        |error: anyhow::Error| GatewayBusinessError::Provider(error.to_string());
+                    match request.message_type.as_str() {
+                        "provider.accounts" => (
+                            "provider.accounts.result",
+                            serde_json::to_value(accounts.view().await.map_err(failed)?)
+                                .map_err(|_| GatewayBusinessError::InvalidPayload)?,
+                        ),
+                        "provider.account.save" => {
+                            let label = payload_string(&request.payload, "label")?;
+                            (
+                                "provider.accounts.result",
+                                serde_json::to_value(
+                                    accounts.save_current(&label).await.map_err(failed)?,
+                                )
+                                .map_err(|_| GatewayBusinessError::InvalidPayload)?,
+                            )
+                        }
+                        "provider.account.delete" => {
+                            let label = payload_string(&request.payload, "label")?;
+                            (
+                                "provider.accounts.result",
+                                serde_json::to_value(
+                                    accounts.delete(&label).await.map_err(failed)?,
+                                )
+                                .map_err(|_| GatewayBusinessError::InvalidPayload)?,
+                            )
+                        }
+                        "provider.account.activate" => {
+                            let label = payload_string(&request.payload, "label")?;
+                            (
+                                "provider.accounts.result",
+                                serde_json::to_value(
+                                    accounts.activate(&label).await.map_err(failed)?,
+                                )
+                                .map_err(|_| GatewayBusinessError::InvalidPayload)?,
+                            )
+                        }
+                        "provider.logout" => (
+                            "provider.accounts.result",
+                            serde_json::to_value(accounts.logout().await.map_err(failed)?)
+                                .map_err(|_| GatewayBusinessError::InvalidPayload)?,
+                        ),
+                        "provider.login.start" => {
+                            // The label is optional: signing in without
+                            // naming an account is still a sign-in, it just
+                            // leaves nothing to switch back to.
+                            let label = request
+                                .payload
+                                .get("label")
+                                .and_then(Value::as_str)
+                                .filter(|label| !label.is_empty())
+                                .map(str::to_owned);
+                            (
+                                "provider.login.progress",
+                                serde_json::to_value(
+                                    accounts.start_login(label).await.map_err(failed)?,
+                                )
+                                .map_err(|_| GatewayBusinessError::InvalidPayload)?,
+                            )
+                        }
+                        "provider.login.input" => {
+                            let session = payload_string(&request.payload, "sessionId")?;
+                            let text = payload_string(&request.payload, "text")?;
+                            accounts
+                                .send_login_line(&session, &text)
+                                .await
+                                .map_err(failed)?;
+                            (
+                                "provider.login.input.result",
+                                serde_json::json!({"provider": provider, "sessionId": session}),
+                            )
+                        }
+                        _ => {
+                            let session = payload_string(&request.payload, "sessionId")?;
+                            accounts.cancel_login(&session).await.map_err(failed)?;
+                            (
+                                "provider.login.cancel.result",
+                                serde_json::json!({"provider": provider, "sessionId": session}),
+                            )
+                        }
+                    }
+                }
                 _ => return Err(GatewayBusinessError::UnsupportedRequest),
             })
         }
@@ -1158,6 +1298,15 @@ impl GatewaySession {
         let (response_type, payload) = match operation {
             Ok(result) => result,
             Err(error) => {
+                // The reason travels with the code. An account operation that
+                // failed because "nothing is signed in, so there is nothing to
+                // save" is only actionable if the phone can say so, and this
+                // path is already inside the encrypted session with a paired
+                // device.
+                let reason = match &error {
+                    GatewayBusinessError::Provider(reason) => Some(reason.clone()),
+                    _ => None,
+                };
                 let error_kind = match error {
                     GatewayBusinessError::Provider(_) => "provider_operation_failed",
                     GatewayBusinessError::ProviderUnavailable => "provider_unavailable",
@@ -1165,6 +1314,12 @@ impl GatewaySession {
                     GatewayBusinessError::UnsupportedRequest => "unsupported_request",
                     _ => "invalid_request",
                 };
+                let mut payload = serde_json::json!({"code": error_kind});
+                if let Some(reason) = reason
+                    && let Some(object) = payload.as_object_mut()
+                {
+                    object.insert("message".into(), Value::String(reason));
+                }
                 return Ok(vec![self.encrypt_json(
                     &routing,
                     &serde_json::json!({
@@ -1173,7 +1328,7 @@ impl GatewaySession {
                         "kind": "response",
                         "requestId": request_id,
                         "type": "error",
-                        "payload": {"code": error_kind},
+                        "payload": payload,
                     }),
                 )?]);
             }
@@ -1339,6 +1494,12 @@ fn event_parts(event: ConversationEvent) -> (String, Value) {
         ConversationEvent::TurnInterrupted(payload) => ("turn.interrupted".into(), payload),
         ConversationEvent::ProviderStatusChanged(payload) => {
             ("provider.status_changed".into(), payload)
+        }
+        ConversationEvent::ProviderLoginProgress(payload) => {
+            ("provider.login.progress".into(), payload)
+        }
+        ConversationEvent::ProviderLoginCompleted(payload) => {
+            ("provider.login.completed".into(), payload)
         }
         ConversationEvent::Unsupported { raw_type, payload } => (raw_type, payload),
     }

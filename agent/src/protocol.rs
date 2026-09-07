@@ -207,6 +207,9 @@ pub enum ConversationEvent {
     TurnFailed(Value),
     TurnInterrupted(Value),
     ProviderStatusChanged(Value),
+    /// A login flow's output so far, for the phone to show and answer.
+    ProviderLoginProgress(Value),
+    ProviderLoginCompleted(Value),
     Unsupported { raw_type: String, payload: Value },
 }
 

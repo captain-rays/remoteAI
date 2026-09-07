@@ -716,3 +716,145 @@ async fn a_provider_with_no_installed_cli_is_not_reported_as_logged_out() {
         .clone();
     assert!(payload.get("login").is_none());
 }
+
+#[tokio::test]
+async fn account_requests_reach_the_provider_and_failures_carry_their_reason() {
+    // `provider_operation_failed` alone is unactionable on a phone. An
+    // account request that failed because nothing is signed in has to say
+    // that, or the accounts screen can only shrug.
+    let home = tempfile::tempdir().unwrap();
+    let credential = home.path().join("credential");
+    let program = home.path().join("fake-claude");
+    std::fs::write(
+        &program,
+        "#!/bin/sh\ncase \"$1 $2\" in\n'auth status') printf '{\"loggedIn\":false}\\n' ;;\nesac\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        &program,
+        <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),
+    )
+    .unwrap();
+    let program = program.to_str().unwrap().to_owned();
+
+    let state = state();
+    state
+        .set_provider_adapters(vec![
+            Arc::new(MockAdapter::new(ProviderId::Claude)) as Arc<dyn ProviderAdapter>,
+        ])
+        .await;
+    let store = Arc::new(
+        remote_ai_agent::store::Store::open(&home.path().join("state"))
+            .await
+            .unwrap(),
+    );
+    state
+        .set_account_service(Arc::new(remote_ai_agent::accounts::AccountService::new(
+            ProviderId::Claude,
+            program.clone(),
+            remote_ai_agent::credentials::LiveCredential::File(credential),
+            Arc::new(remote_ai_agent::credentials::AccountVault::new(Box::new(
+                remote_ai_agent::credentials::InMemorySecrets::default(),
+            ))),
+            store,
+            Arc::new(remote_ai_agent::auth::LoginProbe::claude(program)),
+            state.out_of_band_events(),
+        )))
+        .await;
+
+    let inbound = CryptoBox::new([13; 32], *b"IOS>");
+    let outbound = CryptoBox::new([13; 32], *b"MAC>");
+    let mut session =
+        GatewaySession::new(state, "phone-1", inbound.receiver(), outbound.clone()).await;
+
+    let listed = session
+        .handle_frame(&request_frame(
+            &inbound,
+            1,
+            "provider.accounts",
+            json!({"provider":"claude"}),
+        ))
+        .await
+        .unwrap();
+    let view = decode_frames(listed, &outbound)
+        .into_iter()
+        .find(|value| value["type"] == "provider.accounts.result")
+        .expect("an accounts response")["payload"]
+        .clone();
+    assert_eq!(view["provider"], "claude");
+    assert_eq!(view["accounts"].as_array().unwrap().len(), 0);
+    assert_eq!(view["login"]["state"], "logged_out");
+    assert_eq!(view["loginInProgress"], false);
+
+    let refused = session
+        .handle_frame(&request_frame(
+            &inbound,
+            2,
+            "provider.account.save",
+            json!({"provider":"claude","label":"work"}),
+        ))
+        .await
+        .unwrap();
+    let error = decode_frames(refused, &outbound)
+        .into_iter()
+        .find(|value| value["type"] == "error")
+        .expect("a rejection")["payload"]
+        .clone();
+    assert_eq!(error["code"], "provider_operation_failed");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("nothing is signed in"),
+        "the reason travels with the code: {error}"
+    );
+
+    // A label that could address another provider's keychain entry is
+    // refused before anything is written.
+    let unsafe_label = session
+        .handle_frame(&request_frame(
+            &inbound,
+            3,
+            "provider.account.activate",
+            json!({"provider":"claude","label":"codex:work"}),
+        ))
+        .await
+        .unwrap();
+    let error = decode_frames(unsafe_label, &outbound)
+        .into_iter()
+        .find(|value| value["type"] == "error")
+        .expect("a rejection")["payload"]
+        .clone();
+    assert_eq!(error["code"], "provider_operation_failed");
+}
+
+#[tokio::test]
+async fn a_provider_with_no_account_service_reports_unavailable_not_silence() {
+    let state = state();
+    state
+        .set_provider_adapters(vec![
+            Arc::new(MockAdapter::new(ProviderId::Codex)) as Arc<dyn ProviderAdapter>,
+        ])
+        .await;
+    let inbound = CryptoBox::new([15; 32], *b"IOS>");
+    let outbound = CryptoBox::new([15; 32], *b"MAC>");
+    let mut session =
+        GatewaySession::new(state, "phone-1", inbound.receiver(), outbound.clone()).await;
+
+    let frames = session
+        .handle_frame(&request_frame(
+            &inbound,
+            1,
+            "provider.accounts",
+            json!({"provider":"codex"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        decode_frames(frames, &outbound)
+            .into_iter()
+            .find(|value| value["type"] == "error")
+            .expect("a rejection")["payload"]["code"],
+        "provider_unavailable"
+    );
+}

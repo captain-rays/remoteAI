@@ -9,6 +9,14 @@ use sqlx::{ConnectOptions, Row, SqlitePool};
 
 use crate::pairing::PairedDevice;
 
+/// One saved account, as the phone lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredAccount {
+    pub label: String,
+    pub display: Option<String>,
+    pub is_current: bool,
+}
+
 pub struct Store {
     pool: SqlitePool,
     database_path: PathBuf,
@@ -49,6 +57,91 @@ impl Store {
 
     pub fn private_key_path(&self) -> &Path {
         &self.private_key_path
+    }
+
+    /// The provider accounts this agent has snapshots for.
+    ///
+    /// Labels and display names only: the credentials are in the keychain.
+    pub async fn provider_accounts(
+        &self,
+        provider: crate::protocol::ProviderId,
+    ) -> anyhow::Result<Vec<StoredAccount>> {
+        let rows = sqlx::query(
+            "SELECT label, display, is_current FROM provider_accounts \
+             WHERE provider = ?1 ORDER BY label",
+        )
+        .bind(crate::credentials::provider_slug(provider))
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|row| StoredAccount {
+                label: row.get::<String, _>(0),
+                display: row.get::<Option<String>, _>(1),
+                is_current: row.get::<i64, _>(2) != 0,
+            })
+            .collect())
+    }
+
+    pub async fn upsert_provider_account(
+        &self,
+        provider: crate::protocol::ProviderId,
+        label: &str,
+        display: Option<&str>,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO provider_accounts (provider, label, display, created_at, is_current) \
+             VALUES (?1, ?2, ?3, ?4, 0) \
+             ON CONFLICT(provider, label) DO UPDATE SET display = excluded.display",
+        )
+        .bind(crate::credentials::provider_slug(provider))
+        .bind(label)
+        .bind(display)
+        .bind(Utc::now().to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete_provider_account(
+        &self,
+        provider: crate::protocol::ProviderId,
+        label: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query("DELETE FROM provider_accounts WHERE provider = ?1 AND label = ?2")
+            .bind(crate::credentials::provider_slug(provider))
+            .bind(label)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Record which account a provider is signed in as. Exactly one account
+    /// per provider can be current, so the previous one is cleared in the
+    /// same statement pair.
+    pub async fn set_current_provider_account(
+        &self,
+        provider: crate::protocol::ProviderId,
+        label: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let slug = crate::credentials::provider_slug(provider);
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("UPDATE provider_accounts SET is_current = 0 WHERE provider = ?1")
+            .bind(slug)
+            .execute(&mut *transaction)
+            .await?;
+        if let Some(label) = label {
+            sqlx::query(
+                "UPDATE provider_accounts SET is_current = 1 \
+                 WHERE provider = ?1 AND label = ?2",
+            )
+            .bind(slug)
+            .bind(label)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
+        Ok(())
     }
 
     pub async fn table_names(&self) -> anyhow::Result<Vec<String>> {

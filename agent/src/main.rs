@@ -10,7 +10,9 @@ use p256::elliptic_curve::sec1::ToEncodedPoint;
 use remote_ai_agent::adapters::claude::ClaudeAdapter;
 use remote_ai_agent::adapters::codex::CodexAdapter;
 use remote_ai_agent::adapters::{ConversationPage, ProviderAdapter};
+use remote_ai_agent::accounts::AccountService;
 use remote_ai_agent::auth::LoginProbe;
+use remote_ai_agent::credentials::{AccountVault, LiveCredential};
 use remote_ai_agent::config::AgentConfig;
 use remote_ai_agent::config::resolve_home;
 use remote_ai_agent::crypto::load_or_create_private_key;
@@ -228,6 +230,41 @@ async fn discover_runtime_adapters(home: PathBuf) -> Vec<Arc<dyn ProviderAdapter
     adapters_from_statuses(home, statuses)
 }
 
+/// Give the gateway a way to switch accounts and sign in, per provider.
+///
+/// Needs the same three things for both providers — where the CLI keeps its
+/// live credential, where snapshots go, and how to ask who is signed in — so
+/// the only per-provider part is the credential's location.
+async fn register_account_services(state: &GatewayState, store: Arc<Store>, home: &Path) {
+    let vault = Arc::new(AccountVault::keychain());
+    let user = std::env::var("USER").unwrap_or_default();
+    let adapters = state.provider_adapters.read().await.clone();
+    for adapter in adapters {
+        let status = adapter.status().await;
+        let Some(executable) = status.executable_path.clone() else {
+            continue;
+        };
+        let Some(probe) = state.login_probe(status.provider).await else {
+            continue;
+        };
+        let live = match status.provider {
+            ProviderId::Claude => LiveCredential::claude(&user),
+            ProviderId::Codex => LiveCredential::codex(home),
+        };
+        state
+            .set_account_service(Arc::new(AccountService::new(
+                status.provider,
+                executable,
+                live,
+                vault.clone(),
+                store.clone(),
+                probe,
+                state.out_of_band_events(),
+            )))
+            .await;
+    }
+}
+
 /// Teach the gateway how to ask each installed CLI who is signed in.
 ///
 /// Only a provider whose executable was actually found gets a probe: without
@@ -280,6 +317,7 @@ async fn main() -> anyhow::Result<()> {
         .configure_runtime_state(&home, discover_runtime_adapters(home.clone()).await)
         .await;
     register_login_probes(&state).await;
+    register_account_services(&state, store.clone(), &home).await;
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     println!(
         "{} listening on {}",
