@@ -28,7 +28,11 @@ public final class AppDependencies {
     /// Production launches never set this value.
     public let uiTestFileProbePath: String?
     public let publicOrigin: String
-    public private(set) var connectionState: ConnectionState = .disconnected
+    /// The app model owns the connection state, because it is the only object
+    /// that talks to the Mac often enough to know: a read that fails demotes
+    /// it there. Mirroring it in a second stored property let the two drift,
+    /// with the banner reading a value nothing had updated.
+    public var connectionState: ConnectionState { appModel.connectionState }
     /// Explicit pairing bootstrap is a simulator/development flow. Its
     /// identity stays in-process so an unavailable simulator keychain cannot
     /// prevent the one-shot smoke from reaching the paired state.
@@ -59,6 +63,10 @@ public final class AppDependencies {
         self.uiTestFileProbePath = uiTestFileProbePath
         self.publicOrigin = publicOrigin
         self.usesEphemeralPairingStore = usesEphemeralPairingStore
+
+        appModel.onConnectionStateChange = { [weak self] state in
+            self?.applyConnectivity(state)
+        }
 
         // A stored identity *is* a completed pairing. Starting disconnected
         // whenever this launch did not itself pair sent the reader back to the
@@ -244,8 +252,13 @@ public final class AppDependencies {
 
     /// Propagates connectivity to every screen that must go read-only offline.
     public func setConnectionState(_ state: ConnectionState) {
-        connectionState = state
         appModel.setConnectionState(state)
+        // Also directly, because the model only reports a *change*: setting
+        // the state it already holds must still leave the screens consistent.
+        applyConnectivity(state)
+    }
+
+    private func applyConnectivity(_ state: ConnectionState) {
         files.isOnline = state.allowsMutation
         transfers.isOnline = state.allowsMutation
     }

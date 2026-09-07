@@ -71,12 +71,62 @@ public final class AppModel {
 
     public var isOnline: Bool { connectionState.allowsMutation }
 
+    /// Whether a read may be attempted at all.
+    ///
+    /// Narrower than `isOnline`, which gates *writing*: a connection that has
+    /// just failed a read is `recovering`, which blocks sending but must still
+    /// try the next read. Were reads gated on `isOnline` too, one failure
+    /// would be permanent — nothing would ever discover that the Mac came
+    /// back. `disconnected` and `connecting` mean there is no usable pairing
+    /// yet, so nothing is attempted.
+    private var canAttemptRead: Bool {
+        switch connectionState {
+        case .disconnected, .connecting: return false
+        case .paired, .online, .recovering: return true
+        }
+    }
+
+    /// Whether a failure means the Mac could not be reached, as opposed to the
+    /// Mac answering with a refusal.
+    ///
+    /// The distinction is the whole point of the connection banner: Codex
+    /// running out of quota is not a connection problem, and must not stop the
+    /// phone sending to Claude.
+    private static func isUnreachable(_ error: Error) -> Bool {
+        switch error as? AgentClientError {
+        case .transport, .offline, .notPaired: return true
+        default: return false
+        }
+    }
+
+    /// A request arrived and was answered, so the connection is live again.
+    private func noteReachable() {
+        if connectionState == .recovering { setConnectionState(.online) }
+    }
+
+    private func noteFailure(_ error: Error) {
+        lastErrorMessage = "\(error)"
+        // Demote from `online`, not from `paired`: a pairing that has never
+        // connected is not recovering from anything.
+        if Self.isUnreachable(error), connectionState == .online {
+            setConnectionState(.recovering)
+        }
+    }
+
     public func isAvailable(_ provider: ProviderId) -> Bool {
         providerStatuses[provider]?.available ?? true
     }
 
+    /// Called on every change of `connectionState`, however it came about —
+    /// this setter, or the app noticing for itself that a request did not
+    /// arrive. `AppDependencies` hangs the other screens' read-only flags off
+    /// it, so a connection this model demotes takes them with it.
+    public var onConnectionStateChange: ((ConnectionState) -> Void)?
+
     public func setConnectionState(_ state: ConnectionState) {
+        guard state != connectionState else { return }
         connectionState = state
+        onConnectionStateChange?(state)
     }
 
     // MARK: - Provider switching
@@ -106,7 +156,7 @@ public final class AppModel {
     // MARK: - Catalog
 
     public func reloadCatalog() async {
-        guard isOnline else {
+        guard canAttemptRead else {
             // The cache is a real answer, so the screen stops being busy.
             applyCachedSnapshot()
             catalogState = .loaded
@@ -138,9 +188,10 @@ public final class AppModel {
                 )
             )
             lastErrorMessage = nil
+            noteReachable()
             catalogState = .loaded
         } catch {
-            lastErrorMessage = "\(error)"
+            noteFailure(error)
             applyCachedSnapshot()
             catalogState = .failed
         }
@@ -169,7 +220,7 @@ public final class AppModel {
             (cache.snapshot(for: selectedProvider)?.projectConversations[project.id] ?? [])
             .filter { $0.provider == selectedProvider && $0.projectId == project.id }
 
-        guard isOnline else {
+        guard canAttemptRead else {
             projectSessionsState = .loaded
             return
         }
@@ -178,7 +229,7 @@ public final class AppModel {
 
     public func refreshSelectedProject() async {
         guard let project = selectedProject, project.provider == selectedProvider else { return }
-        guard isOnline else {
+        guard canAttemptRead else {
             applyCachedSnapshot()
             projectSessionsState = .loaded
             return
@@ -209,9 +260,10 @@ public final class AppModel {
             )
             cache.store(snapshot)
             lastErrorMessage = nil
+            noteReachable()
             projectSessionsState = .loaded
         } catch {
-            lastErrorMessage = "\(error)"
+            noteFailure(error)
             projectSessionsState = .failed
         }
     }

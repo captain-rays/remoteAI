@@ -288,6 +288,117 @@ public enum AppModelSuite {
                     "the app must never transfer a file on its own"
                 )
             },
+            TestCase("a read that cannot reach the Mac stops claiming to be online") {
+                // The banner said online for as long as an identity existed,
+                // whatever the network was doing.
+                let client = FailingCatalogClient(error: .transport("connection lost"))
+                let model = await MainActor.run {
+                    AppModel(
+                        client: client,
+                        preferences: InMemoryPreferencesStore(),
+                        cache: InMemoryCatalogCache()
+                    )
+                }
+                await MainActor.run { model.setConnectionState(.online) }
+
+                await model.reloadCatalog()
+
+                try expectEqual(
+                    await model.connectionState, .recovering,
+                    "a transport failure is the definition of not being online"
+                )
+                try expectFalse(
+                    await model.isOnline, "sending into a dead connection cannot work"
+                )
+            },
+
+            TestCase("a provider's own failure is not a connection failure") {
+                // Codex running out of quota says nothing about whether the
+                // Mac is reachable, and must not disable sending to Claude.
+                let client = FailingCatalogClient(error: .rejected("provider_operation_failed"))
+                let model = await MainActor.run {
+                    AppModel(
+                        client: client,
+                        preferences: InMemoryPreferencesStore(),
+                        cache: InMemoryCatalogCache()
+                    )
+                }
+                await MainActor.run { model.setConnectionState(.online) }
+
+                await model.reloadCatalog()
+
+                try expectEqual(await model.connectionState, .online)
+                try expectTrue(await model.isOnline)
+            },
+
+            TestCase("a recovering connection still tries the next read") {
+                // Otherwise the first blip is permanent: the read path used to
+                // return the cache without attempting anything.
+                let client = RecoveringCatalogClient()
+                let model = await MainActor.run {
+                    AppModel(
+                        client: client,
+                        preferences: InMemoryPreferencesStore(),
+                        cache: InMemoryCatalogCache()
+                    )
+                }
+                await MainActor.run { model.setConnectionState(.online) }
+
+                await model.reloadCatalog()
+                try expectEqual(await model.connectionState, .recovering)
+
+                await model.reloadCatalog()
+                try expectEqual(
+                    await model.connectionState, .online,
+                    "the Mac came back, so the app must too"
+                )
+            },
+
+            TestCase("an unpaired app never goes near the network") {
+                let client = FailingCatalogClient(error: .transport("should not be called"))
+                let model = await MainActor.run {
+                    AppModel(
+                        client: client,
+                        preferences: InMemoryPreferencesStore(),
+                        cache: InMemoryCatalogCache()
+                    )
+                }
+
+                await model.reloadCatalog()
+
+                try expectEqual(await model.connectionState, .disconnected)
+                try expectEqual(await client.calls, 0)
+            },
+
         ]
     )
+}
+
+/// A catalog read that always fails with one error.
+private actor FailingCatalogClient: StubAgentClient {
+    private let error: AgentClientError
+    private(set) var calls = 0
+
+    init(error: AgentClientError) { self.error = error }
+
+    func providerStatus() async throws -> [ProviderStatus] {
+        calls += 1
+        throw error
+    }
+}
+
+/// Fails once, then succeeds — a Mac that went away and came back.
+private actor RecoveringCatalogClient: StubAgentClient {
+    private var attempts = 0
+
+    func providerStatus() async throws -> [ProviderStatus] {
+        attempts += 1
+        if attempts == 1 { throw AgentClientError.transport("connection lost") }
+        return []
+    }
+
+    // The rest of the catalog read has to complete for the second attempt to
+    // count as the Mac having come back.
+    func listDailyConversations(provider: ProviderId) async throws -> [ConversationSummary] { [] }
+    func listProjects(provider: ProviderId) async throws -> [ProjectSummary] { [] }
 }
