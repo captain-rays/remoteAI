@@ -222,9 +222,15 @@ impl AccountService {
         // switching away and back would restore a stale credential.
         self.snapshot_current_account().await;
 
-        // Log out through the CLI rather than by deleting its credential, so
-        // whatever else it keeps alongside is dealt with too.
-        self.run_logout().await?;
+        // Make room by removing the credential, not by running the CLI's
+        // logout. A logout is entitled to revoke the token at the provider,
+        // which would leave the snapshot just taken of the outgoing account
+        // useless — switching away would quietly destroy the account being
+        // left. Signing out is a separate, explicit act (see `logout`), and
+        // only there is the CLI's own command the right thing.
+        self.live
+            .clear(&crate::credentials::Keychain)
+            .map_err(|_| AccountError::Failed)?;
         self.live
             .write(&crate::credentials::Keychain, &wanted)
             .map_err(|_| AccountError::Failed)?;
@@ -278,8 +284,13 @@ impl AccountService {
         }
 
         if self.probe.read().await.state == LoginState::LoggedIn {
+            // Same reasoning as `activate`: the account being replaced was
+            // just snapshotted, and a CLI logout may revoke it at the
+            // provider, so the credential is removed rather than logged out.
             self.snapshot_current_account().await;
-            self.run_logout().await?;
+            self.live
+                .clear(&crate::credentials::Keychain)
+                .map_err(|_| AccountError::Failed)?;
             self.probe.forget().await;
         }
 

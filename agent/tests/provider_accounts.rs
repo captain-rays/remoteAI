@@ -17,8 +17,19 @@ use remote_ai_agent::store::Store;
 struct Harness {
     service: Arc<AccountService>,
     credential: std::path::PathBuf,
+    /// One line per `auth logout` the stand-in was asked to perform. Absent
+    /// until the first one.
+    logouts: std::path::PathBuf,
     events: tokio::sync::broadcast::Receiver<(ProviderId, ConversationEvent)>,
     _home: tempfile::TempDir,
+}
+
+impl Harness {
+    fn logout_count(&self) -> usize {
+        std::fs::read_to_string(&self.logouts)
+            .map(|recorded| recorded.lines().count())
+            .unwrap_or(0)
+    }
 }
 
 /// A stand-in for `claude`: `auth status --json`, `auth login`, `auth logout`.
@@ -28,6 +39,7 @@ struct Harness {
 async fn harness(signed_in_as: Option<&str>) -> Harness {
     let home = tempfile::tempdir().unwrap();
     let credential = home.path().join("credential");
+    let logouts = home.path().join("logouts");
     if let Some(account) = signed_in_as {
         std::fs::write(&credential, account).unwrap();
     }
@@ -37,6 +49,7 @@ async fn harness(signed_in_as: Option<&str>) -> Harness {
         format!(
             "#!/bin/sh\n\
              CRED='{}'\n\
+             LOGOUTS='{}'\n\
              case \"$1 $2\" in\n\
              'auth status')\n\
                if [ -f \"$CRED\" ]; then\n\
@@ -45,6 +58,7 @@ async fn harness(signed_in_as: Option<&str>) -> Harness {
                  printf '{{\"loggedIn\":false}}\\n'\n\
                fi ;;\n\
              'auth logout')\n\
+               echo logout >> \"$LOGOUTS\"\n\
                rm -f \"$CRED\" ;;\n\
              'auth login')\n\
                printf 'Open this link to sign in\\n'\n\
@@ -59,7 +73,8 @@ async fn harness(signed_in_as: Option<&str>) -> Harness {
                  exit 1\n\
                fi ;;\n\
              esac\n",
-            credential.display()
+            credential.display(),
+            logouts.display()
         ),
     )
     .unwrap();
@@ -80,6 +95,7 @@ async fn harness(signed_in_as: Option<&str>) -> Harness {
     Harness {
         service,
         credential,
+        logouts,
         events: receiver,
         _home: home,
     }
@@ -407,4 +423,33 @@ async fn input_for_a_login_that_has_ended_is_refused() {
         .await
         .expect_err("nothing is listening");
     assert!(error.to_string().contains("no longer running"), "{error}");
+}
+
+#[tokio::test]
+async fn switching_accounts_does_not_run_the_clis_logout() {
+    // A logout is entitled to revoke the token at the provider. Doing one to
+    // make room for another account would leave the snapshot of the account
+    // being left useless — switching away would destroy it. Signing out is a
+    // separate, explicit act, and only there is the CLI's own logout right.
+    let harness = harness(Some("first@example.com")).await;
+    let service = &harness.service;
+
+    service.save_current("first").await.unwrap();
+    service.save_current("second").await.unwrap();
+    service.activate("first").await.unwrap();
+    service.activate("second").await.unwrap();
+
+    assert_eq!(
+        harness.logout_count(),
+        0,
+        "switching accounts must not invoke the CLI's logout"
+    );
+
+    // Signing out, on the other hand, is exactly when it should.
+    service.logout().await.unwrap();
+    assert_eq!(
+        harness.logout_count(),
+        1,
+        "an explicit sign-out goes through the CLI"
+    );
 }
