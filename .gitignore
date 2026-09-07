@@ -1,0 +1,21 @@
+# Rust
+/target/
+
+# Swift / Xcode
+#
+# The project file is generated from ios/project.yml by xcodegen, and every
+# build directory below is output — .deviceBuild was committed once by
+# accident and is 4.4 MB of Xcode intermediates.
+ios/.build/
+ios/.swiftpm/
+ios/.derivedData/
+ios/.deviceBuild/
+ios/DerivedData/
+ios/RemoteAI.xcodeproj/
+*.xcresult
+
+# Agent working state (per-machine: keys, pairing, SQLite).
+/agent/.state/
+
+# Assistant session data and worktrees. Never part of the project.
+/.claude/

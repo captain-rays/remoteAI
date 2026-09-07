@@ -102,7 +102,7 @@ fn a_label_from_a_phone_cannot_reach_outside_its_own_entry() {
     assert!(AccountVault::validate_label("").is_err());
     assert!(AccountVault::validate_label(&"a".repeat(61)).is_err());
     assert!(AccountVault::validate_label("../../etc/passwd").is_err());
-    assert!(AccountVault::validate_label("ray.kang@jaco.live").is_ok());
+    assert!(AccountVault::validate_label("someone@example.com").is_ok());
     assert!(AccountVault::validate_label("Work Mac").is_ok());
 }
 
