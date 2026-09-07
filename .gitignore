@@ -19,3 +19,6 @@ ios/RemoteAI.xcodeproj/
 
 # Assistant session data and worktrees. Never part of the project.
 /.claude/
+
+# macOS
+.DS_Store
