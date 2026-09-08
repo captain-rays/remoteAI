@@ -236,7 +236,9 @@ fn post_create_token(body: &str) -> Result<CreateTokenResponse, SpeechError> {
         .ok_or(SpeechError::Unreachable)?
         .write_all(config.as_bytes())
         .map_err(|_| SpeechError::Unreachable)?;
-    let output = child.wait_with_output().map_err(|_| SpeechError::Unreachable)?;
+    let output = child
+        .wait_with_output()
+        .map_err(|_| SpeechError::Unreachable)?;
     if !output.status.success() {
         return Err(SpeechError::Unreachable);
     }

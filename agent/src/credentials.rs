@@ -157,10 +157,8 @@ impl AccountVault {
         anyhow::ensure!(!label.is_empty(), "an account needs a name");
         anyhow::ensure!(label.chars().count() <= 60, "that name is too long");
         anyhow::ensure!(
-            label
-                .chars()
-                .all(|character| character.is_alphanumeric()
-                    || matches!(character, '-' | '_' | '.' | '@' | ' ')),
+            label.chars().all(|character| character.is_alphanumeric()
+                || matches!(character, '-' | '_' | '.' | '@' | ' ')),
             "a name may use letters, digits, spaces and - _ . @"
         );
         Ok(())
@@ -170,12 +168,7 @@ impl AccountVault {
         format!("{}:{label}", provider_slug(provider))
     }
 
-    pub fn save(
-        &self,
-        provider: ProviderId,
-        label: &str,
-        secret: &[u8],
-    ) -> anyhow::Result<()> {
+    pub fn save(&self, provider: ProviderId, label: &str, secret: &[u8]) -> anyhow::Result<()> {
         Self::validate_label(label)?;
         self.secrets
             .put(&self.service, &Self::key(provider, label), secret)
@@ -183,8 +176,7 @@ impl AccountVault {
 
     pub fn load(&self, provider: ProviderId, label: &str) -> anyhow::Result<Option<Vec<u8>>> {
         Self::validate_label(label)?;
-        self.secrets
-            .get(&self.service, &Self::key(provider, label))
+        self.secrets.get(&self.service, &Self::key(provider, label))
     }
 
     pub fn delete(&self, provider: ProviderId, label: &str) -> anyhow::Result<()> {

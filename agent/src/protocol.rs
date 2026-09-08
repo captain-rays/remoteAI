@@ -192,7 +192,9 @@ pub struct ResponseEnvelope {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConversationEvent {
-    Delta { text: String },
+    Delta {
+        text: String,
+    },
     Started(Value),
     UserMessage(Value),
     MessageCompleted(Value),
@@ -210,7 +212,10 @@ pub enum ConversationEvent {
     /// A login flow's output so far, for the phone to show and answer.
     ProviderLoginProgress(Value),
     ProviderLoginCompleted(Value),
-    Unsupported { raw_type: String, payload: Value },
+    Unsupported {
+        raw_type: String,
+        payload: Value,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

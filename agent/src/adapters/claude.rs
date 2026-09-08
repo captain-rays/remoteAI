@@ -180,8 +180,19 @@ struct DesktopSessionTarget {
     transcript_path: Option<PathBuf>,
 }
 
+/// Which desktop surface a session belongs to. The app keeps two separate
+/// stores: "Chats and tasks" runs in its own sandbox, while the Code tab is
+/// bound to a folder on disk. They are different views, not two spellings of
+/// the same one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DesktopSurface {
+    Chat,
+    Code,
+}
+
 #[derive(Debug, Clone)]
 struct DesktopSessionMeta {
+    surface: DesktopSurface,
     desktop_id: String,
     cli_id: Option<String>,
     cwd: PathBuf,
@@ -230,7 +241,13 @@ impl ClaudeIndex {
     /// Each project directory with its recency.
     fn project_paths(&self) -> Vec<(String, DateTime<Utc>)> {
         let mut paths = Vec::new();
-        for desktop in &self.desktop {
+        // Only the Code tab binds a session to a real folder. A chat's cwd is
+        // the desktop app's own sandbox and must never become a project.
+        for desktop in self
+            .desktop
+            .iter()
+            .filter(|desktop| desktop.surface == DesktopSurface::Code)
+        {
             let recency = desktop.recency();
             paths.extend(desktop.project_paths().map(|path| (path, recency)));
         }
@@ -279,6 +296,7 @@ fn project_directories(
 ) -> Vec<String> {
     let mut designated = desktop
         .iter()
+        .filter(|session| session.surface == DesktopSurface::Code)
         .flat_map(DesktopSessionMeta::project_paths)
         .filter(|path| path != home)
         .collect::<Vec<_>>();
@@ -667,9 +685,12 @@ impl ProviderAdapter for ClaudeAdapter {
 
     async fn list_daily_conversations(&self) -> anyhow::Result<Vec<ConversationSummary>> {
         let index = self.refresh_index().await?;
+        // "Chats and tasks" in the desktop app. A Code-tab session is reached
+        // through its project instead.
         let mut conversations = index
             .desktop
             .iter()
+            .filter(|desktop| desktop.surface == DesktopSurface::Chat)
             .map(|desktop| self.desktop_summary(desktop, ConversationKind::Daily, None, None))
             .collect::<Vec<_>>();
         // A CLI session no project encloses has no project view to appear in,
@@ -1063,23 +1084,28 @@ fn remap_event_session_id(event: ConversationEvent, public_id: &str) -> Conversa
 }
 
 fn collect_desktop_sessions(home: &Path) -> anyhow::Result<Vec<DesktopSessionMeta>> {
-    let current_root = home
+    let support = home
         .join("Library")
         .join("Application Support")
-        .join("Claude")
-        .join("claude-code-sessions");
-    let root = if current_root.exists() {
-        current_root
-    } else {
-        home.join("Library")
-            .join("Application Support")
-            .join("Claude")
-            .join("local-agent-mode-sessions")
-    };
+        .join("Claude");
+    // Both stores are read: they are the app's two surfaces, and treating them
+    // as alternatives put Code-tab sessions in the Chats list and left the real
+    // chats unreachable.
+    let roots = [
+        (DesktopSurface::Code, support.join("claude-code-sessions")),
+        (
+            DesktopSurface::Chat,
+            support.join("local-agent-mode-sessions"),
+        ),
+    ];
     let mut metadata_paths = Vec::new();
-    collect_desktop_metadata_paths(&root, 0, &mut metadata_paths)?;
+    for (surface, root) in roots {
+        let mut found = Vec::new();
+        collect_desktop_metadata_paths(&root, 0, &mut found)?;
+        metadata_paths.extend(found.into_iter().map(|path| (surface, path)));
+    }
     let mut sessions = Vec::new();
-    for path in metadata_paths {
+    for (surface, path) in metadata_paths {
         if fs::metadata(&path)?.len() > MAX_METADATA_LINE_BYTES as u64 {
             continue;
         }
@@ -1130,6 +1156,7 @@ fn collect_desktop_sessions(home: &Path) -> anyhow::Result<Vec<DesktopSessionMet
             })
             .unwrap_or_default();
         sessions.push(DesktopSessionMeta {
+            surface,
             desktop_id: desktop_id.to_owned(),
             cli_id,
             cwd: PathBuf::from(cwd),

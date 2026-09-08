@@ -7,13 +7,28 @@
 # silently skipped. Pass --require-xcode to make a missing toolchain fatal.
 set -euo pipefail
 
+# Xcode builds the SwiftPM package into DerivedData and caches it. Adding a
+# type to RemoteAIKit and then running the gate can therefore fail with
+# "cannot find <type> in scope" from the test bundle while `swift build`
+# succeeds — the package it compiled against is the cached one. `--clean`
+# removes that cache; it costs a few minutes and is the answer whenever the
+# Xcode gate disagrees with the logic suites about what exists.
 require_xcode=0
-if [ "${1:-}" = "--require-xcode" ]; then
-    require_xcode=1
-fi
+clean=0
+for argument in "$@"; do
+    case "$argument" in
+        --require-xcode) require_xcode=1 ;;
+        --clean) clean=1 ;;
+    esac
+done
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
+
+if [ "$clean" -eq 1 ]; then
+    echo "==> removing ios/.derivedData"
+    rm -rf ios/.derivedData
+fi
 
 echo "==> swift build (RemoteAIKit + suites)"
 swift build --package-path ios

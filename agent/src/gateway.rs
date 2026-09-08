@@ -113,18 +113,11 @@ impl GatewayState {
     }
 
     /// Register how to ask a provider's CLI who is signed in.
-    pub async fn set_login_probe(
-        &self,
-        provider: ProviderId,
-        probe: Arc<crate::auth::LoginProbe>,
-    ) {
+    pub async fn set_login_probe(&self, provider: ProviderId, probe: Arc<crate::auth::LoginProbe>) {
         self.logins.write().await.insert(provider, probe);
     }
 
-    pub async fn login_probe(
-        &self,
-        provider: ProviderId,
-    ) -> Option<Arc<crate::auth::LoginProbe>> {
+    pub async fn login_probe(&self, provider: ProviderId) -> Option<Arc<crate::auth::LoginProbe>> {
         self.logins.read().await.get(&provider).cloned()
     }
 
@@ -1077,15 +1070,14 @@ impl GatewaySession {
             // speech service itself, and all it needs from here is a token
             // the account key on this Mac can mint.
             if request.message_type == "speech.credentials" {
-                let tokens = self
-                    .state
-                    .speech_tokens()
-                    .await
-                    .ok_or(GatewayBusinessError::Speech(
-                        crate::speech::SpeechError::NotConfigured,
-                    ))?;
-                let credentials =
-                    tokens.credentials().map_err(GatewayBusinessError::Speech)?;
+                let tokens =
+                    self.state
+                        .speech_tokens()
+                        .await
+                        .ok_or(GatewayBusinessError::Speech(
+                            crate::speech::SpeechError::NotConfigured,
+                        ))?;
+                let credentials = tokens.credentials().map_err(GatewayBusinessError::Speech)?;
                 return Ok((
                     "speech.credentials.result",
                     serde_json::to_value(credentials)

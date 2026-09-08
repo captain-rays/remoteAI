@@ -13,6 +13,26 @@ public enum DictationState: Equatable, Sendable {
     case failed(String)
 }
 
+/// What went on underneath, for when the service produced no words.
+///
+/// "Nothing was heard" is true of three different faults — a service that was
+/// never reached, a microphone that yielded nothing, and audio the service
+/// made nothing of — and they need different things done about them. Reading
+/// the same sentence for all three tells the person holding the phone nothing.
+public struct DictationDiagnosis: Sendable, Equatable {
+    /// How many audio frames reached the service. `nil` from a transcriber
+    /// that keeps no account — which is not the same as zero, and saying "no
+    /// sound reached the microphone" on that basis would be a guess.
+    public var audioFramesSent: Int?
+    /// The last error from sending audio, if any.
+    public var lastAudioError: String?
+
+    public init(audioFramesSent: Int? = nil, lastAudioError: String? = nil) {
+        self.audioFramesSent = audioFramesSent
+        self.lastAudioError = lastAudioError
+    }
+}
+
 /// What a transcriber has to do, kept behind a protocol so the button's
 /// behaviour can be tested without a microphone or a network.
 public protocol SpeechTranscriber: Sendable {
@@ -23,6 +43,14 @@ public protocol SpeechTranscriber: Sendable {
     func finish() async
     /// Abandon the session without waiting for a result.
     func cancel() async
+    /// Where it got to, asked only when there is nothing to show for it.
+    func diagnosis() async -> DictationDiagnosis
+}
+
+extension SpeechTranscriber {
+    /// A transcriber that keeps no account of itself — the scripted ones in
+    /// tests — reports nothing rather than pretending.
+    public func diagnosis() async -> DictationDiagnosis { DictationDiagnosis() }
 }
 
 /// Hold-to-talk, and what it leaves in the composer.
@@ -43,6 +71,8 @@ public final class VoiceDictation {
     private let transcriber: SpeechTranscriber
     private var sentences: [String] = []
     private var partial = ""
+    /// Whether the service acknowledged this session.
+    private var sawSessionOpen = false
     private var session: Task<Void, Never>?
     private var watchdog: Task<Void, Never>?
     /// How long the service gets to produce a result after the button is
@@ -93,6 +123,7 @@ public final class VoiceDictation {
         guard !isBusy else { return }
         sentences = []
         partial = ""
+        sawSessionOpen = false
         finishedTranscript = nil
         state = .opening
         let id = UUID()
@@ -165,6 +196,7 @@ public final class VoiceDictation {
     private func apply(_ event: SpeechProtocol.Event) {
         switch event {
         case .started:
+            sawSessionOpen = true
             state = .listening(SpeechProtocol.transcript(sentences: sentences, partial: partial))
         case let .partial(text):
             partial = text
@@ -189,19 +221,57 @@ public final class VoiceDictation {
         }
     }
 
-    /// The service stopped answering. Keep whatever was heard; say so when
-    /// there was nothing.
+    /// The service stopped answering. Keep whatever was heard; when there is
+    /// nothing, say which part came up empty rather than only that something
+    /// did.
     private func giveUp(id: UUID, reason: String) {
         guard liveSession == id else { return }
         let text = SpeechProtocol.transcript(sentences: sentences, partial: partial)
-        Task { await transcriber.cancel() }
-        if text.isEmpty {
-            liveSession = nil
-            session = nil
-            watchdog = nil
-            state = .failed(reason)
-        } else {
+        if !text.isEmpty {
+            Task { await transcriber.cancel() }
             settle()
+            return
+        }
+        let opened = sawSessionOpen
+        liveSession = nil
+        session = nil
+        watchdog = nil
+        state = .failed(reason)
+        // Asking costs a hop, so it is only done once there is nothing to
+        // show and the answer is the only thing left worth having.
+        Task { [weak self] in
+            guard let self else { return }
+            let diagnosis = await self.transcriber.diagnosis()
+            await self.transcriber.cancel()
+            guard case .failed = self.state else { return }
+            self.state = .failed(
+                Self.explain(diagnosis, sessionOpened: opened, fallback: reason)
+            )
+        }
+    }
+
+    /// Turn what happened into the one sentence worth reading.
+    ///
+    /// Whether the session opened is this model's own knowledge — it saw the
+    /// service acknowledge it — so only the audio is asked about.
+    /// Pure, and deliberately not tied to the main actor: it is the wording
+    /// rule, testable on its own.
+    nonisolated public static func explain(
+        _ diagnosis: DictationDiagnosis, sessionOpened: Bool, fallback: String
+    ) -> String {
+        if let error = diagnosis.lastAudioError {
+            return "The connection to the speech service dropped: \(error)"
+        }
+        if !sessionOpened {
+            return "The speech service did not answer."
+        }
+        switch diagnosis.audioFramesSent {
+        case 0:
+            return "No sound reached the microphone."
+        case let sent?:
+            return "The speech service heard nothing in \(sent) frames of audio."
+        case nil:
+            return fallback
         }
     }
 

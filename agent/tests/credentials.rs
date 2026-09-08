@@ -30,13 +30,19 @@ fn a_restored_file_credential_is_readable_only_by_its_owner() {
     let secrets = InMemorySecrets::default();
     let codex = LiveCredential::codex(home.path());
 
-    codex.write(&secrets, br#"{"tokens":{"access_token":"a"}}"#).unwrap();
+    codex
+        .write(&secrets, br#"{"tokens":{"access_token":"a"}}"#)
+        .unwrap();
 
     let path = home.path().join(".codex/auth.json");
     let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600, "credential file mode");
     let parent = fs::metadata(home.path().join(".codex")).unwrap();
-    assert_eq!(parent.permissions().mode() & 0o077, 0, "directory is private");
+    assert_eq!(
+        parent.permissions().mode() & 0o077,
+        0,
+        "directory is private"
+    );
     assert_eq!(
         codex.read(&secrets).unwrap().unwrap(),
         br#"{"tokens":{"access_token":"a"}}"#
@@ -66,15 +72,24 @@ fn a_snapshot_round_trips_byte_for_byte() {
 
     vault.save(ProviderId::Codex, "work", &secret).unwrap();
 
-    assert_eq!(vault.load(ProviderId::Codex, "work").unwrap().unwrap(), secret);
+    assert_eq!(
+        vault.load(ProviderId::Codex, "work").unwrap().unwrap(),
+        secret
+    );
 }
 
 #[test]
 fn accounts_are_scoped_to_their_provider_and_label() {
     let vault = AccountVault::new(Box::new(InMemorySecrets::default()));
-    vault.save(ProviderId::Codex, "work", b"codex-work").unwrap();
-    vault.save(ProviderId::Claude, "work", b"claude-work").unwrap();
-    vault.save(ProviderId::Codex, "home", b"codex-home").unwrap();
+    vault
+        .save(ProviderId::Codex, "work", b"codex-work")
+        .unwrap();
+    vault
+        .save(ProviderId::Claude, "work", b"claude-work")
+        .unwrap();
+    vault
+        .save(ProviderId::Codex, "home", b"codex-home")
+        .unwrap();
 
     assert_eq!(
         vault.load(ProviderId::Codex, "work").unwrap().unwrap(),

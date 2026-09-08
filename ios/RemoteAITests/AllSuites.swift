@@ -26,5 +26,7 @@ public enum AllSuites {
         SpeechProtocolSuite.suite,
         VoiceDictationSuite.suite,
         VoiceDictationTimeoutSuite.suite,
+        DictationDiagnosisSuite.suite,
+        AudioResamplerSuite.suite,
     ]
 }

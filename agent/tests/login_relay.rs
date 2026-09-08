@@ -83,11 +83,17 @@ fn the_relay_can_only_run_each_cli_login_and_logout() {
     // a program or an argument.
     assert_eq!(
         logout_command(ProviderId::Claude, "/usr/local/bin/claude"),
-        ("/usr/local/bin/claude".to_owned(), vec!["auth".to_owned(), "logout".to_owned()])
+        (
+            "/usr/local/bin/claude".to_owned(),
+            vec!["auth".to_owned(), "logout".to_owned()]
+        )
     );
     assert_eq!(
         logout_command(ProviderId::Codex, "/opt/homebrew/bin/codex"),
-        ("/opt/homebrew/bin/codex".to_owned(), vec!["logout".to_owned()])
+        (
+            "/opt/homebrew/bin/codex".to_owned(),
+            vec!["logout".to_owned()]
+        )
     );
 }
 
@@ -132,10 +138,7 @@ async fn a_login_session_forwards_output_and_input_over_a_terminal() {
             script.path().to_str().unwrap(),
             Some("work".to_owned()),
             move |update| {
-                progress
-                    .lock()
-                    .unwrap()
-                    .push(update);
+                progress.lock().unwrap().push(update);
             },
             move |succeeded, tail| {
                 let _ = finished_tx.send((succeeded, tail));
@@ -240,7 +243,10 @@ async fn cancelling_a_login_that_is_waiting_returns_at_once() {
         .await
         .expect("cancel must not block")
         .unwrap();
-    assert!(took < std::time::Duration::from_secs(2), "cancel took {took:?}");
+    assert!(
+        took < std::time::Duration::from_secs(2),
+        "cancel took {took:?}"
+    );
 
     assert_eq!(
         exited_rx.recv_timeout(std::time::Duration::from_secs(5)),

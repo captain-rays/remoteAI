@@ -1,5 +1,5 @@
-pub mod adapters;
 pub mod accounts;
+pub mod adapters;
 pub mod audit;
 pub mod auth;
 pub mod catalog;

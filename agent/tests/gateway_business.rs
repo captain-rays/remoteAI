@@ -692,7 +692,7 @@ async fn a_provider_with_no_installed_cli_is_not_reported_as_logged_out() {
     let state = state();
     state
         .set_provider_adapters(vec![
-            Arc::new(MockAdapter::new(ProviderId::Codex)) as Arc<dyn ProviderAdapter>,
+            Arc::new(MockAdapter::new(ProviderId::Codex)) as Arc<dyn ProviderAdapter>
         ])
         .await;
     let inbound = CryptoBox::new([11; 32], *b"IOS>");
@@ -741,7 +741,7 @@ async fn account_requests_reach_the_provider_and_failures_name_their_cause() {
     let state = state();
     state
         .set_provider_adapters(vec![
-            Arc::new(MockAdapter::new(ProviderId::Claude)) as Arc<dyn ProviderAdapter>,
+            Arc::new(MockAdapter::new(ProviderId::Claude)) as Arc<dyn ProviderAdapter>
         ])
         .await;
     let store = Arc::new(
@@ -831,7 +831,7 @@ async fn a_provider_with_no_account_service_reports_unavailable_not_silence() {
     let state = state();
     state
         .set_provider_adapters(vec![
-            Arc::new(MockAdapter::new(ProviderId::Codex)) as Arc<dyn ProviderAdapter>,
+            Arc::new(MockAdapter::new(ProviderId::Codex)) as Arc<dyn ProviderAdapter>
         ])
         .await;
     let inbound = CryptoBox::new([15; 32], *b"IOS>");
@@ -869,7 +869,9 @@ async fn a_speech_token_is_served_without_naming_a_provider() {
             Box::new({
                 let secrets = remote_ai_agent::credentials::InMemorySecrets::default();
                 use remote_ai_agent::credentials::SecretStore;
-                secrets.put("aliyun.nls", "access-key-id", b"LTAI-id").unwrap();
+                secrets
+                    .put("aliyun.nls", "access-key-id", b"LTAI-id")
+                    .unwrap();
                 secrets
                     .put("aliyun.nls", "access-key-secret", b"a-secret")
                     .unwrap();
@@ -902,7 +904,10 @@ async fn a_speech_token_is_served_without_naming_a_provider() {
     assert_eq!(payload["appkey"], "an-appkey");
     assert_eq!(payload["token"], "a-token");
     assert!(
-        payload["endpoint"].as_str().unwrap_or_default().starts_with("wss://"),
+        payload["endpoint"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("wss://"),
         "the phone is told where to stream: {payload}"
     );
     assert!(payload["expiresAt"].is_string(), "and until when");

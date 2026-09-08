@@ -152,11 +152,9 @@ pub fn find_user_code(text: &str) -> Option<String> {
             groups.next().is_none()
                 && first.len() >= 3
                 && second.len() >= 3
-                && line
-                    .chars()
-                    .all(|character| character.is_ascii_uppercase()
-                        || character.is_ascii_digit()
-                        || character == '-')
+                && line.chars().all(|character| {
+                    character.is_ascii_uppercase() || character.is_ascii_digit() || character == '-'
+                })
         })
         .map(str::to_owned)
 }
@@ -264,9 +262,8 @@ impl LoginSession {
                         Ok(0) | Err(_) => break,
                         Ok(read) => {
                             let chunk = String::from_utf8_lossy(&buffer[..read]).into_owned();
-                            let mut held = transcript
-                                .lock()
-                                .unwrap_or_else(PoisonError::into_inner);
+                            let mut held =
+                                transcript.lock().unwrap_or_else(PoisonError::into_inner);
                             held.push_str(&strip_terminal_codes(&chunk));
                             if held.len() > MAX_TRANSCRIPT {
                                 let cut = held.len() - MAX_TRANSCRIPT;
@@ -282,10 +279,7 @@ impl LoginSession {
         {
             let transcript = transcript.clone();
             std::thread::spawn(move || {
-                let status = child
-                    .wait()
-                    .map(|status| status.success())
-                    .unwrap_or(false);
+                let status = child.wait().map(|status| status.success()).unwrap_or(false);
                 let tail = transcript
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
@@ -320,10 +314,7 @@ impl LoginSession {
             !line.contains('\n') && !line.contains('\r'),
             "one line at a time"
         );
-        let mut writer = self
-            .writer
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut writer = self.writer.lock().unwrap_or_else(PoisonError::into_inner);
         writer.write_all(line.as_bytes())?;
         writer.write_all(b"\r")?;
         writer.flush()?;

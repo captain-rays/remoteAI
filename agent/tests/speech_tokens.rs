@@ -10,14 +10,15 @@ use std::sync::{Arc, Mutex};
 use chrono::{Duration, Utc};
 use remote_ai_agent::credentials::InMemorySecrets;
 use remote_ai_agent::speech::{
-    CreateTokenResponse, SpeechError, SpeechTokens, canonical_query, sign_request,
-    string_to_sign,
+    CreateTokenResponse, SpeechError, SpeechTokens, canonical_query, sign_request, string_to_sign,
 };
 
 fn secrets(id: &str, secret: &str) -> InMemorySecrets {
     let store = InMemorySecrets::default();
     use remote_ai_agent::credentials::SecretStore;
-    store.put("aliyun.nls", "access-key-id", id.as_bytes()).unwrap();
+    store
+        .put("aliyun.nls", "access-key-id", id.as_bytes())
+        .unwrap();
     store
         .put("aliyun.nls", "access-key-secret", secret.as_bytes())
         .unwrap();
@@ -104,7 +105,11 @@ fn a_token_close_to_expiry_is_replaced_rather_than_handed_out() {
                 id: format!("token-{n}"),
                 // The first one is already inside the margin.
                 expires_at: Utc::now()
-                    + if n == 1 { Duration::seconds(30) } else { Duration::hours(24) },
+                    + if n == 1 {
+                        Duration::seconds(30)
+                    } else {
+                        Duration::hours(24)
+                    },
             })
         },
     );
@@ -119,21 +124,17 @@ fn a_token_close_to_expiry_is_replaced_rather_than_handed_out() {
 
 #[test]
 fn a_mac_with_no_account_key_says_so_instead_of_failing_obscurely() {
-    let tokens = SpeechTokens::new(
-        "an-appkey",
-        Box::new(InMemorySecrets::default()),
-        |_| panic!("must not reach the service without a key"),
-    );
+    let tokens = SpeechTokens::new("an-appkey", Box::new(InMemorySecrets::default()), |_| {
+        panic!("must not reach the service without a key")
+    });
     assert_eq!(tokens.credentials(), Err(SpeechError::NoAccountKey));
 }
 
 #[test]
 fn speech_with_no_appkey_configured_is_reported_as_unconfigured() {
-    let tokens = SpeechTokens::new(
-        "",
-        Box::new(secrets("LTAI-id", "a-secret")),
-        |_| panic!("must not reach the service without an appkey"),
-    );
+    let tokens = SpeechTokens::new("", Box::new(secrets("LTAI-id", "a-secret")), |_| {
+        panic!("must not reach the service without an appkey")
+    });
     assert_eq!(tokens.credentials(), Err(SpeechError::NotConfigured));
 }
 
@@ -159,7 +160,10 @@ fn an_error_reply_is_reported_with_the_services_code() {
             "Code":"InvalidAccessKeyId.NotFound"}"#,
     )
     .expect_err("not a token");
-    assert_eq!(error, SpeechError::Rejected("InvalidAccessKeyId.NotFound".into()));
+    assert_eq!(
+        error,
+        SpeechError::Rejected("InvalidAccessKeyId.NotFound".into())
+    );
 }
 
 /// The production path: the key in this Mac's keychain, a real signed request,

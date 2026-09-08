@@ -118,7 +118,10 @@ async fn an_account_set_up_on_the_mac_can_be_saved_and_switched_back_to() {
     let view = service.save_current("first").await.unwrap();
     assert_eq!(view.accounts.len(), 1);
     assert_eq!(view.accounts[0].label, "first");
-    assert_eq!(view.accounts[0].display.as_deref(), Some("first@example.com"));
+    assert_eq!(
+        view.accounts[0].display.as_deref(),
+        Some("first@example.com")
+    );
     assert!(view.accounts[0].is_current);
     assert!(view.accounts[0].has_credential);
 
@@ -127,7 +130,11 @@ async fn an_account_set_up_on_the_mac_can_be_saved_and_switched_back_to() {
     let view = service.save_current("second").await.unwrap();
     assert_eq!(view.accounts.len(), 2);
     assert!(
-        view.accounts.iter().filter(|account| account.is_current).count() == 1,
+        view.accounts
+            .iter()
+            .filter(|account| account.is_current)
+            .count()
+            == 1,
         "exactly one account is current"
     );
     assert!(
@@ -254,10 +261,7 @@ async fn signing_in_from_the_phone_relays_the_flow_and_files_the_credential() {
     let mut harness = harness(None).await;
     let service = harness.service.clone();
 
-    let progress = service
-        .start_login(Some("new".to_owned()))
-        .await
-        .unwrap();
+    let progress = service.start_login(Some("new".to_owned())).await.unwrap();
     assert_eq!(progress.conversation_id, "login:claude");
 
     // Wait for the CLI to get as far as asking for the code.
@@ -271,21 +275,25 @@ async fn signing_in_from_the_phone_relays_the_flow_and_files_the_credential() {
             );
             break current.session_id;
         }
-        assert!(std::time::Instant::now() < deadline, "no prompt: {current:?}");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no prompt: {current:?}"
+        );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     };
 
-    service.send_login_line(&session, "GOOD-CODE").await.unwrap();
+    service
+        .send_login_line(&session, "GOOD-CODE")
+        .await
+        .unwrap();
 
     // The phone learns the outcome from an event, not from a reply.
     let outcome = loop {
-        let (provider, event) = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            harness.events.recv(),
-        )
-        .await
-        .expect("an event")
-        .expect("the channel stays open");
+        let (provider, event) =
+            tokio::time::timeout(std::time::Duration::from_secs(10), harness.events.recv())
+                .await
+                .expect("an event")
+                .expect("the channel stays open");
         assert_eq!(provider, ProviderId::Claude);
         if let ConversationEvent::ProviderLoginCompleted(payload) = event {
             break payload;
@@ -319,19 +327,20 @@ async fn a_rejected_code_is_reported_as_a_failed_login_with_the_clis_reason() {
         if current.awaiting_input {
             break current.session_id;
         }
-        assert!(std::time::Instant::now() < deadline, "no prompt: {current:?}");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no prompt: {current:?}"
+        );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     };
     service.send_login_line(&session, "WRONG").await.unwrap();
 
     let outcome = loop {
-        let (_, event) = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            harness.events.recv(),
-        )
-        .await
-        .expect("an event")
-        .expect("the channel stays open");
+        let (_, event) =
+            tokio::time::timeout(std::time::Duration::from_secs(10), harness.events.recv())
+                .await
+                .expect("an event")
+                .expect("the channel stays open");
         if let ConversationEvent::ProviderLoginCompleted(payload) = event {
             break payload;
         }
@@ -363,7 +372,10 @@ async fn signing_in_while_signed_in_signs_out_first_and_keeps_the_old_account() 
     let service = harness.service.clone();
     service.save_current("first").await.unwrap();
 
-    service.start_login(Some("second".to_owned())).await.unwrap();
+    service
+        .start_login(Some("second".to_owned()))
+        .await
+        .unwrap();
 
     assert_eq!(
         service.view().await.unwrap().login.state,
@@ -377,10 +389,16 @@ async fn signing_in_while_signed_in_signs_out_first_and_keeps_the_old_account() 
         if current.awaiting_input {
             break current.session_id;
         }
-        assert!(std::time::Instant::now() < deadline, "no prompt: {current:?}");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no prompt: {current:?}"
+        );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     };
-    service.send_login_line(&session, "GOOD-CODE").await.unwrap();
+    service
+        .send_login_line(&session, "GOOD-CODE")
+        .await
+        .unwrap();
 
     // Wait for the *filing* to land, not merely for the new login to show:
     // the sign-in becomes visible a moment before the account it belongs to

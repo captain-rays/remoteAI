@@ -7,23 +7,23 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
+use remote_ai_agent::accounts::AccountService;
 use remote_ai_agent::adapters::claude::ClaudeAdapter;
 use remote_ai_agent::adapters::codex::CodexAdapter;
 use remote_ai_agent::adapters::{ConversationPage, ProviderAdapter};
-use remote_ai_agent::accounts::AccountService;
 use remote_ai_agent::auth::LoginProbe;
-use remote_ai_agent::credentials::{AccountVault, LiveCredential};
 use remote_ai_agent::config::AgentConfig;
 use remote_ai_agent::config::resolve_home;
+use remote_ai_agent::credentials::{AccountVault, LiveCredential};
 use remote_ai_agent::crypto::load_or_create_private_key;
 use remote_ai_agent::discovery::discover_provider;
 use remote_ai_agent::gateway::{GatewayState, router};
 use remote_ai_agent::pairing::{PairingPayload, PairingRegistry};
-use remote_ai_agent::speech::SpeechTokens;
 use remote_ai_agent::protocol::{
     ApprovalDecision, ConversationEvent, ConversationKind, ProjectSummary, ProviderId,
     ProviderStatus, WriteState,
 };
+use remote_ai_agent::speech::SpeechTokens;
 use remote_ai_agent::store::Store;
 use tokio::sync::broadcast;
 use uuid::Uuid;

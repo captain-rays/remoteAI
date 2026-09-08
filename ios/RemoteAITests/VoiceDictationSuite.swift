@@ -320,3 +320,124 @@ private actor SilentTranscriber: SpeechTranscriber {
         continuation?.finish()
     }
 }
+
+/// "Nothing was heard" is true of three different faults, and they need
+/// different things done about them. These pin which sentence each produces —
+/// written after a real device reported the same useless message for all of
+/// them.
+public enum DictationDiagnosisSuite {
+    public static let suite = TestSuite(
+        name: "DictationDiagnosisSuite",
+        cases: [
+            TestCase("a service that never acknowledged the session says so") {
+                try expectEqual(
+                    VoiceDictation.explain(
+                        DictationDiagnosis(audioFramesSent: 12),
+                        sessionOpened: false, fallback: "Nothing was heard."
+                    ),
+                    "The speech service did not answer."
+                )
+            },
+
+            TestCase("a microphone that yielded nothing is named as the cause") {
+                // The audio path is the phone's own, and this is the sentence
+                // that sends the reader to the right place.
+                try expectEqual(
+                    VoiceDictation.explain(
+                        DictationDiagnosis(audioFramesSent: 0),
+                        sessionOpened: true, fallback: "Nothing was heard."
+                    ),
+                    "No sound reached the microphone."
+                )
+            },
+
+            TestCase("audio that was sent and made nothing of says how much") {
+                // The frame count is what distinguishes "we sent it silence"
+                // from "we sent it speech and it disagreed".
+                try expectEqual(
+                    VoiceDictation.explain(
+                        DictationDiagnosis(audioFramesSent: 34),
+                        sessionOpened: true, fallback: "Nothing was heard."
+                    ),
+                    "The speech service heard nothing in 34 frames of audio."
+                )
+            },
+
+            TestCase("a dropped connection is reported as itself") {
+                // Swallowing the send error was how a dropped connection came
+                // out as "nothing was heard".
+                try expectEqual(
+                    VoiceDictation.explain(
+                        DictationDiagnosis(
+                            audioFramesSent: 3, lastAudioError: "Socket is not connected"
+                        ),
+                        sessionOpened: true, fallback: "Nothing was heard."
+                    ),
+                    "The connection to the speech service dropped: Socket is not connected"
+                )
+            },
+
+            TestCase("a transcriber that keeps no account is not made to invent one") {
+                // `nil` frames is not zero frames, and claiming the microphone
+                // was silent on that basis would be a guess.
+                try expectEqual(
+                    VoiceDictation.explain(
+                        DictationDiagnosis(),
+                        sessionOpened: true, fallback: "Nothing was heard."
+                    ),
+                    "Nothing was heard."
+                )
+            },
+
+            TestCase("the real reason replaces the placeholder on screen") {
+                let transcriber = CountingSilentTranscriber(framesSent: 0)
+                let dictation = await MainActor.run {
+                    VoiceDictation(
+                        transcriber: transcriber, settleWithin: .milliseconds(120)
+                    )
+                }
+                await MainActor.run { dictation.begin() }
+                await transcriber.emit(.started)
+                try await expectEventually("listening") {
+                    await MainActor.run { dictation.isBusy }
+                }
+                await MainActor.run { dictation.end() }
+
+                try await expectEventually("the microphone is named") {
+                    await MainActor.run {
+                        dictation.state == .failed("No sound reached the microphone.")
+                    }
+                }
+            },
+        ]
+    )
+}
+
+/// Says nothing back, but keeps an account of the audio it was given.
+private actor CountingSilentTranscriber: SpeechTranscriber {
+    private let framesSent: Int
+    private var continuation: AsyncStream<SpeechProtocol.Event>.Continuation?
+
+    init(framesSent: Int) { self.framesSent = framesSent }
+
+    func start() async throws -> AsyncStream<SpeechProtocol.Event> {
+        AsyncStream { continuation in self.hold(continuation) }
+    }
+
+    private func hold(_ continuation: AsyncStream<SpeechProtocol.Event>.Continuation) {
+        self.continuation = continuation
+    }
+
+    func emit(_ event: SpeechProtocol.Event) async {
+        for _ in 0..<200 where continuation == nil {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        continuation?.yield(event)
+    }
+
+    func finish() async {}
+    func cancel() async { continuation?.finish() }
+    func diagnosis() async -> DictationDiagnosis {
+        DictationDiagnosis(audioFramesSent: framesSent)
+    }
+}

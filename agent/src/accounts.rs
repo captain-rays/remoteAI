@@ -310,21 +310,24 @@ impl AccountService {
         // that exits immediately runs its exit handler before `start`
         // returns, and that handler has to know which session it is ending.
         let session_id = uuid::Uuid::new_v4().to_string();
-        let session = Arc::new(LoginSession::start(
-            session_id.clone(),
-            provider,
-            &self.program,
-            label.clone(),
-            move |progress| {
-                let _ = events.send((
-                    provider,
-                    ConversationEvent::ProviderLoginProgress(
-                        serde_json::to_value(&progress).unwrap_or_default(),
-                    ),
-                ));
-            },
-            self.exit_handler(session_id, label),
-        ).map_err(|_| AccountError::LoginNotStarted)?);
+        let session = Arc::new(
+            LoginSession::start(
+                session_id.clone(),
+                provider,
+                &self.program,
+                label.clone(),
+                move |progress| {
+                    let _ = events.send((
+                        provider,
+                        ConversationEvent::ProviderLoginProgress(
+                            serde_json::to_value(&progress).unwrap_or_default(),
+                        ),
+                    ));
+                },
+                self.exit_handler(session_id, label),
+            )
+            .map_err(|_| AccountError::LoginNotStarted)?,
+        );
         let progress = session.progress();
         *held = Some(session.clone());
         drop(held);
@@ -336,7 +339,10 @@ impl AccountService {
         tokio::spawn(async move {
             tokio::time::sleep(LoginSession::lifetime()).await;
             let mut held = slot.lock().await;
-            if held.as_ref().is_some_and(|current| current.id == watched.id) {
+            if held
+                .as_ref()
+                .is_some_and(|current| current.id == watched.id)
+            {
                 watched.cancel();
                 *held = None;
             }

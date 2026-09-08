@@ -19,6 +19,11 @@ public actor AliyunTranscriber: SpeechTranscriber {
     private var continuation: AsyncStream<SpeechProtocol.Event>.Continuation?
     private var taskId = ""
     private var pump: Task<Void, Never>?
+    /// Kept so that a session which produced no words can say which part came
+    /// up empty: a service never reached, a microphone that yielded nothing,
+    /// or audio the service made nothing of.
+    private var report = DictationDiagnosis()
+    private var isCapturing = false
 
     #if os(iOS)
         private let engine = AVAudioEngine()
@@ -28,7 +33,14 @@ public actor AliyunTranscriber: SpeechTranscriber {
         self.client = client
     }
 
+    public func diagnosis() async -> DictationDiagnosis { report }
+
     public func start() async throws -> AsyncStream<SpeechProtocol.Event> {
+        // Never leave a previous session's socket, reader or microphone tap
+        // running: a second tap on the same bus throws, and a second reader
+        // would deliver into a finished stream.
+        await cancel()
+        report = DictationDiagnosis(audioFramesSent: 0)
         // A token lasts days, so it is fetched once and reused; the Mac is only
         // asked again when this one is nearly out.
         if credentials?.isUsable() != true {
@@ -159,21 +171,16 @@ public actor AliyunTranscriber: SpeechTranscriber {
             let hardware = input.outputFormat(forBus: 0)
             // The service wants 16 kHz mono 16-bit; microphones do not offer
             // that, so every buffer is converted.
-            guard
-                let wanted = AVAudioFormat(
-                    commonFormat: .pcmFormatInt16,
-                    sampleRate: Double(SpeechProtocol.sampleRate),
-                    channels: AVAudioChannelCount(SpeechProtocol.channels),
-                    interleaved: true
-                ),
-                let converter = AVAudioConverter(from: hardware, to: wanted),
-                hardware.sampleRate > 0
-            else { throw DictationFailure.audioUnavailable }
+            guard let resampler = AudioResampler(from: hardware) else {
+                throw DictationFailure.audioUnavailable
+            }
 
+            // Defensive: a tap left behind by a session that failed between
+            // installing and starting would make this throw.
+            input.removeTap(onBus: 0)
             input.installTap(onBus: 0, bufferSize: 4_096, format: hardware) {
                 [weak self] buffer, _ in
-                guard let self, let pcm = Self.convert(buffer, with: converter, to: wanted)
-                else { return }
+                guard let self, let pcm = resampler.resample(buffer) else { return }
                 Task { await self.sendAudio(pcm) }
             }
             engine.prepare()
@@ -183,6 +190,7 @@ public actor AliyunTranscriber: SpeechTranscriber {
                 input.removeTap(onBus: 0)
                 throw DictationFailure.audioUnavailable
             }
+            isCapturing = true
         #else
             throw DictationFailure.audioUnavailable
         #endif
@@ -190,47 +198,27 @@ public actor AliyunTranscriber: SpeechTranscriber {
 
     private func stopCapturing() {
         #if os(iOS)
-            if engine.isRunning {
-                engine.stop()
-                engine.inputNode.removeTap(onBus: 0)
-            }
+            guard isCapturing else { return }
+            isCapturing = false
+            engine.stop()
+            // Removed unconditionally: keying this off `engine.isRunning` left
+            // the tap installed whenever the engine had already stopped on its
+            // own, and the next session's install then threw.
+            engine.inputNode.removeTap(onBus: 0)
             try? AVAudioSession.sharedInstance().setActive(false)
         #endif
     }
 
     private func sendAudio(_ pcm: Data) async {
         guard let socket else { return }
-        try? await socket.send(.data(pcm))
+        do {
+            try await socket.send(.data(pcm))
+            report.audioFramesSent = (report.audioFramesSent ?? 0) + 1
+        } catch {
+            // Swallowing this was how a dropped connection came out as
+            // "nothing was heard".
+            report.lastAudioError = (error as NSError).localizedDescription
+        }
     }
 
-    #if os(iOS)
-        /// One captured buffer as the bytes the service expects.
-        private static func convert(
-            _ buffer: AVAudioPCMBuffer, with converter: AVAudioConverter,
-            to format: AVAudioFormat
-        ) -> Data? {
-            let ratio = format.sampleRate / buffer.format.sampleRate
-            let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1_024
-            guard let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity)
-            else { return nil }
-
-            var consumed = false
-            var conversionError: NSError?
-            converter.convert(to: output, error: &conversionError) { _, status in
-                if consumed {
-                    status.pointee = .noDataNow
-                    return nil
-                }
-                consumed = true
-                status.pointee = .haveData
-                return buffer
-            }
-            guard conversionError == nil, output.frameLength > 0,
-                let channel = output.int16ChannelData
-            else { return nil }
-            return Data(
-                bytes: channel[0], count: Int(output.frameLength) * MemoryLayout<Int16>.size
-            )
-        }
-    #endif
 }

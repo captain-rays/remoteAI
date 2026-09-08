@@ -184,6 +184,81 @@ async fn indexes_claude_project_sessions_from_bounded_metadata() {
 }
 
 #[tokio::test]
+async fn chats_come_from_the_desktop_chat_store_not_the_code_store() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let temp = tempfile::tempdir().unwrap();
+    let support = temp.path().join("Library/Application Support/Claude");
+
+    // The Code tab: a session bound to a real folder. It belongs under that
+    // project, never in Chats.
+    let work = temp.path().join("work/api");
+    std::fs::create_dir_all(&work).unwrap();
+    let code_root = support.join("claude-code-sessions/org/user");
+    std::fs::create_dir_all(&code_root).unwrap();
+    std::fs::write(
+        code_root.join("local_code.json"),
+        format!(
+            r#"{{"sessionId":"desktop-code-1","cliSessionId":"code-cli-1","title":"Code session",
+"cwd":"{}","createdAt":1725400000000,"lastActivityAt":1725400060000,"isArchived":false}}"#,
+            work.display()
+        ),
+    )
+    .unwrap();
+
+    // Chats and tasks: a session that runs in the desktop app's own sandbox.
+    let sandbox = support.join("local-agent");
+    std::fs::create_dir_all(&sandbox).unwrap();
+    let chat_root = support.join("local-agent-mode-sessions/org/user");
+    std::fs::create_dir_all(&chat_root).unwrap();
+    std::fs::write(
+        chat_root.join("local_chat.json"),
+        format!(
+            r#"{{"sessionId":"desktop-chat-1","cliSessionId":"chat-cli-1","title":"Chat session",
+"cwd":"{}","createdAt":1725400000000,"lastActivityAt":1725400120000,"isArchived":false}}"#,
+            sandbox.display()
+        ),
+    )
+    .unwrap();
+
+    let adapter = ClaudeAdapter::new("claude", temp.path());
+
+    let chats = adapter.list_daily_conversations().await.unwrap();
+    let chat_titles: Vec<_> = chats.iter().map(|c| c.title.as_str()).collect();
+    assert!(
+        chat_titles.contains(&"Chat session"),
+        "Chats must list the desktop chat store: {chat_titles:?}"
+    );
+    assert!(
+        !chat_titles.contains(&"Code session"),
+        "a Code-tab session is not a chat: {chat_titles:?}"
+    );
+
+    let projects = adapter.list_projects().await.unwrap();
+    let project_paths: Vec<_> = projects.iter().map(|p| p.canonical_path.as_str()).collect();
+    assert!(
+        project_paths.iter().any(|path| path.ends_with("work/api")),
+        "the Code session's folder is a project: {project_paths:?}"
+    );
+    assert!(
+        !project_paths
+            .iter()
+            .any(|path| path.contains("Application Support/Claude")),
+        "the chat sandbox is not a project: {project_paths:?}"
+    );
+
+    let api = projects
+        .iter()
+        .find(|p| p.canonical_path.ends_with("work/api"))
+        .expect("project");
+    let sessions = adapter.list_project_conversations(&api.id).await.unwrap();
+    assert!(
+        sessions.iter().any(|c| c.title == "Code session"),
+        "the Code session belongs under its project"
+    );
+}
+
+#[tokio::test]
 async fn indexes_unarchived_claude_desktop_sessions_as_daily() {
     use remote_ai_agent::adapters::ProviderAdapter;
 
