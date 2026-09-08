@@ -19,6 +19,9 @@ use crate::protocol::{
 };
 
 const MAX_METADATA_LINE_BYTES: usize = 64 * 1024;
+/// One desktop session metadata file. Larger than a transcript line because
+/// the desktop app stores the whole session configuration in it.
+const MAX_DESKTOP_METADATA_BYTES: usize = 4 * 1024 * 1024;
 /// Upper bound on how much of the CLI's own complaint is forwarded.
 const MAX_STDERR_REPORT_CHARS: usize = 500;
 /// Permission mode phone-started sessions run in.
@@ -1106,7 +1109,10 @@ fn collect_desktop_sessions(home: &Path) -> anyhow::Result<Vec<DesktopSessionMet
     }
     let mut sessions = Vec::new();
     for (surface, path) in metadata_paths {
-        if fs::metadata(&path)?.len() > MAX_METADATA_LINE_BYTES as u64 {
+        // These records embed the session's system prompt, command list and
+        // memory template, so they routinely run past 100 KB. Bounding them at
+        // the transcript line limit silently dropped most of the user's chats.
+        if fs::metadata(&path)?.len() > MAX_DESKTOP_METADATA_BYTES as u64 {
             continue;
         }
         let Ok(value) = serde_json::from_slice::<Value>(&fs::read(&path)?) else {

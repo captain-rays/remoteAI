@@ -320,7 +320,7 @@ fn write_claude_desktop_fixture(root: &std::path::Path) {
 }
 
 #[tokio::test]
-async fn claude_prefers_new_desktop_root_excludes_archived_and_groups_six_projects() {
+async fn claude_reads_both_desktop_surfaces_and_excludes_archived() {
     let temp = tempfile::tempdir().unwrap();
     write_claude_desktop_fixture(temp.path());
     std::fs::create_dir_all(temp.path().join("药盒")).unwrap();
@@ -338,10 +338,26 @@ async fn claude_prefers_new_desktop_root_excludes_archived_and_groups_six_projec
     let chats = adapter.list_daily_conversations().await.unwrap();
     let projects = adapter.list_projects().await.unwrap();
 
-    assert_eq!(chats.len(), 6);
+    // "Chats and tasks" is its own store. A Code-tab session is reached
+    // through its project, and must not crowd the chat list.
+    assert!(
+        chats.iter().any(|chat| chat.id == "legacy"),
+        "the desktop chat store belongs in Chats: {:?}",
+        chats.iter().map(|chat| &chat.id).collect::<Vec<_>>()
+    );
+    assert!(
+        !chats.iter().any(|chat| chat.id.starts_with("desktop-")),
+        "a Code-tab session is not a chat: {:?}",
+        chats.iter().map(|chat| &chat.id).collect::<Vec<_>>()
+    );
     assert_eq!(projects.len(), 6);
+    assert!(
+        !projects
+            .iter()
+            .any(|project| project.canonical_path.contains("legacy")),
+        "a chat's own directory is not a project"
+    );
     assert!(!chats.iter().any(|chat| chat.id == "archived"));
-    assert!(!chats.iter().any(|chat| chat.id == "legacy"));
     assert!(
         chats
             .iter()
@@ -392,7 +408,7 @@ async fn claude_falls_back_to_legacy_desktop_root_when_new_root_is_absent() {
 }
 
 #[tokio::test]
-async fn claude_session_is_in_global_chats_and_its_project_view_and_uses_cli_session_id() {
+async fn claude_code_session_is_in_its_project_view_and_uses_cli_session_id() {
     let temp = tempfile::tempdir().unwrap();
     write_claude_desktop_fixture(temp.path());
     std::fs::create_dir_all(temp.path().join("药盒")).unwrap();
@@ -429,10 +445,13 @@ async fn claude_session_is_in_global_chats_and_its_project_view_and_uses_cli_ses
         .list_project_conversations(&project.id)
         .await
         .unwrap();
-    let chat = chats.iter().find(|chat| chat.id == "desktop-01").unwrap();
+    assert!(
+        !chats.iter().any(|chat| chat.id == "desktop-01"),
+        "a Code-tab session is reached through its project, not through Chats"
+    );
 
     assert_eq!(project_chats.len(), 1);
-    assert_eq!(project_chats[0].id, chat.id);
+    assert_eq!(project_chats[0].id, "desktop-01");
     assert_eq!(project_chats[0].kind, ConversationKind::Project);
     assert_eq!(
         project_chats[0].project_id.as_deref(),
