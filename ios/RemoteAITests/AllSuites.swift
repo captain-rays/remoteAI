@@ -23,5 +23,8 @@ public enum AllSuites {
         ProviderHealthSuite.suite,
         AccountsViewModelSuite.suite,
         DiagnosticsWordingSuite.suite,
+        SpeechProtocolSuite.suite,
+        VoiceDictationSuite.suite,
+        VoiceDictationTimeoutSuite.suite,
     ]
 }

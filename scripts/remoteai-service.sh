@@ -56,7 +56,8 @@ xml_escape() {
 agent_environment() {
     local name value
     for name in REMOTEAI_PUBLIC_ORIGIN REMOTEAI_PAIRING_FILE REMOTEAI_CLAUDE_MODEL \
-                REMOTEAI_CODEX_MODEL REMOTEAI_CLAUDE_PERMISSION_MODE; do
+                REMOTEAI_CODEX_MODEL REMOTEAI_CLAUDE_PERMISSION_MODE \
+                REMOTEAI_ALIYUN_APPKEY; do
         value="${!name:-}"
         [ -n "$value" ] || continue
         printf '        <key>%s</key>\n        <string>%s</string>\n' \

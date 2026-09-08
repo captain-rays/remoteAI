@@ -33,7 +33,8 @@ public struct DailyConversationListView: View {
                             conversation: conversation,
                             client: model.client,
                             isOnline: model.isOnline,
-                            cache: model.transcriptCache
+                            cache: model.transcriptCache,
+                            transcriber: model.transcriber
                         )
                     } label: {
                         ConversationRow(conversation: conversation)

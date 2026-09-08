@@ -30,6 +30,11 @@ public struct ConversationView: View {
     /// scrolled up" leaves every reply below the fold. So it is only given up
     /// when the reader has moved a whole screen away from the end.
     @State private var isFollowingNewest = true
+    @State private var isDictating = false
+    /// Voice input, when this build has a transcriber. `nil` leaves the
+    /// composer exactly as it was, so a Mac with no speech configured shows no
+    /// button that cannot work.
+    @State private var dictation: VoiceDictation?
     private let isOnline: Bool
 
     /// Marks the newest end of the transcript. It is a row of its own so the
@@ -41,7 +46,8 @@ public struct ConversationView: View {
         conversation: ConversationSummary,
         client: AgentClient,
         isOnline: Bool,
-        cache: CatalogCache? = nil
+        cache: CatalogCache? = nil,
+        transcriber: SpeechTranscriber? = nil
     ) {
         _model = State(
             initialValue: ConversationViewModel(
@@ -50,6 +56,7 @@ public struct ConversationView: View {
                 cache: cache
             )
         )
+        _dictation = State(initialValue: transcriber.map { VoiceDictation(transcriber: $0) })
         self.isOnline = isOnline
     }
 
@@ -265,22 +272,70 @@ public struct ConversationView: View {
                         .accessibilityIdentifier("retry-send")
                 }
             }
-            HStack(spacing: 8) {
-                TextField("Message", text: $draft, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .lineLimit(1...4)
-                    .focused($composerIsFocused)
-                    .accessibilityIdentifier("composer")
-                Button {
-                    submitDraft()
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill")
+            if let dictation, case let .failed(reason) = dictation.state {
+                HStack {
+                    Text(reason).font(.caption).foregroundStyle(.orange)
+                    Spacer()
+                    Button("OK") { dictation.acknowledgeFailure() }
+                        .font(.caption)
+                        .accessibilityIdentifier("dismiss-dictation-failure")
                 }
-                .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty || !model.isOnline)
-                .accessibilityIdentifier("send")
+                .accessibilityIdentifier("dictation-failure")
+            }
+            HStack(spacing: 8) {
+                // Voice and keyboard are the same button: it is the mode the
+                // reader is leaving that names it.
+                if dictation != nil {
+                    Button {
+                        isDictating.toggle()
+                        if isDictating {
+                            composerIsFocused = false
+                        }
+                    } label: {
+                        Image(systemName: isDictating ? "keyboard" : "mic")
+                            .font(.title3)
+                    }
+                    .accessibilityIdentifier(isDictating ? "use-keyboard" : "use-voice")
+                    .accessibilityLabel(isDictating ? "Use the keyboard" : "Use voice")
+                }
+
+                if isDictating, let dictation {
+                    HoldToTalkButton(dictation: dictation, isOnline: model.isOnline)
+                } else {
+                    TextField("Message", text: $draft, axis: .vertical)
+                        .textFieldStyle(.roundedBorder)
+                        // Three lines at rest rather than one: a dictated
+                        // instruction is usually a sentence or two, and it is
+                        // meant to be read back before it is sent.
+                        .lineLimit(3...8)
+                        .focused($composerIsFocused)
+                        .accessibilityIdentifier("composer")
+                    Button {
+                        submitDraft()
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.title3)
+                    }
+                    .disabled(
+                        draft.trimmingCharacters(in: .whitespaces).isEmpty || !model.isOnline
+                    )
+                    .accessibilityIdentifier("send")
+                }
             }
         }
         .padding()
+        // What was dictated lands in the composer, which switches back to the
+        // keyboard so it can be read and corrected before it is sent. This
+        // client drives Claude with permission prompts bypassed, so a misheard
+        // instruction is one the Mac would carry out.
+        .onChange(of: dictation?.finishedTranscript) { _, transcript in
+            guard let transcript, let dictation else { return }
+            guard let text = dictation.takeTranscript(), !text.isEmpty else { return }
+            _ = transcript
+            draft = draft.isEmpty ? text : draft + text
+            isDictating = false
+            composerIsFocused = true
+        }
     }
 
     /// Realtime fan-out for this screen. Events only ever mutate the transcript.

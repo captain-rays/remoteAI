@@ -50,7 +50,8 @@ public final class AppDependencies {
         uploadFixture: UploadFixture? = nil,
         uiTestFileProbePath: String? = nil,
         publicOrigin: String = AppDependencies.defaultPublicOrigin,
-        usesEphemeralPairingStore: Bool = false
+        usesEphemeralPairingStore: Bool = false,
+        transcriber: SpeechTranscriber? = nil
     ) {
         self.appModel = AppModel(client: client, preferences: preferences, cache: cache)
         self.transfers = TransferCoordinator(client: client)
@@ -67,6 +68,7 @@ public final class AppDependencies {
         appModel.onConnectionStateChange = { [weak self] state in
             self?.applyConnectivity(state)
         }
+        appModel.transcriber = transcriber
 
         // A stored identity *is* a completed pairing. Starting disconnected
         // whenever this launch did not itself pair sent the reader back to the
@@ -123,7 +125,10 @@ public final class AppDependencies {
             uploadFixture: uploadFixture,
             uiTestFileProbePath: uiTestFileProbePath,
             publicOrigin: publicOrigin,
-            usesEphemeralPairingStore: explicitPairing
+            usesEphemeralPairingStore: explicitPairing,
+            // The mock launch recites a sentence instead of listening, so the
+            // voice path is exercisable without a microphone or an account.
+            transcriber: useMock ? MockTranscriber() : AliyunTranscriber(client: client)
         )
         dependencies.pairing.onPaired = { [weak dependencies] in
             dependencies?.setConnectionState(.online)

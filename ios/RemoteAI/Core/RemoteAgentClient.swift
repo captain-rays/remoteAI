@@ -808,6 +808,15 @@ public actor RemoteAgentClient: AgentClient {
         )
     }
 
+    public func speechCredentials() async throws -> SpeechCredentials {
+        struct Empty: Encodable, Sendable {}
+        // The only request with no provider: speech belongs to neither CLI.
+        return try await request(
+            type: .speechCredentials, conversationId: nil, payload: Empty(),
+            response: SpeechCredentials.self
+        )
+    }
+
     private func accountRequest(
         _ type: RequestType, _ payload: AccountRequest
     ) async throws -> AccountsView {

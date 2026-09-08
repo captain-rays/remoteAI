@@ -54,6 +54,9 @@ public final class AppModel {
     }
 
     public let client: AgentClient
+    /// Turns held-button speech into text, when this launch has one. The
+    /// composer hides voice input entirely without it.
+    public var transcriber: SpeechTranscriber?
     private let preferences: PreferencesStore
     private let cache: CatalogCache
     private var sequencer = EventSequencer()

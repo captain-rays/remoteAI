@@ -47,6 +47,9 @@ targets:
         INFOPLIST_KEY_UIFileSharingEnabled: YES
         INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
         INFOPLIST_KEY_CFBundleDisplayName: RemoteAI
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: >-
+          RemoteAI uses the microphone only while you hold the talk button, to
+          turn what you say into a message you can read before sending it.
         INFOPLIST_KEY_NSCameraUsageDescription: >-
           RemoteAI uses the camera once, to scan the pairing code shown on your Mac.
         INFOPLIST_KEY_UISupportedInterfaceOrientations: >-

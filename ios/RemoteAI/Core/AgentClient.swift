@@ -262,6 +262,10 @@ public protocol AgentClient: Sendable {
     func sendLoginInput(provider: ProviderId, sessionId: String, text: String) async throws
     func cancelLogin(provider: ProviderId, sessionId: String) async throws
 
+    /// A short-lived token for streaming audio to the speech service. Throws
+    /// `rejected("speech_not_configured")` on a Mac with no speech set up.
+    func speechCredentials() async throws -> SpeechCredentials
+
     func listAudit(limit: Int) async throws -> [AuditEntry]
     func diagnostics() async throws -> Diagnostics
     func revokeDevice() async throws

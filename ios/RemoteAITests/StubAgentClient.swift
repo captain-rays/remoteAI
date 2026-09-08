@@ -97,6 +97,10 @@ extension StubAgentClient {
         throw AgentClientError.offline
     }
 
+    func speechCredentials() async throws -> SpeechCredentials {
+        throw AgentClientError.offline
+    }
+
     func listAudit(limit: Int) async throws -> [AuditEntry] { throw AgentClientError.offline }
     func diagnostics() async throws -> Diagnostics { throw AgentClientError.offline }
     func revokeDevice() async throws { throw AgentClientError.offline }

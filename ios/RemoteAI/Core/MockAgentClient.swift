@@ -914,6 +914,15 @@ public actor MockAgentClient: AgentClient {
         )
     }
 
+    public func speechCredentials() async throws -> SpeechCredentials {
+        SpeechCredentials(
+            appkey: "mock-appkey",
+            token: "mock-token",
+            expiresAt: Date().addingTimeInterval(24 * 3600),
+            endpoint: "wss://speech.example.com/ws/v1"
+        )
+    }
+
     public func listAudit(limit: Int) async throws -> [AuditEntry] {
         Array(audit.sorted { $0.timestamp > $1.timestamp }.prefix(limit))
     }

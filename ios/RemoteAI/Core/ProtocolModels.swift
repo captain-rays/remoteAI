@@ -329,6 +329,34 @@ public struct LoginOutcome: Codable, Sendable, Hashable {
     }
 }
 
+/// What the phone needs to stream audio to the speech service itself.
+///
+/// The account key that mints these stays on the Mac. This token expires, so
+/// what the phone holds is worth little for long, and the audio goes straight
+/// from the phone to the service — never through the Mac.
+public struct SpeechCredentials: Codable, Sendable, Hashable {
+    /// Identifies the speech project.
+    public let appkey: String
+    public let token: String
+    public let expiresAt: Date
+    /// Where to stream. Region-scoped with the token, so not the phone's to
+    /// choose.
+    public let endpoint: String
+
+    public init(appkey: String, token: String, expiresAt: Date, endpoint: String) {
+        self.appkey = appkey
+        self.token = token
+        self.expiresAt = expiresAt
+        self.endpoint = endpoint
+    }
+
+    /// Whether this is still worth using. A token with a moment left would
+    /// expire mid-sentence.
+    public func isUsable(at moment: Date = Date(), margin: TimeInterval = 60) -> Bool {
+        expiresAt.timeIntervalSince(moment) > margin
+    }
+}
+
 public struct ProviderStatusPayload: Codable, Sendable, Hashable {
     public let providers: [ProviderStatus]
 
@@ -811,6 +839,7 @@ public enum RequestType: String, Codable, Sendable, CaseIterable {
     case providerLoginStatus = "provider.login.status"
     case providerLoginInput = "provider.login.input"
     case providerLoginCancel = "provider.login.cancel"
+    case speechCredentials = "speech.credentials"
 }
 
 public struct RequestEnvelope<Payload: Encodable & Sendable>: Encodable, Sendable {
