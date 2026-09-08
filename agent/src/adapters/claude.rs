@@ -872,6 +872,9 @@ impl ProviderAdapter for ClaudeAdapter {
                 target.cwd.is_dir(),
                 "desktop session directory is unavailable"
             );
+            if let Some(transcript) = target.transcript_path.as_deref() {
+                bridge_desktop_transcript(&self.mapper.home, transcript)?;
+            }
             let session = self
                 .spawn_session(Some(cli_id), Some(&target.cwd), id)
                 .await?;
@@ -1143,11 +1146,16 @@ fn collect_desktop_sessions(home: &Path) -> anyhow::Result<Vec<DesktopSessionMet
             .filter(|id| !id.is_empty())
             .map(str::to_owned);
         let transcript_path = cli_id.as_ref().and_then(|cli_id| {
-            find_cli_transcript(home, cli_id).or_else(|| {
-                path.parent()
-                    .map(|parent| parent.join(format!("{cli_id}.jsonl")))
-                    .filter(|candidate| candidate.is_file())
-            })
+            find_cli_transcript(home, cli_id)
+                .or_else(|| {
+                    path.parent()
+                        .map(|parent| parent.join(format!("{cli_id}.jsonl")))
+                        .filter(|candidate| candidate.is_file())
+                })
+                // A chat runs sandboxed: its transcript is filed under the
+                // session's own config directory, which neither the CLI's
+                // index nor the metadata's own directory covers.
+                .or_else(|| find_session_transcript(&path.with_extension(""), cli_id))
         });
         let user_selected_folders = value
             .get("userSelectedFolders")
@@ -1359,6 +1367,48 @@ fn read_conversation_events(session_id: &str, path: &Path) -> anyhow::Result<Vec
         events.extend(normalize_history_record(session_id, line_number, &value));
     }
     Ok(events)
+}
+
+/// The transcript inside one desktop session's private config directory.
+fn find_session_transcript(session_dir: &Path, cli_id: &str) -> Option<PathBuf> {
+    let projects = session_dir.join(".claude").join("projects");
+    let entries = fs::read_dir(projects).ok()?;
+    for entry in entries.flatten() {
+        let candidate = entry.path().join(format!("{cli_id}.jsonl"));
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Make a desktop chat resumable without copying it or touching credentials.
+///
+/// `claude --resume` resolves a session against its own config directory, but
+/// the desktop app files a chat's transcript inside that chat's private
+/// directory, so the CLI answers "no conversation found". Linking the
+/// transcript's directory into `~/.claude/projects` under the name the CLI
+/// already derived from the chat's working directory makes the session
+/// resolvable, and every new turn is written straight back into the file the
+/// desktop app reads — one transcript, not a copy that would drift.
+fn bridge_desktop_transcript(home: &Path, transcript: &Path) -> anyhow::Result<()> {
+    let Some(directory) = transcript.parent() else {
+        return Ok(());
+    };
+    let Some(name) = directory.file_name() else {
+        return Ok(());
+    };
+    let projects = home.join(".claude").join("projects");
+    let link = projects.join(name);
+    // Anything already there — the CLI's own directory for this path, or a
+    // link from an earlier resume — is left alone.
+    if link.symlink_metadata().is_ok() {
+        return Ok(());
+    }
+    fs::create_dir_all(&projects)?;
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(directory, &link)?;
+    Ok(())
 }
 
 /// The session id Claude reports in its `system`/`init` record.

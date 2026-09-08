@@ -184,6 +184,65 @@ async fn indexes_claude_project_sessions_from_bounded_metadata() {
 }
 
 #[tokio::test]
+async fn resuming_a_desktop_chat_makes_its_transcript_resolvable() {
+    use remote_ai_agent::adapters::ProviderAdapter;
+
+    let temp = tempfile::tempdir().unwrap();
+    let support = temp.path().join("Library/Application Support/Claude");
+    let session = support.join("local-agent-mode-sessions/org/user/local_chat");
+    let outputs = session.join("outputs");
+    std::fs::create_dir_all(&outputs).unwrap();
+
+    // The desktop app keeps the transcript inside the session's own config
+    // directory, where `claude --resume` cannot see it.
+    let slug = "-sandbox-outputs";
+    let transcript_dir = session.join(".claude/projects").join(slug);
+    std::fs::create_dir_all(&transcript_dir).unwrap();
+    std::fs::write(
+        transcript_dir.join("chat-cli-1.jsonl"),
+        format!(
+            r#"{{"type":"user","sessionId":"chat-cli-1","uuid":"u-1","cwd":"{}","message":{{"content":[{{"type":"text","text":"hi"}}]}}}}"#,
+            outputs.display()
+        ),
+    )
+    .unwrap();
+
+    std::fs::create_dir_all(support.join("local-agent-mode-sessions/org/user")).unwrap();
+    std::fs::write(
+        support.join("local-agent-mode-sessions/org/user/local_chat.json"),
+        format!(
+            r#"{{"sessionId":"desktop-chat-1","cliSessionId":"chat-cli-1","title":"Chat session",
+"cwd":"{}","createdAt":1725400000000,"lastActivityAt":1725400120000,"isArchived":false}}"#,
+            outputs.display()
+        ),
+    )
+    .unwrap();
+
+    let stub = temp.path().join("fake-claude.sh");
+    std::fs::write(&stub, "#!/bin/sh\ncat > /dev/null\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    let adapter = ClaudeAdapter::new(&stub, temp.path());
+    adapter.list_daily_conversations().await.unwrap();
+    adapter.resume("desktop-chat-1").await.unwrap();
+
+    let bridged = temp.path().join(".claude/projects").join(slug);
+    assert!(
+        bridged.exists(),
+        "the transcript must be resolvable from the CLI's own config directory"
+    );
+    assert_eq!(
+        std::fs::canonicalize(&bridged).unwrap(),
+        std::fs::canonicalize(&transcript_dir).unwrap(),
+        "the bridge must point at the desktop app's own transcript, not a copy"
+    );
+}
+
+#[tokio::test]
 async fn chats_come_from_the_desktop_chat_store_not_the_code_store() {
     use remote_ai_agent::adapters::ProviderAdapter;
 
