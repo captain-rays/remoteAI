@@ -26,10 +26,19 @@ public struct DictationDiagnosis: Sendable, Equatable {
     public var audioFramesSent: Int?
     /// The last error from sending audio, if any.
     public var lastAudioError: String?
+    /// Why the connection to the service never opened, in the system's own
+    /// words. A blocked host does not produce an error at all — the packets
+    /// are dropped and the socket simply waits — so "it did not answer" was
+    /// all the app could say until this was recorded.
+    public var connectionError: String?
 
-    public init(audioFramesSent: Int? = nil, lastAudioError: String? = nil) {
+    public init(
+        audioFramesSent: Int? = nil, lastAudioError: String? = nil,
+        connectionError: String? = nil
+    ) {
         self.audioFramesSent = audioFramesSent
         self.lastAudioError = lastAudioError
+        self.connectionError = connectionError
     }
 }
 
@@ -263,7 +272,10 @@ public final class VoiceDictation {
             return "The connection to the speech service dropped: \(error)"
         }
         if !sessionOpened {
-            return "The speech service did not answer."
+            guard let error = diagnosis.connectionError else {
+                return "The speech service did not answer."
+            }
+            return "Could not reach the speech service: \(error)"
         }
         switch diagnosis.audioFramesSent {
         case 0:

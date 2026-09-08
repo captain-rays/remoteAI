@@ -339,6 +339,49 @@ public enum DictationDiagnosisSuite {
                 )
             },
 
+            TestCase("a connection that never opened reports the system's reason") {
+                // What a real device produced: no audio error, no
+                // acknowledgement, and — until the reason was recorded —
+                // nothing to act on. A blocked host never errors on its own,
+                // so the reason has to come from the socket's delegate.
+                try expectEqual(
+                    VoiceDictation.explain(
+                        DictationDiagnosis(
+                            audioFramesSent: 0,
+                            connectionError: "The request timed out."
+                        ),
+                        sessionOpened: false, fallback: "Nothing was heard."
+                    ),
+                    "Could not reach the speech service: The request timed out."
+                )
+                try expectEqual(
+                    VoiceDictation.explain(
+                        DictationDiagnosis(
+                            connectionError:
+                                "A server with the specified hostname could not be found."
+                        ),
+                        sessionOpened: false, fallback: "Nothing was heard."
+                    ),
+                    "Could not reach the speech service: "
+                        + "A server with the specified hostname could not be found."
+                )
+            },
+
+            TestCase("an audio error still wins over a connection error") {
+                // If audio was flowing and then stopped, that is the more
+                // specific fault and the one worth naming.
+                try expectEqual(
+                    VoiceDictation.explain(
+                        DictationDiagnosis(
+                            audioFramesSent: 8, lastAudioError: "Socket is not connected",
+                            connectionError: "The request timed out."
+                        ),
+                        sessionOpened: true, fallback: "Nothing was heard."
+                    ),
+                    "The connection to the speech service dropped: Socket is not connected"
+                )
+            },
+
             TestCase("a microphone that yielded nothing is named as the cause") {
                 // The audio path is the phone's own, and this is the sentence
                 // that sends the reader to the right place.

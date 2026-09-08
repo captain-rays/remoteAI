@@ -12,8 +12,20 @@ import Foundation
 /// the Mac provides is the token, because the account key that mints one must
 /// not live on a phone.
 public actor AliyunTranscriber: SpeechTranscriber {
+    /// How long the service gets to acknowledge the session before the app
+    /// says why it could not be reached.
+    ///
+    /// A host that is blocked rather than absent produces no error: the
+    /// packets are dropped and the socket waits indefinitely. Without a
+    /// deadline the reader waits with it, and all the screen can say is that
+    /// nothing answered.
+    private static let openWithin = Duration.seconds(4)
+
     private let client: AgentClient
     private var credentials: SpeechCredentials?
+    private let monitor = SocketMonitor()
+    private var openDeadline: Task<Void, Never>?
+    private var sessionOpened = false
 
     private var socket: URLSessionWebSocketTask?
     private var continuation: AsyncStream<SpeechProtocol.Event>.Continuation?
@@ -33,7 +45,11 @@ public actor AliyunTranscriber: SpeechTranscriber {
         self.client = client
     }
 
-    public func diagnosis() async -> DictationDiagnosis { report }
+    public func diagnosis() async -> DictationDiagnosis {
+        var current = report
+        current.connectionError = current.connectionError ?? monitor.failure
+        return current
+    }
 
     public func start() async throws -> AsyncStream<SpeechProtocol.Event> {
         // Never leave a previous session's socket, reader or microphone tap
@@ -60,8 +76,16 @@ public actor AliyunTranscriber: SpeechTranscriber {
         guard let url = components.url else { throw DictationFailure.connectionFailed }
         var request = URLRequest(url: url)
         request.setValue(credentials.token, forHTTPHeaderField: "X-NLS-Token")
-        let socket = URLSession.shared.webSocketTask(with: request)
+        // A session of its own, with a delegate: the reason a socket never
+        // opened is only reported there, and `URLSession.shared` cannot carry
+        // one.
+        monitor.reset()
+        let session = URLSession(
+            configuration: .ephemeral, delegate: monitor, delegateQueue: nil
+        )
+        let socket = session.webSocketTask(with: request)
         self.socket = socket
+        sessionOpened = false
         socket.resume()
 
         try await send(
@@ -70,6 +94,14 @@ public actor AliyunTranscriber: SpeechTranscriber {
             )
         )
         pump = Task { await self.readEvents() }
+        // Say why rather than waiting for the hold to end: the reader is
+        // still holding the button, and a blocked host never errors on its
+        // own.
+        openDeadline = Task { [weak self] in
+            try? await Task.sleep(for: Self.openWithin)
+            guard let self, !Task.isCancelled else { return }
+            await self.reportUnopened()
+        }
         try startCapturing()
         return stream
     }
@@ -88,6 +120,8 @@ public actor AliyunTranscriber: SpeechTranscriber {
 
     public func cancel() async {
         stopCapturing()
+        openDeadline?.cancel()
+        openDeadline = nil
         pump?.cancel()
         pump = nil
         socket?.cancel(with: .goingAway, reason: nil)
@@ -125,10 +159,26 @@ public actor AliyunTranscriber: SpeechTranscriber {
             @unknown default: continue
             }
             let event = SpeechProtocol.event(from: data)
+            if case .started = event {
+                sessionOpened = true
+                openDeadline?.cancel()
+                openDeadline = nil
+            }
             continuation?.yield(event)
             if case .completed = event { break }
             if case .failed = event { break }
         }
+        continuation?.finish()
+        continuation = nil
+    }
+
+    /// The deadline passed with no acknowledgement: end the session with the
+    /// system's own reason, which is more use than silence.
+    private func reportUnopened() {
+        guard !sessionOpened else { return }
+        let reason = monitor.failure ?? "no answer within \(Self.openWithin)"
+        report.connectionError = reason
+        continuation?.yield(.failed("Could not reach the speech service: \(reason)"))
         continuation?.finish()
         continuation = nil
     }
@@ -221,4 +271,52 @@ public actor AliyunTranscriber: SpeechTranscriber {
         }
     }
 
+}
+
+
+/// Records why a WebSocket never opened, or why it closed.
+///
+/// `URLSessionWebSocketTask` reports none of this through `receive()`: a
+/// dropped connection to a blocked host simply never returns. The delegate is
+/// the only place the reason appears.
+private final class SocketMonitor: NSObject, URLSessionWebSocketDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: String?
+
+    var failure: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
+    }
+
+    func reset() {
+        lock.lock()
+        recorded = nil
+        lock.unlock()
+    }
+
+    private func record(_ reason: String) {
+        lock.lock()
+        if recorded == nil { recorded = reason }
+        lock.unlock()
+    }
+
+    func urlSession(
+        _ session: URLSession, webSocketTask: URLSessionWebSocketTask,
+        didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?
+    ) {
+        let text = reason.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        record(
+            text.isEmpty
+                ? "the service closed the connection (code \(closeCode.rawValue))"
+                : "the service closed the connection: \(text)"
+        )
+    }
+
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?
+    ) {
+        guard let error else { return }
+        record((error as NSError).localizedDescription)
+    }
 }
