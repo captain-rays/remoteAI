@@ -47,17 +47,20 @@ if [ "$have_xcodegen" -eq 1 ] && [ "$have_xcodebuild" -eq 1 ]; then
     echo "==> xcodegen generate"
     xcodegen generate --spec ios/project.yml
 
-    # The handoff document names iPhone 16, which only exists from Xcode 16.
-    # Prefer it, but fall back to any available iPhone so the gate is runnable
-    # on an older Xcode instead of failing with "destination not found".
+    # A booted simulator wins: it is the one whose runtime this Xcode actually
+    # installs onto, and a hard-coded model list goes stale every Xcode release
+    # — the gate failed with "destination not found" once the iPhone 15s were
+    # left behind on an older runtime.
     simulator="${REMOTEAI_SIMULATOR:-}"
     if [ -z "$simulator" ]; then
-        for candidate in "iPhone 16" "iPhone 15" "iPhone SE (3rd generation)"; do
-            if xcrun simctl list devices available | grep -q "^    $candidate ("; then
-                simulator="$candidate"
-                break
-            fi
-        done
+        simulator="$(xcrun simctl list devices booted \
+            | sed -n 's/^    \(iPhone[^(]*\) (.*/\1/p' | sed 's/ *$//' | head -1)"
+    fi
+    if [ -z "$simulator" ]; then
+        # Nothing booted: take the newest available iPhone rather than a name
+        # frozen into this script.
+        simulator="$(xcrun simctl list devices available \
+            | sed -n 's/^    \(iPhone[^(]*\) (.*/\1/p' | sed 's/ *$//' | tail -1)"
     fi
     if [ -z "$simulator" ]; then
         echo "==> XCODE GATE: NOT RUN"
@@ -83,6 +86,7 @@ if [ "$have_xcodegen" -eq 1 ] && [ "$have_xcodebuild" -eq 1 ]; then
         -skip-testing:RemoteAIUITests/RealClaudeToolUseUITests \
         -skip-testing:RemoteAIUITests/RealAgentTranscriptUITests \
         -skip-testing:RemoteAIUITests/RealAgentSessionSyncUITests \
+        -skip-testing:RemoteAIUITests/RealDesktopChatWriteUITests \
         -skip-testing:RemoteAIUITests/RealFileTransferUITests \
         test
 else

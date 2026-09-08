@@ -1,6 +1,7 @@
 import XCTest
 
-/// NOT RUN on this Mac: XCUITest needs a simulator, which requires full Xcode.
+/// Pairing, its failure modes, and revoking this device. Runs against the mock
+/// agent, so it needs no Mac agent — only a simulator.
 final class PairingAndRevocationUITests: XCTestCase {
 
     private func launchApp() -> XCUIApplication {
@@ -8,6 +9,20 @@ final class PairingAndRevocationUITests: XCTestCase {
         app.launchArguments = ["-UseMockAgent"]
         app.launch()
         return app
+    }
+
+    /// Tap a field and type once the keyboard is actually up.
+    ///
+    /// On the newer simulator runtimes the tap returns before focus lands, and
+    /// `typeText` then fails with "neither element nor any descendant has
+    /// keyboard focus" — a flake, not a product fault.
+    private func type(_ app: XCUIApplication, _ text: String, into field: XCUIElement) {
+        field.tap()
+        if !app.keyboards.firstMatch.waitForExistence(timeout: 5) {
+            field.tap()
+            _ = app.keyboards.firstMatch.waitForExistence(timeout: 5)
+        }
+        field.typeText(text)
     }
 
     func testExpiredPairingCodeIsRejected() {
@@ -21,8 +36,7 @@ final class PairingAndRevocationUITests: XCTestCase {
         let field = app.descendants(matching: .any)
             .matching(identifier: "pairing-paste-field").firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 5))
-        field.tap()
-        field.typeText(Self.expiredPairingCode)
+        type(app, Self.expiredPairingCode, into: field)
         app.buttons["pairing-submit"].tap()
 
         XCTAssertTrue(app.staticTexts["pairing-error"].waitForExistence(timeout: 5))
@@ -39,8 +53,7 @@ final class PairingAndRevocationUITests: XCTestCase {
         let field = app.descendants(matching: .any)
             .matching(identifier: "pairing-paste-field").firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 5))
-        field.tap()
-        field.typeText("not a pairing code")
+        type(app, "not a pairing code", into: field)
         app.buttons["pairing-submit"].tap()
 
         XCTAssertTrue(app.staticTexts["pairing-error"].waitForExistence(timeout: 5))
