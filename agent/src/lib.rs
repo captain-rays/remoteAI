@@ -16,6 +16,7 @@ pub mod login;
 pub mod pairing;
 pub mod protocol;
 pub mod provider_wiring;
+pub mod speech;
 pub mod store;
 pub mod transfers;
 pub mod tunnel;

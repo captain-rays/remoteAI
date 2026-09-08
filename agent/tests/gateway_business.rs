@@ -856,3 +856,75 @@ async fn a_provider_with_no_account_service_reports_unavailable_not_silence() {
         "provider_unavailable"
     );
 }
+
+#[tokio::test]
+async fn a_speech_token_is_served_without_naming_a_provider() {
+    // Speech belongs to neither Claude nor Codex: the phone streams audio to
+    // the speech service itself. Requiring a provider would have made the
+    // request unexpressible.
+    let state = state();
+    state
+        .set_speech_tokens(Arc::new(remote_ai_agent::speech::SpeechTokens::new(
+            "an-appkey",
+            Box::new({
+                let secrets = remote_ai_agent::credentials::InMemorySecrets::default();
+                use remote_ai_agent::credentials::SecretStore;
+                secrets.put("aliyun.nls", "access-key-id", b"LTAI-id").unwrap();
+                secrets
+                    .put("aliyun.nls", "access-key-secret", b"a-secret")
+                    .unwrap();
+                secrets
+            }),
+            |_| {
+                Ok(remote_ai_agent::speech::CreateTokenResponse {
+                    id: "a-token".into(),
+                    expires_at: Utc::now() + chrono::Duration::hours(24),
+                })
+            },
+        )))
+        .await;
+
+    let inbound = CryptoBox::new([17; 32], *b"IOS>");
+    let outbound = CryptoBox::new([17; 32], *b"MAC>");
+    let mut session =
+        GatewaySession::new(state, "phone-1", inbound.receiver(), outbound.clone()).await;
+
+    let frames = session
+        .handle_frame(&request_frame(&inbound, 1, "speech.credentials", json!({})))
+        .await
+        .unwrap();
+    let payload = decode_frames(frames, &outbound)
+        .into_iter()
+        .find(|value| value["type"] == "speech.credentials.result")
+        .expect("a credentials response")["payload"]
+        .clone();
+
+    assert_eq!(payload["appkey"], "an-appkey");
+    assert_eq!(payload["token"], "a-token");
+    assert!(
+        payload["endpoint"].as_str().unwrap_or_default().starts_with("wss://"),
+        "the phone is told where to stream: {payload}"
+    );
+    assert!(payload["expiresAt"].is_string(), "and until when");
+}
+
+#[tokio::test]
+async fn a_mac_with_no_speech_configured_says_so_rather_than_failing_blankly() {
+    let state = state();
+    let inbound = CryptoBox::new([19; 32], *b"IOS>");
+    let outbound = CryptoBox::new([19; 32], *b"MAC>");
+    let mut session =
+        GatewaySession::new(state, "phone-1", inbound.receiver(), outbound.clone()).await;
+
+    let frames = session
+        .handle_frame(&request_frame(&inbound, 1, "speech.credentials", json!({})))
+        .await
+        .unwrap();
+    assert_eq!(
+        decode_frames(frames, &outbound)
+            .into_iter()
+            .find(|value| value["type"] == "error")
+            .expect("a rejection")["payload"]["code"],
+        "speech_not_configured"
+    );
+}

@@ -19,6 +19,7 @@ use remote_ai_agent::crypto::load_or_create_private_key;
 use remote_ai_agent::discovery::discover_provider;
 use remote_ai_agent::gateway::{GatewayState, router};
 use remote_ai_agent::pairing::{PairingPayload, PairingRegistry};
+use remote_ai_agent::speech::SpeechTokens;
 use remote_ai_agent::protocol::{
     ApprovalDecision, ConversationEvent, ConversationKind, ProjectSummary, ProviderId,
     ProviderStatus, WriteState,
@@ -317,6 +318,16 @@ async fn main() -> anyhow::Result<()> {
         .configure_runtime_state(&home, discover_runtime_adapters(home.clone()).await)
         .await;
     register_login_probes(&state).await;
+    // Speech is opt-in: without an appkey the phone is told it is not
+    // configured, rather than being handed a token that cannot work.
+    if let Ok(appkey) = std::env::var("REMOTEAI_ALIYUN_APPKEY")
+        && !appkey.is_empty()
+    {
+        state
+            .set_speech_tokens(Arc::new(SpeechTokens::from_keychain(appkey)))
+            .await;
+        println!("speech: configured");
+    }
     register_account_services(&state, store.clone(), &home).await;
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     println!(

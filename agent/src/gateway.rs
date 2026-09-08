@@ -59,6 +59,9 @@ pub struct GatewayState {
     /// Account switching and signing in, per provider. Absent for a provider
     /// whose CLI was not found.
     accounts: Arc<RwLock<crate::accounts::AccountServices>>,
+    /// Mints the short-lived speech token the phone streams audio with.
+    /// Absent until a speech appkey is configured.
+    speech: Arc<RwLock<Option<Arc<crate::speech::SpeechTokens>>>>,
     /// Events that belong to no conversation — a login flow's output. They
     /// travel the same encrypted path as conversation events, so a phone
     /// needs no second channel to watch a sign-in.
@@ -102,6 +105,7 @@ impl GatewayState {
             problems: Arc::new(crate::health::ProblemLog::default()),
             logins: Arc::new(RwLock::new(HashMap::new())),
             accounts: Arc::new(RwLock::new(crate::accounts::AccountServices::default())),
+            speech: Arc::new(RwLock::new(None)),
             out_of_band: broadcast::channel(64).0,
             mac_private_key: Arc::new(RwLock::new(None)),
             devices: Arc::new(RwLock::new(None)),
@@ -133,6 +137,14 @@ impl GatewayState {
         provider: ProviderId,
     ) -> Option<Arc<crate::accounts::AccountService>> {
         self.accounts.read().await.get(provider)
+    }
+
+    pub async fn set_speech_tokens(&self, tokens: Arc<crate::speech::SpeechTokens>) {
+        *self.speech.write().await = Some(tokens);
+    }
+
+    pub async fn speech_tokens(&self) -> Option<Arc<crate::speech::SpeechTokens>> {
+        self.speech.read().await.clone()
     }
 
     /// Where an account service publishes login progress.
@@ -884,6 +896,7 @@ fn gateway_error_code(error: &GatewayBusinessError) -> &'static str {
         GatewayBusinessError::Provider(_) => "provider_operation",
         GatewayBusinessError::SessionBusy => "session_busy",
         GatewayBusinessError::Account(reason) => reason.code(),
+        GatewayBusinessError::Speech(reason) => reason.code(),
     }
 }
 
@@ -942,6 +955,8 @@ pub enum GatewayBusinessError {
     /// agent's own — no provider text crosses the boundary.
     #[error("account operation failed: {0}")]
     Account(#[from] crate::accounts::AccountError),
+    #[error("speech token unavailable: {0}")]
+    Speech(#[from] crate::speech::SpeechError),
 }
 
 /// Authenticated business dispatcher for one device WebSocket session.
@@ -1058,6 +1073,25 @@ impl GatewaySession {
             .and_then(Value::as_str)
             .and_then(parse_provider);
         let operation: Result<(&str, Value), GatewayBusinessError> = async {
+            // Speech belongs to no provider: the phone streams audio to the
+            // speech service itself, and all it needs from here is a token
+            // the account key on this Mac can mint.
+            if request.message_type == "speech.credentials" {
+                let tokens = self
+                    .state
+                    .speech_tokens()
+                    .await
+                    .ok_or(GatewayBusinessError::Speech(
+                        crate::speech::SpeechError::NotConfigured,
+                    ))?;
+                let credentials =
+                    tokens.credentials().map_err(GatewayBusinessError::Speech)?;
+                return Ok((
+                    "speech.credentials.result",
+                    serde_json::to_value(credentials)
+                        .map_err(|_| GatewayBusinessError::InvalidPayload)?,
+                ));
+            }
             let provider = provider.ok_or(GatewayBusinessError::InvalidPayload)?;
             let adapters = self.state.provider_adapters.read().await.clone();
             let mut adapter = None;
@@ -1328,6 +1362,7 @@ impl GatewaySession {
                 // the CLI.
                 let error_kind = match error {
                     GatewayBusinessError::Account(reason) => reason.code(),
+                    GatewayBusinessError::Speech(ref reason) => reason.code(),
                     GatewayBusinessError::Provider(_) => "provider_operation_failed",
                     GatewayBusinessError::ProviderUnavailable => "provider_unavailable",
                     GatewayBusinessError::SessionBusy => "session_busy",
