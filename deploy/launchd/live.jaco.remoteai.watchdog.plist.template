@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Checks once a minute that the phone can still reach this Mac, and restarts
+  the tunnel when it cannot.
+
+  Watching the process is not enough: cloudflared can hold an edge address
+  that has stopped working and retry it for ever, staying alive the whole
+  time, so launchd sees a healthy process while every request from the phone
+  gets a 530.
+
+  Rendered by scripts/remoteai-service.sh — @PLACEHOLDER@ values are filled in
+  at install time, so nothing machine-specific is committed.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>live.jaco.remoteai.watchdog</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>@WATCHDOG@</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+@AGENT_ENVIRONMENT@
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>60</integer>
+
+    <key>StandardOutPath</key>
+    <string>@LOG_DIR@/watchdog.log</string>
+    <key>StandardErrorPath</key>
+    <string>@LOG_DIR@/watchdog.log</string>
+    <key>WorkingDirectory</key>
+    <string>@HOME@</string>
+</dict>
+</plist>

@@ -3,8 +3,10 @@
 #
 # Two LaunchAgents, both running as the logged-in user:
 #
-#   live.jaco.remoteai.agent   the Rust agent, listening on 127.0.0.1:8787
-#   live.jaco.remoteai.tunnel  the named Cloudflare tunnel that fronts it
+#   live.jaco.remoteai.agent    the Rust agent, listening on 127.0.0.1:8787
+#   live.jaco.remoteai.tunnel   the named Cloudflare tunnel that fronts it
+#   live.jaco.remoteai.watchdog restarts the tunnel when the phone cannot
+#                               reach this Mac, which launchd cannot see
 #
 # They are LaunchAgents rather than LaunchDaemons because the agent reads this
 # user's Codex and Claude sessions and must run as them. Both restart on exit
@@ -25,6 +27,7 @@ log_dir="$HOME/Library/Logs/RemoteAI"
 launch_agents="$HOME/Library/LaunchAgents"
 agent_label="live.jaco.remoteai.agent"
 tunnel_label="live.jaco.remoteai.tunnel"
+watchdog_label="live.jaco.remoteai.watchdog"
 
 die() { printf '%s\n' "$*" >&2; exit 1; }
 
@@ -80,6 +83,7 @@ render() {
     CLOUDFLARED="$cloudflared" \
     AGENT_URL="http://127.0.0.1:8787" \
     TUNNEL_NAME="$tunnel_name" \
+    WATCHDOG="$install_root/bin/remoteai-watchdog.sh" \
     awk '
         {
             gsub(/@AGENT_BINARY@/, ENVIRON["AGENT_BINARY"])
@@ -88,6 +92,7 @@ render() {
             gsub(/@CLOUDFLARED@/, ENVIRON["CLOUDFLARED"])
             gsub(/@AGENT_URL@/, ENVIRON["AGENT_URL"])
             gsub(/@TUNNEL_NAME@/, ENVIRON["TUNNEL_NAME"])
+            gsub(/@WATCHDOG@/, ENVIRON["WATCHDOG"])
             if ($0 ~ /@AGENT_ENVIRONMENT@/) { printf "%s", ENVIRON["AGENT_ENVIRONMENT"]; next }
             print
         }
@@ -151,6 +156,10 @@ do_install() {
     # Copy rather than symlink the build tree: rebuilding a worktree, or
     # deleting it, must not take the installed service down with it.
     install -m 755 "$repo_root/target/release/remote-ai-agent" "$binary_path"
+    # Copied alongside the binary for the same reason: deleting the build tree
+    # must not take the installed service down with it.
+    install -m 755 "$repo_root/scripts/remoteai-watchdog.sh" \
+        "$install_root/bin/remoteai-watchdog.sh"
 
     sign_agent
 
@@ -158,8 +167,10 @@ do_install() {
         "$launch_agents/$agent_label.plist"
     render "$repo_root/deploy/launchd/$tunnel_label.plist.template" \
         "$launch_agents/$tunnel_label.plist"
+    render "$repo_root/deploy/launchd/$watchdog_label.plist.template" \
+        "$launch_agents/$watchdog_label.plist"
 
-    for label in "$tunnel_label" "$agent_label"; do
+    for label in "$watchdog_label" "$tunnel_label" "$agent_label"; do
         bootout "$label"
         launchctl bootstrap "$domain" "$launch_agents/$label.plist"
         launchctl enable "$domain/$label"
@@ -167,27 +178,36 @@ do_install() {
 
     echo "==> installed"
     echo "    agent   $binary_path"
+    echo "    watchdog every 60s against $REMOTEAI_PUBLIC_ORIGIN"
     echo "    origin  $REMOTEAI_PUBLIC_ORIGIN"
     echo "    tunnel  $tunnel_name"
     echo "    logs    $log_dir"
 }
 
 do_uninstall() {
-    for label in "$agent_label" "$tunnel_label"; do
+    for label in "$agent_label" "$tunnel_label" "$watchdog_label"; do
         bootout "$label"
         rm -f "$launch_agents/$label.plist"
     done
-    echo "==> removed both services (the agent binary and its state are kept)"
+    echo "==> removed all three services (the agent binary and its state are kept)"
 }
 
 do_status() {
-    for label in "$agent_label" "$tunnel_label"; do
-        if launchctl print "$domain/$label" >/dev/null 2>&1; then
-            printf '%-32s %s\n' "$label" \
-                "$(launchctl print "$domain/$label" | awk '/state = /{print $3; exit}')"
-        else
+    for label in "$agent_label" "$tunnel_label" "$watchdog_label"; do
+        if ! launchctl print "$domain/$label" >/dev/null 2>&1; then
             printf '%-32s not installed\n' "$label"
+            continue
         fi
+        if [ "$label" = "$watchdog_label" ]; then
+            # A periodic job is only running during its own minute, so its
+            # state says nothing. What matters is when it last had something
+            # to say.
+            printf '%-32s installed (last action: %s)\n' "$label" \
+                "$(tail -1 "$log_dir/watchdog.log" 2>/dev/null | cut -c1-19)"
+            continue
+        fi
+        printf '%-32s %s\n' "$label" \
+            "$(launchctl print "$domain/$label" | awk '/state = /{print $3; exit}')"
     done
     printf '%-32s ' "agent health"
     curl -fsS --max-time 5 http://127.0.0.1:8787/v1/health 2>/dev/null || echo "unreachable"
@@ -200,13 +220,13 @@ case "${1:-}" in
     restart)
         read_config
         cloudflared="$(command -v cloudflared || true)"
-        for label in "$tunnel_label" "$agent_label"; do
+        for label in "$tunnel_label" "$agent_label" "$watchdog_label"; do
             launchctl kickstart -k "$domain/$label" 2>/dev/null \
                 || echo "$label is not installed" >&2
         done
         ;;
     status) do_status ;;
-    logs) tail -f "$log_dir/agent.log" "$log_dir/tunnel.log" ;;
+    logs) tail -f "$log_dir/agent.log" "$log_dir/tunnel.log" "$log_dir/watchdog.log" ;;
     *)
         sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
         exit 2
