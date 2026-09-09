@@ -207,6 +207,11 @@ pub struct LoginSession {
     /// Where the credential should be filed if this succeeds.
     pub label: Option<String>,
     transcript: Arc<Mutex<String>>,
+    /// False once the child has exited. A session that has ended must not be
+    /// handed to the next request as though it were running: the phone would
+    /// be shown its empty transcript for ever, with no process behind it and
+    /// nothing able to answer.
+    running: Arc<std::sync::atomic::AtomicBool>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     /// A handle that can signal the child while another thread sits in
     /// `wait`. Holding the child itself behind a mutex would deadlock
@@ -252,6 +257,7 @@ impl LoginSession {
 
         let id = id.into();
         let transcript = Arc::new(Mutex::new(String::new()));
+        let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let writer = Arc::new(Mutex::new(pair.master.take_writer()?));
         let mut reader = pair.master.try_clone_reader()?;
 
@@ -281,8 +287,10 @@ impl LoginSession {
 
         {
             let transcript = transcript.clone();
+            let running = running.clone();
             std::thread::spawn(move || {
                 let status = child.wait().map(|status| status.success()).unwrap_or(false);
+                running.store(false, std::sync::atomic::Ordering::SeqCst);
                 let tail = transcript
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
@@ -296,9 +304,15 @@ impl LoginSession {
             provider,
             label,
             transcript,
+            running,
             writer,
             killer: Arc::new(Mutex::new(killer)),
         })
+    }
+
+    /// Whether the child is still running.
+    pub fn is_running(&self) -> bool {
+        self.running.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     pub fn progress(&self) -> LoginProgress {
@@ -325,6 +339,7 @@ impl LoginSession {
     }
 
     pub fn cancel(&self) {
+        self.running.store(false, std::sync::atomic::Ordering::SeqCst);
         let _ = self
             .killer
             .lock()

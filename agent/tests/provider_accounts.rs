@@ -588,3 +588,55 @@ async fn an_account_stops_being_current_when_the_cli_signs_itself_out() {
     assert_eq!(view.login.state, LoginState::LoggedIn);
     assert!(view.accounts[0].is_current);
 }
+
+#[tokio::test]
+async fn a_login_that_has_already_ended_is_not_handed_out_again() {
+    // What a phone actually hit: tapping Start did nothing, spawned nothing
+    // and reported nothing, again and again. A login command that exits at
+    // once can finish before its own session has been recorded, and the dead
+    // session then answered every later request with its empty transcript —
+    // no output, no link, no code, so the screen never changed.
+    let home = tempfile::tempdir().unwrap();
+    let credential = home.path().join("credential");
+
+    // A stand-in that exits immediately, the way a CLI refusing to run does.
+    let program = home.path().join("exits-at-once");
+    std::fs::write(&program, "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    let (events, mut receiver) = tokio::sync::broadcast::channel(16);
+    let service = AccountService::new(
+        ProviderId::Claude,
+        program.to_str().unwrap().to_owned(),
+        LiveCredential::File(credential),
+        Arc::new(AccountVault::new(Box::new(InMemorySecrets::default()))),
+        Arc::new(Store::open(&home.path().join("state")).await.unwrap()),
+        // Nothing is signed in, so no credential is disturbed.
+        Arc::new(LoginProbe::claude("/usr/bin/false").with_cache_for(std::time::Duration::ZERO)),
+        events,
+    );
+
+    let first = service.start_login(None).await.unwrap();
+
+    // Wait for the definite signal that it ended, rather than for the slot to
+    // be cleared: the clearing is the very race this covers.
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if let Ok((_, ConversationEvent::ProviderLoginCompleted(payload))) =
+                receiver.recv().await
+            {
+                return payload;
+            }
+        }
+    })
+    .await
+    .expect("the login ends");
+    assert_eq!(ended["succeeded"], false);
+
+    let second = service.start_login(None).await.unwrap();
+
+    assert_ne!(
+        second.session_id, first.session_id,
+        "a new attempt must be a new session, not the corpse of the last one"
+    );
+}

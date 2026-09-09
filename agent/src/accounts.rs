@@ -286,9 +286,18 @@ impl AccountService {
         }
         let mut held = self.session.lock().await;
         if let Some(existing) = held.as_ref() {
-            // Not an error: a phone that lost the reply, or a second phone,
-            // should join the flow that is running rather than break it.
-            return Ok(existing.progress());
+            if existing.is_running() {
+                // Not an error: a phone that lost the reply, or a second
+                // phone, should join the flow that is running rather than
+                // break it.
+                return Ok(existing.progress());
+            }
+            // One that has ended must not be handed back as though it were
+            // running. A login command that exits at once can finish before
+            // its own session is recorded, and the dead session then answered
+            // every later request with its empty transcript — a Start button
+            // that did nothing, spawned nothing, and reported nothing.
+            *held = None;
         }
 
         if self.probe.read().await.state == LoginState::LoggedIn {
