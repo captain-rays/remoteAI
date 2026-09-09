@@ -230,15 +230,16 @@ impl AccountService {
         // switching away and back would restore a stale credential.
         self.snapshot_current_account().await;
 
-        // Make room by removing the credential, not by running the CLI's
-        // logout. A logout is entitled to revoke the token at the provider,
-        // which would leave the snapshot just taken of the outgoing account
-        // useless — switching away would quietly destroy the account being
-        // left. Signing out is a separate, explicit act (see `logout`), and
-        // only there is the CLI's own command the right thing.
-        self.live
-            .clear(&crate::credentials::Keychain)
-            .map_err(|_| AccountError::Failed)?;
+        // Write over it, rather than removing it first and then writing.
+        //
+        // Not the CLI's logout: that is entitled to revoke the token at the
+        // provider, which would leave the snapshot just taken of the outgoing
+        // account useless — switching away would quietly destroy the account
+        // being left. Signing out is a separate, explicit act (see `logout`).
+        //
+        // And not a delete either: writing replaces both a file and a
+        // keychain item, so the delete was redundant, and it failed outright
+        // on a keychain item another program created.
         self.live
             .write(&crate::credentials::Keychain, &wanted)
             .map_err(|_| AccountError::Failed)?;
@@ -301,13 +302,18 @@ impl AccountService {
         }
 
         if self.probe.read().await.state == LoginState::LoggedIn {
-            // Same reasoning as `activate`: the account being replaced was
-            // just snapshotted, and a CLI logout may revoke it at the
-            // provider, so the credential is removed rather than logged out.
+            // Take a copy of the account about to be replaced, so it stays
+            // switchable, and then leave it alone: signing in *is* replacing,
+            // and both CLIs overwrite their own credential when they do it.
+            //
+            // Removing it here first cost more than it bought. Claude keeps
+            // its credential in a keychain item created by another program,
+            // and deleting that is not ours to do — the attempt failed and
+            // the sign-in never started, which is what "the Mac could not
+            // complete that" was. Clearing also meant a login that failed
+            // half-way left the phone signed out of an account that had been
+            // working a moment earlier.
             self.snapshot_current_account().await;
-            self.live
-                .clear(&crate::credentials::Keychain)
-                .map_err(|_| AccountError::Failed)?;
             self.probe.forget().await;
         }
 

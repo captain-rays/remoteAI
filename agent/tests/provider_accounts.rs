@@ -364,24 +364,29 @@ async fn a_rejected_code_is_reported_as_a_failed_login_with_the_clis_reason() {
 }
 
 #[tokio::test]
-async fn signing_in_while_signed_in_signs_out_first_and_keeps_the_old_account() {
-    // Asked for explicitly: logging in as a different account has to log out
-    // of the current one. Doing it here rather than leaving it to the CLI is
-    // also what makes the outgoing account's credential get saved.
+async fn signing_in_while_signed_in_keeps_the_old_account_switchable() {
+    // Asked for explicitly: logging in as a different account must not
+    // silently keep using the current one. Signing in *is* replacing — both
+    // CLIs overwrite their own credential — so what this has to guarantee is
+    // that the outgoing account is copied first and stays switchable.
+    //
+    // What it must *not* do is remove the credential itself. Claude keeps
+    // its in a keychain item another program created, and deleting that is
+    // not ours to do: the attempt failed and the sign-in never started.
+    // Clearing also left a half-finished login signed out of an account that
+    // had been working a moment earlier.
     let harness = harness(Some("first@example.com")).await;
     let service = harness.service.clone();
     service.save_current("first").await.unwrap();
 
-    service
-        .start_login(Some("second".to_owned()))
-        .await
-        .unwrap();
+    service.start_login(Some("second".to_owned())).await.unwrap();
 
     assert_eq!(
-        service.view().await.unwrap().login.state,
-        LoginState::LoggedOut,
-        "the old credential is gone before the new flow starts"
+        service.view().await.unwrap().login.account.as_deref(),
+        Some("first@example.com"),
+        "the working account is left alone until the new one lands"
     );
+    assert_eq!(harness.logout_count(), 0, "and the CLI's logout is not run");
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let session = loop {
@@ -389,21 +394,11 @@ async fn signing_in_while_signed_in_signs_out_first_and_keeps_the_old_account() 
         if current.awaiting_input {
             break current.session_id;
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "no prompt: {current:?}"
-        );
+        assert!(std::time::Instant::now() < deadline, "no prompt: {current:?}");
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     };
-    service
-        .send_login_line(&session, "GOOD-CODE")
-        .await
-        .unwrap();
+    service.send_login_line(&session, "GOOD-CODE").await.unwrap();
 
-    // Wait for the *filing* to land, not merely for the new login to show:
-    // the sign-in becomes visible a moment before the account it belongs to
-    // has been written down, so waiting on the login would be waiting on the
-    // wrong thing.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         let view = service.view().await.unwrap();
@@ -415,8 +410,24 @@ async fn signing_in_while_signed_in_signs_out_first_and_keeps_the_old_account() 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 
-    // And the account that was signed out of is still switchable.
+    // And the account that was replaced is still one tap away.
     let view = service.activate("first").await.unwrap();
+    assert_eq!(view.login.account.as_deref(), Some("first@example.com"));
+}
+
+#[tokio::test]
+async fn a_sign_in_that_never_finishes_leaves_the_working_account_alone() {
+    // The cost of clearing the credential up front: a login that stalled —
+    // and Claude's does, on an organisation's confirmation screen — left the
+    // phone signed out of an account that had been working seconds earlier.
+    let harness = harness(Some("first@example.com")).await;
+    let service = harness.service.clone();
+
+    let progress = service.start_login(Some("second".to_owned())).await.unwrap();
+    service.cancel_login(&progress.session_id).await.unwrap();
+
+    let view = service.view().await.unwrap();
+    assert_eq!(view.login.state, LoginState::LoggedIn);
     assert_eq!(view.login.account.as_deref(), Some("first@example.com"));
 }
 
