@@ -8,9 +8,43 @@ public enum SpeechProtocolSuite {
     public static let suite = TestSuite(
         name: "SpeechProtocolSuite",
         cases: [
-            TestCase("the opening command carries what the service requires") {
-                let data = SpeechProtocol.startCommand(
+            TestCase("ids are lowercase hex, which is the only form accepted") {
+                // Foundation's UUID prints uppercase with hyphens, and the
+                // service answers `MESSAGE_INVALID` to that — the case is the
+                // whole difference, and a real session died on it.
+                let identifier = SpeechProtocol.identifier()
+                try expectEqual(identifier.count, 32)
+                try expectTrue(
+                    identifier.allSatisfy { $0.isHexDigit && !$0.isUppercase },
+                    "expected 32 lowercase hex characters, got \(identifier)"
+                )
+                try expectFalse(identifier.contains("-"))
+                try expectTrue(
+                    SpeechProtocol.identifier() != identifier, "each session needs its own"
+                )
+            },
+
+            TestCase("commands are text, because binary frames are audio") {
+                // The service reads every binary frame as audio. Sent as
+                // bytes, the opening command is swallowed as a moment of
+                // noise: the socket opens, the session is never acknowledged,
+                // and nothing ever answers — which is exactly what a real
+                // device reported. The return type is what keeps it text.
+                let command: String = SpeechProtocol.startCommand(
                     appkey: "an-appkey", taskId: "task-1", messageId: "message-1"
+                )
+                try expectTrue(command.hasPrefix("{"), "JSON text, not bytes: \(command)")
+                let stop: String = SpeechProtocol.stopCommand(
+                    appkey: "an-appkey", taskId: "task-1", messageId: "message-2"
+                )
+                try expectTrue(stop.contains("StopTranscription"))
+            },
+
+            TestCase("the opening command carries what the service requires") {
+                let data = Data(
+                    SpeechProtocol.startCommand(
+                        appkey: "an-appkey", taskId: "task-1", messageId: "message-1"
+                    ).utf8
                 )
                 let object = try expectNotNil(
                     try JSONSerialization.jsonObject(with: data) as? [String: Any]

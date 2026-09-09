@@ -290,6 +290,10 @@ public struct ConversationView: View {
                         isDictating.toggle()
                         if isDictating {
                             composerIsFocused = false
+                            // The microphone prompt belongs here, not on the
+                            // first hold: asked then, it suspends the session
+                            // while the give-up timer runs.
+                            dictation?.prepare()
                         }
                     } label: {
                         Image(systemName: isDictating ? "keyboard" : "mic")

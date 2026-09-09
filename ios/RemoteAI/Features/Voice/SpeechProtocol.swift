@@ -39,8 +39,23 @@ public enum SpeechProtocol {
         case ignored(String)
     }
 
+    /// An id the service will accept.
+    ///
+    /// Thirty-two lowercase hex characters. Foundation's `UUID` prints
+    /// uppercase with hyphens, and the service rejects that outright:
+    /// `Gateway:MESSAGE_INVALID:Invalid message id`. The case is the whole
+    /// difference, which is why this is not left to the call site.
+    public static func identifier() -> String {
+        UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+    }
+
     /// The opening command. `taskId` correlates every later frame.
-    public static func startCommand(appkey: String, taskId: String, messageId: String) -> Data {
+    ///
+    /// Returned as text, not bytes, because the distinction is the protocol:
+    /// the service reads every binary frame as audio. Sent as binary, this
+    /// command is swallowed as a moment of noise — the socket opens, nothing
+    /// is acknowledged, and nothing ever answers.
+    public static func startCommand(appkey: String, taskId: String, messageId: String) -> String {
         command(
             name: "StartTranscription", appkey: appkey, taskId: taskId, messageId: messageId,
             payload: [
@@ -57,8 +72,8 @@ public enum SpeechProtocol {
     }
 
     /// Tells the service the audio has ended, which is what produces the final
-    /// sentence.
-    public static func stopCommand(appkey: String, taskId: String, messageId: String) -> Data {
+    /// sentence. Text, for the same reason as `startCommand`.
+    public static func stopCommand(appkey: String, taskId: String, messageId: String) -> String {
         command(
             name: "StopTranscription", appkey: appkey, taskId: taskId, messageId: messageId,
             payload: [:]
@@ -68,7 +83,7 @@ public enum SpeechProtocol {
     private static func command(
         name: String, appkey: String, taskId: String, messageId: String,
         payload: [String: Any]
-    ) -> Data {
+    ) -> String {
         let message: [String: Any] = [
             "header": [
                 "namespace": namespace,
@@ -79,8 +94,12 @@ public enum SpeechProtocol {
             ],
             "payload": payload,
         ]
-        return (try? JSONSerialization.data(withJSONObject: message, options: [.sortedKeys]))
-            ?? Data("{}".utf8)
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: message, options: [.sortedKeys]
+        ),
+            let text = String(data: data, encoding: .utf8)
+        else { return "{}" }
+        return text
     }
 
     /// Read one message from the service.

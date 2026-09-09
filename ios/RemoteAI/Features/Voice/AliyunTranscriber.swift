@@ -45,6 +45,14 @@ public actor AliyunTranscriber: SpeechTranscriber {
         self.client = client
     }
 
+    /// Ask for the microphone, and warm the token, before the button is held.
+    public func prepare() async {
+        try? await requireMicrophone()
+        if credentials?.isUsable() != true {
+            credentials = try? await client.speechCredentials()
+        }
+    }
+
     public func diagnosis() async -> DictationDiagnosis {
         var current = report
         current.connectionError = current.connectionError ?? monitor.failure
@@ -67,7 +75,7 @@ public actor AliyunTranscriber: SpeechTranscriber {
 
         let (stream, continuation) = AsyncStream<SpeechProtocol.Event>.makeStream()
         self.continuation = continuation
-        taskId = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        taskId = SpeechProtocol.identifier()
 
         guard var components = URLComponents(string: credentials.endpoint) else {
             throw DictationFailure.connectionFailed
@@ -89,7 +97,7 @@ public actor AliyunTranscriber: SpeechTranscriber {
         socket.resume()
 
         try await send(
-            SpeechProtocol.startCommand(
+            command: SpeechProtocol.startCommand(
                 appkey: credentials.appkey, taskId: taskId, messageId: Self.messageId()
             )
         )
@@ -112,7 +120,7 @@ public actor AliyunTranscriber: SpeechTranscriber {
         // The service only produces the final sentence once it is told the
         // audio has ended.
         try? await send(
-            SpeechProtocol.stopCommand(
+            command: SpeechProtocol.stopCommand(
                 appkey: credentials.appkey, taskId: taskId, messageId: Self.messageId()
             )
         )
@@ -132,10 +140,13 @@ public actor AliyunTranscriber: SpeechTranscriber {
 
     // MARK: - Socket
 
-    private func send(_ data: Data) async throws {
+    /// Commands travel as text frames. The service reads every binary frame
+    /// as audio, so a command sent as bytes is swallowed as noise: the socket
+    /// opens, the session is never acknowledged, and nothing ever answers.
+    private func send(command: String) async throws {
         guard let socket else { throw DictationFailure.connectionFailed }
         do {
-            try await socket.send(.data(data))
+            try await socket.send(.string(command))
         } catch {
             throw DictationFailure.connectionFailed
         }
@@ -183,9 +194,7 @@ public actor AliyunTranscriber: SpeechTranscriber {
         continuation = nil
     }
 
-    private static func messageId() -> String {
-        UUID().uuidString.replacingOccurrences(of: "-", with: "")
-    }
+    private static func messageId() -> String { SpeechProtocol.identifier() }
 
     // MARK: - Microphone
 

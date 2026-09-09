@@ -54,12 +54,16 @@ public protocol SpeechTranscriber: Sendable {
     func cancel() async
     /// Where it got to, asked only when there is nothing to show for it.
     func diagnosis() async -> DictationDiagnosis
+    /// Get whatever needs a person's answer out of the way — the microphone
+    /// prompt — before the button is held.
+    func prepare() async
 }
 
 extension SpeechTranscriber {
     /// A transcriber that keeps no account of itself — the scripted ones in
     /// tests — reports nothing rather than pretending.
     public func diagnosis() async -> DictationDiagnosis { DictationDiagnosis() }
+    public func prepare() async {}
 }
 
 /// Hold-to-talk, and what it leaves in the composer.
@@ -125,6 +129,14 @@ public final class VoiceDictation {
     public var liveTranscript: String {
         if case let .listening(text) = state { return text }
         return ""
+    }
+
+    /// Voice mode was chosen. Ask for the microphone now: asked at the moment
+    /// the button goes down, the prompt suspends the session while the
+    /// give-up timer runs, so the first hold always failed even when the
+    /// answer was yes.
+    public func prepare() {
+        Task { await transcriber.prepare() }
     }
 
     /// The button went down.
