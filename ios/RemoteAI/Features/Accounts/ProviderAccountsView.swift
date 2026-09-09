@@ -160,42 +160,69 @@ private struct SignInSheet: View {
             Form {
                 if let flow = model.signIn {
                     if let url = flow.verificationUrl, let link = URL(string: url) {
-                        Section("1. Open this on any device") {
+                        Section("1. Open this and sign in to the account you want") {
                             Link(url, destination: link)
                                 .accessibilityIdentifier("sign-in-url")
                         }
                     }
                     if let userCode = flow.userCode {
-                        Section("2. Enter this code there") {
+                        // The code box only appears once you are signed in:
+                        // the page has to know which account is authorising.
+                        // Omitting that step sent a reader straight to a login
+                        // page they were not expecting.
+                        Section("2. Once signed in, enter this code") {
                             Text(userCode)
                                 .font(.title3.monospaced())
                                 .textSelection(.enabled)
                                 .accessibilityIdentifier("sign-in-user-code")
                         }
                     }
-                    if flow.awaitingInput {
-                        Section("Code from the browser") {
-                            PlainTextField("Verification code", text: $code)
-                                .accessibilityIdentifier("sign-in-code")
-                            Button("Send code") {
-                                let entered = code
-                                code = ""
-                                Task { await model.submit(code: entered) }
-                            }
-                            .disabled(
-                                model.isWorking
-                                    || code.trimmingCharacters(in: .whitespaces).isEmpty
-                            )
-                            .accessibilityIdentifier("send-code")
+                    // Always available while the flow runs, not only when
+                    // the output looks like a prompt. These CLIs also ask
+                    // things we cannot anticipate — Claude stops on an
+                    // organisation's managed-settings confirmation whose last
+                    // line reads "Enter to confirm" — and a reader who cannot
+                    // answer is stuck with no way forward.
+                    Section(
+                        flow.awaitingInput
+                            ? "Code from the browser" : "Reply to the Mac"
+                    ) {
+                        PlainTextField(
+                            flow.awaitingInput ? "Verification code" : "Type a reply",
+                            text: $code
+                        )
+                        .accessibilityIdentifier("sign-in-code")
+                        Button(flow.awaitingInput ? "Send code" : "Send") {
+                            let entered = code
+                            code = ""
+                            Task { await model.submit(code: entered) }
+                        }
+                        .disabled(
+                            model.isWorking
+                                || code.trimmingCharacters(in: .whitespaces).isEmpty
+                        )
+                        .accessibilityIdentifier("send-code")
+                    }
+                    if let error = model.errorMessage {
+                        Section {
+                            Text(error)
+                                .font(.footnote)
+                                .foregroundStyle(.orange)
+                                .accessibilityIdentifier("sign-in-error")
                         }
                     }
                     Section("What the Mac is showing") {
                         // Verbatim: it is the only account of what the flow is
-                        // doing, and its wording is not ours.
-                        Text(flow.output)
-                            .font(.caption.monospaced())
-                            .textSelection(.enabled)
-                            .accessibilityIdentifier("sign-in-output")
+                        // doing, and its wording is not ours. Until it prints
+                        // something, say so — an empty box reads as a button
+                        // that did nothing.
+                        Text(
+                            flow.output.isEmpty
+                                ? "Waiting for the Mac to start the sign-in…" : flow.output
+                        )
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                        .accessibilityIdentifier("sign-in-output")
                     }
                     Section {
                         Button("Cancel sign-in", role: .destructive) {
@@ -215,6 +242,15 @@ private struct SignInSheet: View {
                         }
                         .disabled(model.isWorking)
                         .accessibilityIdentifier("start-sign-in")
+                        if let error = model.errorMessage {
+                            // This used to be rendered on the screen behind
+                            // the sheet, so a refused start looked like a
+                            // button that did nothing at all.
+                            Text(error)
+                                .font(.footnote)
+                                .foregroundStyle(.orange)
+                                .accessibilityIdentifier("start-sign-in-error")
+                        }
                     } footer: {
                         Text(
                             "The Mac runs \(model.provider.displayName)'s own sign-in. "

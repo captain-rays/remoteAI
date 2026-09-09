@@ -254,3 +254,15 @@ async fn cancelling_a_login_that_is_waiting_returns_at_once() {
         "a killed login reports failure rather than nothing"
     );
 }
+
+#[test]
+fn a_confirmation_that_offers_a_keypress_still_counts_as_waiting() {
+    // Claude's login stops here when an organisation has configured managed
+    // settings. The screen offers "Enter to confirm" rather than a field, and
+    // reading it as "not waiting" left the flow stuck with nothing on the
+    // phone to answer it.
+    let screen = "Managed settings require approval\n\n\
+                  ❯ 1. Yes, I trust these settings\n  2. No, exit Claude Code\n\n\
+                  Enter to confirm · Esc to exit";
+    assert!(looks_like_a_prompt(screen));
+}

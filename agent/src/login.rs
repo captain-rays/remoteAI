@@ -173,6 +173,9 @@ pub fn looks_like_a_prompt(text: &str) -> bool {
         || tail.ends_with('>')
         || tail.contains("paste")
         || tail.contains("enter the code")
+        // Claude stops on an organisation's managed-settings confirmation,
+        // whose last line offers a keypress rather than a field.
+        || tail.contains("enter to confirm")
 }
 
 /// The login command for one provider. Fixed, so this relay can never be
