@@ -379,7 +379,10 @@ async fn signing_in_while_signed_in_keeps_the_old_account_switchable() {
     let service = harness.service.clone();
     service.save_current("first").await.unwrap();
 
-    service.start_login(Some("second".to_owned())).await.unwrap();
+    service
+        .start_login(Some("second".to_owned()))
+        .await
+        .unwrap();
 
     assert_eq!(
         service.view().await.unwrap().login.account.as_deref(),
@@ -394,10 +397,16 @@ async fn signing_in_while_signed_in_keeps_the_old_account_switchable() {
         if current.awaiting_input {
             break current.session_id;
         }
-        assert!(std::time::Instant::now() < deadline, "no prompt: {current:?}");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no prompt: {current:?}"
+        );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     };
-    service.send_login_line(&session, "GOOD-CODE").await.unwrap();
+    service
+        .send_login_line(&session, "GOOD-CODE")
+        .await
+        .unwrap();
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
@@ -423,7 +432,10 @@ async fn a_sign_in_that_never_finishes_leaves_the_working_account_alone() {
     let harness = harness(Some("first@example.com")).await;
     let service = harness.service.clone();
 
-    let progress = service.start_login(Some("second".to_owned())).await.unwrap();
+    let progress = service
+        .start_login(Some("second".to_owned()))
+        .await
+        .unwrap();
     service.cancel_login(&progress.session_id).await.unwrap();
 
     let view = service.view().await.unwrap();
@@ -649,5 +661,136 @@ async fn a_login_that_has_already_ended_is_not_handed_out_again() {
     assert_ne!(
         second.session_id, first.session_id,
         "a new attempt must be a new session, not the corpse of the last one"
+    );
+}
+
+/// A stand-in whose status command cannot be understood, so the login state
+/// reads as unknown — what a slow or crashing CLI produces.
+async fn unreadable_status_harness(signed_in_as: Option<&str>) -> Harness {
+    let home = tempfile::tempdir().unwrap();
+    let credential = home.path().join("credential");
+    let logouts = home.path().join("logouts");
+    if let Some(account) = signed_in_as {
+        std::fs::write(&credential, account).unwrap();
+    }
+    let program = home.path().join("mute-claude");
+    std::fs::write(
+        &program,
+        format!(
+            "#!/bin/sh\n\
+             CRED='{}'\n\
+             case \"$1 $2\" in\n\
+             'auth status') printf 'not json at all\\n' ;;\n\
+             'auth login')\n\
+               printf 'Paste code here > '\n\
+               read code\n\
+               if [ \"$code\" = 'GOOD-CODE' ]; then printf 'new@example.com' > \"$CRED\"; fi ;;\n\
+             esac\n",
+            credential.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    let store = Arc::new(Store::open(&home.path().join("state")).await.unwrap());
+    let (events, receiver) = tokio::sync::broadcast::channel(64);
+    let program = program.to_str().unwrap().to_owned();
+    let service = Arc::new(AccountService::new(
+        ProviderId::Claude,
+        program.clone(),
+        LiveCredential::File(credential.clone()),
+        Arc::new(AccountVault::new(Box::new(InMemorySecrets::default()))),
+        store,
+        Arc::new(LoginProbe::claude(program).with_cache_for(std::time::Duration::ZERO)),
+        events,
+    ));
+    Harness {
+        service,
+        credential,
+        logouts,
+        events: receiver,
+        _home: home,
+    }
+}
+
+async fn wait_for_outcome(harness: &mut Harness) -> serde_json::Value {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if let Ok((_, ConversationEvent::ProviderLoginCompleted(payload))) =
+                harness.events.recv().await
+            {
+                return payload;
+            }
+        }
+    })
+    .await
+    .expect("an outcome")
+}
+
+async fn answer_prompt(service: &AccountService, line: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if let Some(current) = service.login_progress().await
+            && current.awaiting_input
+        {
+            service
+                .send_login_line(&current.session_id, line)
+                .await
+                .unwrap();
+            return;
+        }
+        assert!(std::time::Instant::now() < deadline, "no prompt arrived");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_sign_in_the_cli_cannot_confirm_is_judged_by_the_credential() {
+    // The check after a sign-in is a second process, and it can fail to
+    // answer — a loaded Mac takes Claude's Node start-up past the probe's
+    // timeout. Reading that as failure told the phone a working sign-in had
+    // broken, and skipped filing the credential, leaving it signed in but not
+    // switchable. A credential that changed while the flow ran is the
+    // evidence that remains.
+    let mut harness = unreadable_status_harness(Some("first@example.com")).await;
+    let service = harness.service.clone();
+
+    service
+        .start_login(Some("second".to_owned()))
+        .await
+        .unwrap();
+    answer_prompt(&service, "GOOD-CODE").await;
+
+    let outcome = wait_for_outcome(&mut harness).await;
+    assert_eq!(
+        outcome["succeeded"], true,
+        "the credential changed, so the sign-in took"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&harness.credential).unwrap(),
+        "new@example.com"
+    );
+}
+
+#[tokio::test]
+async fn a_sign_in_that_changed_nothing_is_not_called_a_success() {
+    // The other half: an unreadable status must not be read as success
+    // either. Since nothing is removed up front, a credential merely being
+    // present proves nothing — only a changed one does.
+    let mut harness = unreadable_status_harness(Some("first@example.com")).await;
+    let service = harness.service.clone();
+
+    service
+        .start_login(Some("second".to_owned()))
+        .await
+        .unwrap();
+    answer_prompt(&service, "WRONG").await;
+
+    let outcome = wait_for_outcome(&mut harness).await;
+    assert_eq!(outcome["succeeded"], false);
+    assert_eq!(
+        std::fs::read_to_string(&harness.credential).unwrap(),
+        "first@example.com",
+        "and the account that was working is untouched"
     );
 }

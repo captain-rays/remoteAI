@@ -278,9 +278,11 @@ impl AccountService {
 
     /// Begin the CLI's login flow, relayed to the phone.
     ///
-    /// If something is already signed in, it is signed out first: both CLIs
-    /// treat login as a replacement, and doing it explicitly means the
-    /// account being replaced is snapshotted before it goes.
+    /// An account already signed in is copied first, so it stays switchable,
+    /// and then left alone: signing in *is* replacing, and both CLIs
+    /// overwrite their own credential when they do it. Nothing here signs out
+    /// — see the note at the snapshot below for why removing it first was
+    /// worse than leaving it.
     pub async fn start_login(&self, label: Option<String>) -> Result<LoginProgress> {
         if let Some(label) = label.as_deref() {
             AccountVault::validate_label(label).map_err(|_| AccountError::InvalidLabel)?;
@@ -316,6 +318,11 @@ impl AccountService {
             self.snapshot_current_account().await;
             self.probe.forget().await;
         }
+        // What the credential looked like before the CLI touched it. If the
+        // check afterwards cannot reach the CLI, a changed credential is the
+        // remaining evidence that the sign-in worked — and since nothing is
+        // removed up front, "a credential exists" on its own proves nothing.
+        let before = self.credential_fingerprint();
 
         // A new attempt is not the place to keep the previous one's failure.
         *self.last_login_message.lock().await = None;
@@ -339,7 +346,7 @@ impl AccountService {
                         ),
                     ));
                 },
-                self.exit_handler(session_id, label),
+                self.exit_handler(session_id, label, before),
             )
             .map_err(|_| AccountError::LoginNotStarted)?,
         );
@@ -367,10 +374,19 @@ impl AccountService {
 
     /// What to do when the login command exits: check with the CLI whether it
     /// worked, file the credential, and tell the phone either way.
+    /// A digest of the live credential, or `None` when there is none. Only a
+    /// digest: the bytes themselves have no business being kept around.
+    fn credential_fingerprint(&self) -> Option<[u8; 32]> {
+        use sha2::Digest;
+        let secret = self.live.read(&crate::credentials::Keychain).ok()??;
+        Some(sha2::Sha256::digest(&secret).into())
+    }
+
     fn exit_handler(
         &self,
         session_id: String,
         label: Option<String>,
+        before: Option<[u8; 32]>,
     ) -> impl FnOnce(bool, String) + Send + 'static {
         let runtime = tokio::runtime::Handle::current();
         let provider = self.provider;
@@ -381,6 +397,14 @@ impl AccountService {
         let events = self.events.clone();
         let slot = self.session.clone();
         let last_message = self.last_login_message.clone();
+        let fingerprint = {
+            let live = self.live.clone();
+            move || -> Option<[u8; 32]> {
+                use sha2::Digest;
+                let secret = live.read(&crate::credentials::Keychain).ok()??;
+                Some(sha2::Sha256::digest(&secret).into())
+            }
+        };
 
         move |succeeded, tail| {
             runtime.spawn(async move {
@@ -398,9 +422,20 @@ impl AccountService {
                 }
                 probe.forget().await;
                 let login = probe.read().await;
-                // The CLI's exit status is a hint; whether a credential now
-                // exists is the answer.
-                let signed_in = login.state == LoginState::LoggedIn;
+                // The CLI's exit status is only a hint. Its own answer is
+                // better, but it has three values, and reading `Unknown` as
+                // failure reported a sign-in that had worked as broken — and
+                // skipped filing the credential, leaving it signed in but not
+                // switchable. When the CLI cannot be reached, a credential
+                // that has changed since the flow began is the evidence left.
+                let signed_in = match login.state {
+                    LoginState::LoggedIn => true,
+                    LoginState::LoggedOut => false,
+                    LoginState::Unknown => {
+                        let after = fingerprint();
+                        after.is_some() && after != before
+                    }
+                };
                 if signed_in
                     && let Some(label) = label.as_deref()
                     && let Ok(Some(secret)) = live.read(&crate::credentials::Keychain)

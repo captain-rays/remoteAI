@@ -339,7 +339,8 @@ impl LoginSession {
     }
 
     pub fn cancel(&self) {
-        self.running.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.running
+            .store(false, std::sync::atomic::Ordering::SeqCst);
         let _ = self
             .killer
             .lock()

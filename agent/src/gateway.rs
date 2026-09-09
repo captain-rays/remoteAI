@@ -1082,7 +1082,16 @@ impl GatewaySession {
                         .ok_or(GatewayBusinessError::Speech(
                             crate::speech::SpeechError::NotConfigured,
                         ))?;
-                let credentials = tokens.credentials().map_err(GatewayBusinessError::Speech)?;
+                // Minting shells out to curl and waits, up to twenty
+                // seconds on a cold cache. Doing that inline blocked the
+                // worker thread this connection runs on, and with it every
+                // other conversation scheduled there.
+                let credentials = tokio::task::spawn_blocking(move || tokens.credentials())
+                    .await
+                    .map_err(|_| {
+                        GatewayBusinessError::Speech(crate::speech::SpeechError::Unreachable)
+                    })?
+                    .map_err(GatewayBusinessError::Speech)?;
                 return Ok((
                     "speech.credentials.result",
                     serde_json::to_value(credentials)
