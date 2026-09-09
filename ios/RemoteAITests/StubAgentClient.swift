@@ -36,7 +36,9 @@ extension StubAgentClient {
     func resumeConversation(provider: ProviderId, conversationId: String) async throws {
         throw AgentClientError.offline
     }
-    func send(provider: ProviderId, conversationId: String, text: String) async throws {
+    func send(
+        provider: ProviderId, conversationId: String, text: String, attachments: [String]
+    ) async throws {
         throw AgentClientError.offline
     }
     func interrupt(provider: ProviderId, conversationId: String) async throws {

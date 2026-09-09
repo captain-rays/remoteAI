@@ -301,6 +301,58 @@ public enum ConversationViewModelSuite {
                 try expectEqual(users[0].deliveryState, .sent)
             },
 
+            TestCase("a message carries the files that were attached to it") {
+                // The provider is handed paths, not bytes, and the reader
+                // must be able to see afterwards what was attached — a
+                // transcript that shows only the text leaves them guessing
+                // whether the file went at all.
+                let client = RecordingSendClient()
+                let model = await makeViewModel(client: client)
+                let path = "/Users/dev/work/api/.remoteai/uploads/shot.jpeg"
+
+                await model.send("what is this", attachments: [path])
+
+                try expectEqual(await client.sentAttachments, [path])
+                let mine = try expectNotNil(
+                    await model.messages.last { $0.role == .user }
+                )
+                try expectEqual(mine.attachments, [path])
+            },
+
+            TestCase("an attachment-only message is still worth sending") {
+                // A photo with no words is a complete instruction: "look at
+                // this". Refusing it would make the reader type a space.
+                let client = RecordingSendClient()
+                let model = await makeViewModel(client: client)
+
+                await model.send("", attachments: ["/Users/dev/work/api/.remoteai/uploads/a.png"])
+
+                try expectEqual(await client.sendCount, 1)
+            },
+
+            TestCase("a message with neither words nor files is not sent") {
+                let client = RecordingSendClient()
+                let model = await makeViewModel(client: client)
+
+                await model.send("   ", attachments: [])
+
+                try expectEqual(await client.sendCount, 0)
+            },
+
+            TestCase("a retry sends the files the failed message named") {
+                // The file is already on the Mac; dropping its path on retry
+                // would send the words alone and the answer would be about
+                // nothing.
+                let client = FailThenRecordClient()
+                let model = await makeViewModel(client: client)
+                let path = "/Users/dev/work/api/.remoteai/uploads/shot.jpeg"
+
+                await model.send("what is this", attachments: [path])
+                await model.retryFailedSend()
+
+                try expectEqual(await client.sentAttachments, [path])
+            },
+
             TestCase("two open conversations each receive every event") {
                 // One AsyncStream hands each element to exactly one consumer,
                 // so a second open transcript silently eats the first one's
@@ -773,7 +825,9 @@ private actor ControlledSendClient: StubAgentClient {
         sendContinuation = nil
     }
 
-    func send(provider: ProviderId, conversationId: String, text: String) async throws {
+    func send(
+        provider: ProviderId, conversationId: String, text: String, attachments: [String]
+    ) async throws {
         sendStarted = true
         switch mode {
         case .suspended:
@@ -845,4 +899,39 @@ private actor ControlledSendClient: StubAgentClient {
     func diagnostics() async throws -> Diagnostics { throw AgentClientError.offline }
     func revokeDevice() async throws { throw AgentClientError.offline }
 
+}
+
+/// Records what a send actually carried. Nothing else here is scripted: the
+/// point is the arguments, not the reply.
+private actor RecordingSendClient: StubAgentClient {
+    nonisolated let events = AsyncStream<EventEnvelope> { $0.finish() }
+
+    private(set) var sentAttachments: [String] = []
+    private(set) var sendCount = 0
+
+    func send(
+        provider: ProviderId, conversationId: String, text: String, attachments: [String]
+    ) async throws {
+        sendCount += 1
+        sentAttachments = attachments
+    }
+}
+
+/// Fails the first send the way a dropped connection would, then records the
+/// retry.
+private actor FailThenRecordClient: StubAgentClient {
+    nonisolated let events = AsyncStream<EventEnvelope> { $0.finish() }
+
+    private(set) var sentAttachments: [String] = []
+    private var refusedOnce = false
+
+    func send(
+        provider: ProviderId, conversationId: String, text: String, attachments: [String]
+    ) async throws {
+        guard refusedOnce else {
+            refusedOnce = true
+            throw AgentClientError.transport("dropped")
+        }
+        sentAttachments = attachments
+    }
 }

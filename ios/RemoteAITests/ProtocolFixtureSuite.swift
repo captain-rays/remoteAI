@@ -408,6 +408,37 @@ public enum ProtocolFixtureSuite {
                 try expectEqual(object["conversationId"] as? String, "codex-daily-1")
                 try expectFalse((object["messageId"] as? String ?? "").isEmpty)
             },
+            TestCase("a send with no attachment says nothing about attachments") {
+                // The field is new. An agent that predates it must not be
+                // handed an empty array to interpret.
+                let encoded = try ProtocolCoding.encoder.encode(
+                    ConversationSendPayload(
+                        provider: .codex, conversationId: "codex-daily-1", text: "hi"
+                    )
+                )
+                let object = try expectNotNil(
+                    try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+                )
+                try expectEqual(object["attachments"] == nil, true)
+            },
+
+            TestCase("attached files travel with the message that names them") {
+                let encoded = try ProtocolCoding.encoder.encode(
+                    ConversationSendPayload(
+                        provider: .codex, conversationId: "codex-daily-1",
+                        text: "what is this",
+                        attachments: ["/Users/dev/app/.remoteai/uploads/shot.jpeg"]
+                    )
+                )
+                let object = try expectNotNil(
+                    try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+                )
+                try expectEqual(
+                    object["attachments"] as? [String],
+                    ["/Users/dev/app/.remoteai/uploads/shot.jpeg"]
+                )
+            },
+
             TestCase("a conversation row decodes where it came from and where it ran") {
                 let json = """
                     {"id":"s1","provider":"claude","kind":"project","title":"Work",

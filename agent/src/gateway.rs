@@ -879,6 +879,44 @@ async fn process_socket_message(
     }
 }
 
+/// Turn the attachment paths a phone named into paths a provider may read.
+///
+/// A missing field is the ordinary case — most sends carry no attachment —
+/// and resolves to nothing. Anything present is checked one path at a time,
+/// and one bad path fails the whole send rather than being quietly dropped:
+/// a reader who attached a file and got an answer that ignored it would have
+/// no way of telling.
+async fn resolve_attachments(
+    state: &GatewayState,
+    payload: &Value,
+) -> Result<Vec<PathBuf>, GatewayBusinessError> {
+    let Some(named) = payload.get("attachments") else {
+        return Ok(Vec::new());
+    };
+    let named = named
+        .as_array()
+        .ok_or(GatewayBusinessError::InvalidPayload)?;
+    if named.is_empty() {
+        return Ok(Vec::new());
+    }
+    let Some(service) = state.file_root.read().await.clone() else {
+        return Err(GatewayBusinessError::AttachmentMissing);
+    };
+    let mut resolved = Vec::with_capacity(named.len());
+    for value in named {
+        let path = value.as_str().ok_or(GatewayBusinessError::InvalidPayload)?;
+        resolved.push(
+            service
+                .resolve_readable(std::path::Path::new(path))
+                .map_err(|error| match error {
+                    crate::files::FilesError::NotFound => GatewayBusinessError::AttachmentMissing,
+                    _ => GatewayBusinessError::AttachmentOutsideRoot,
+                })?,
+        );
+    }
+    Ok(resolved)
+}
+
 fn gateway_error_code(error: &GatewayBusinessError) -> &'static str {
     match error {
         GatewayBusinessError::Frame(_) => "frame_validation",
@@ -890,6 +928,8 @@ fn gateway_error_code(error: &GatewayBusinessError) -> &'static str {
         GatewayBusinessError::SessionBusy => "session_busy",
         GatewayBusinessError::Account(reason) => reason.code(),
         GatewayBusinessError::Speech(reason) => reason.code(),
+        GatewayBusinessError::AttachmentOutsideRoot => "attachment_outside_root",
+        GatewayBusinessError::AttachmentMissing => "attachment_missing",
     }
 }
 
@@ -950,6 +990,13 @@ pub enum GatewayBusinessError {
     Account(#[from] crate::accounts::AccountError),
     #[error("speech token unavailable: {0}")]
     Speech(#[from] crate::speech::SpeechError),
+    /// An attachment path that does not resolve inside the agent's root. Its
+    /// own variant because a send naming any file on the Mac is a different
+    /// fault from a malformed payload, and the phone shows the difference.
+    #[error("attachment is outside the agent's root")]
+    AttachmentOutsideRoot,
+    #[error("attachment does not exist")]
+    AttachmentMissing,
 }
 
 /// Authenticated business dispatcher for one device WebSocket session.
@@ -1156,8 +1203,9 @@ impl GatewaySession {
                 "conversation.send" => {
                     let id = payload_string(&request.payload, "conversationId")?;
                     let text = payload_string(&request.payload, "text")?;
+                    let attachments = resolve_attachments(&self.state, &request.payload).await?;
                     adapter
-                        .send(&id, text, Vec::new())
+                        .send(&id, text, attachments)
                         .await
                         .map_err(|error| GatewayBusinessError::Provider(error.to_string()))?;
                     (
@@ -1373,6 +1421,8 @@ impl GatewaySession {
                     GatewayBusinessError::ProviderUnavailable => "provider_unavailable",
                     GatewayBusinessError::SessionBusy => "session_busy",
                     GatewayBusinessError::UnsupportedRequest => "unsupported_request",
+                    GatewayBusinessError::AttachmentOutsideRoot => "attachment_outside_root",
+                    GatewayBusinessError::AttachmentMissing => "attachment_missing",
                     _ => "invalid_request",
                 };
                 return Ok(vec![self.encrypt_json(

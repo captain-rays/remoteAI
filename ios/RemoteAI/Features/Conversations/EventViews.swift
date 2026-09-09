@@ -23,6 +23,15 @@ struct MessageBubble: View {
             .padding(10)
             .background(background)
             .clipShape(RoundedRectangle(cornerRadius: 10))
+            // What went with the message, by name. The provider was handed
+            // the path; the reader gets the part of it they recognise.
+            ForEach(item.attachments, id: \.self) { path in
+                let name = (path as NSString).lastPathComponent
+                Label(name, systemImage: "paperclip")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("sent-attachment-\(name)")
+            }
             if item.deliveryState == .failed {
                 Text("Not sent")
                     .font(.caption2)

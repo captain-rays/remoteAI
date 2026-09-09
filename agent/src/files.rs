@@ -84,6 +84,17 @@ impl FileService {
         Ok(buffer)
     }
 
+    /// Resolve a path a phone named so it can be handed to a provider as an
+    /// attachment.
+    ///
+    /// The same containment rule as every other read here: the path must land
+    /// inside the configured root once symlinks are followed, or it is
+    /// refused. A phone naming `/etc/passwd` must not turn a send into a way
+    /// of reading the whole Mac.
+    pub fn resolve_readable(&self, path: &Path) -> Result<PathBuf, FilesError> {
+        self.resolve_existing(path)
+    }
+
     fn resolve_existing(&self, relative: &Path) -> Result<PathBuf, FilesError> {
         let candidate = if relative.is_absolute() {
             relative.to_owned()

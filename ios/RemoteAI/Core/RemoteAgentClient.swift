@@ -460,12 +460,15 @@ public actor RemoteAgentClient: AgentClient {
 
     public func resumeConversation(provider: ProviderId, conversationId: String) async throws { throw AgentClientError.transport("resume requires GatewaySession") }
 
-    public func send(provider: ProviderId, conversationId: String, text: String) async throws {
+    public func send(
+        provider: ProviderId, conversationId: String, text: String, attachments: [String]
+    ) async throws {
         _ = try await request(
             type: .conversationSend,
             conversationId: conversationId,
             payload: ConversationSendPayload(
-                provider: provider, conversationId: conversationId, text: text
+                provider: provider, conversationId: conversationId, text: text,
+                attachments: attachments
             ),
             response: EmptyResponse.self,
             waitForTurnCompletion: true

@@ -69,6 +69,7 @@ public final class AppDependencies {
             self?.applyConnectivity(state)
         }
         appModel.transcriber = transcriber
+        appModel.uploadFixture = uploadFixture
 
         // A stored identity *is* a completed pairing. Starting disconnected
         // whenever this launch did not itself pair sent the reader back to the

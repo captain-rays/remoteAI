@@ -225,7 +225,12 @@ public protocol AgentClient: Sendable {
         provider: ProviderId, kind: ConversationKind, cwd: String?
     ) async throws -> ConversationSummary
     func resumeConversation(provider: ProviderId, conversationId: String) async throws
-    func send(provider: ProviderId, conversationId: String, text: String) async throws
+    /// `attachments` are absolute paths on the Mac that this message refers
+    /// to. They must already be uploaded: the provider is handed a path and
+    /// reads it itself.
+    func send(
+        provider: ProviderId, conversationId: String, text: String, attachments: [String]
+    ) async throws
     func interrupt(provider: ProviderId, conversationId: String) async throws
 
     func decideApproval(id: String, decision: ApprovalDecision) async throws
@@ -269,4 +274,15 @@ public protocol AgentClient: Sendable {
     func listAudit(limit: Int) async throws -> [AuditEntry]
     func diagnostics() async throws -> Diagnostics
     func revokeDevice() async throws
+}
+
+extension AgentClient {
+    /// A message that refers to no file, which is most of them.
+    public func send(
+        provider: ProviderId, conversationId: String, text: String
+    ) async throws {
+        try await send(
+            provider: provider, conversationId: conversationId, text: text, attachments: []
+        )
+    }
 }

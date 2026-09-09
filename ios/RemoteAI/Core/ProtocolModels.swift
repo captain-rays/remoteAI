@@ -875,11 +875,19 @@ public struct ConversationSendPayload: Codable, Sendable, Hashable {
     public let provider: ProviderId
     public let conversationId: String
     public let text: String
+    /// Absolute paths on the Mac, already uploaded, that this message refers
+    /// to. Omitted entirely when there are none, so an agent that predates
+    /// attachments is handed exactly what it used to get.
+    public let attachments: [String]?
 
-    public init(provider: ProviderId, conversationId: String, text: String) {
+    public init(
+        provider: ProviderId, conversationId: String, text: String,
+        attachments: [String]? = nil
+    ) {
         self.provider = provider
         self.conversationId = conversationId
         self.text = text
+        self.attachments = attachments?.isEmpty == true ? nil : attachments
     }
 }
 

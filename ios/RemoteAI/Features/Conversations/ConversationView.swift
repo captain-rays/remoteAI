@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 
 @MainActor
@@ -35,7 +36,16 @@ public struct ConversationView: View {
     /// composer exactly as it was, so a Mac with no speech configured shows no
     /// button that cannot work.
     @State private var dictation: VoiceDictation?
+    /// Files staged on this composer. They are uploaded as they are picked,
+    /// so the message that names them is sent against paths that exist.
+    @State private var attachments: ComposerAttachments
+    @State private var photoSelection: [PhotosPickerItem] = []
+    @State private var isPickingPhotos = false
+    @State private var isPickingFiles = false
     private let isOnline: Bool
+    /// Stands in for the document picker under UI test, exactly as it does on
+    /// the file browser's upload button: the tap is still the reader's.
+    private let uploadFixture: UploadFixture?
 
     /// Marks the newest end of the transcript. It is a row of its own so the
     /// jump lands below the last message rather than on top of it.
@@ -47,7 +57,8 @@ public struct ConversationView: View {
         client: AgentClient,
         isOnline: Bool,
         cache: CatalogCache? = nil,
-        transcriber: SpeechTranscriber? = nil
+        transcriber: SpeechTranscriber? = nil,
+        uploadFixture: UploadFixture? = nil
     ) {
         _model = State(
             initialValue: ConversationViewModel(
@@ -57,7 +68,20 @@ public struct ConversationView: View {
             )
         )
         _dictation = State(initialValue: transcriber.map { VoiceDictation(transcriber: $0) })
+        let transfers = TransferCoordinator(client: client)
+        transfers.isOnline = isOnline
+        _attachments = State(
+            initialValue: ComposerAttachments(transfers: transfers) {
+                // The Mac's home is the Mac's to report; asked once, and only
+                // when a file is actually being attached.
+                let home = try await client.initialDirectory().path
+                return AttachmentInbox.directory(
+                    for: conversation, macHome: home, on: Date()
+                )
+            }
+        )
         self.isOnline = isOnline
+        self.uploadFixture = uploadFixture
     }
 
     public var body: some View {
@@ -83,7 +107,10 @@ public struct ConversationView: View {
             // and publish events before the realtime consumer is attached.
             await consumeEvents()
         }
-        .onChange(of: isOnline) { _, newValue in model.isOnline = newValue }
+        .onChange(of: isOnline) { _, newValue in
+            model.isOnline = newValue
+            attachments.isOnline = newValue
+        }
     }
 
     private var header: some View {
@@ -207,10 +234,15 @@ public struct ConversationView: View {
     /// field empties and the keyboard closes, so the reply has the screen.
     private func submitDraft() {
         let text = draft
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let paths = attachments.readyPaths
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !paths.isEmpty
+        else { return }
         draft = ""
+        // Cleared with the draft: these files were named in that message, and
+        // the next one starts empty. The files themselves stay on the Mac.
+        attachments.clear()
         composerIsFocused = false
-        Task { await model.send(text) }
+        Task { await model.send(text, attachments: paths) }
     }
 
     /// What the newest end of the transcript looks like right now. It changes
@@ -282,6 +314,13 @@ public struct ConversationView: View {
                 }
                 .accessibilityIdentifier("dictation-failure")
             }
+            if !attachments.isEmpty {
+                AttachmentChips(
+                    items: attachments.items,
+                    onRemove: { attachments.remove($0) },
+                    onRetry: { id in Task { await attachments.retry(id) } }
+                )
+            }
             HStack(spacing: 8) {
                 // Voice and keyboard are the same button: it is the mode the
                 // reader is leaving that names it.
@@ -306,6 +345,7 @@ public struct ConversationView: View {
                 if isDictating, let dictation {
                     HoldToTalkButton(dictation: dictation, isOnline: model.isOnline)
                 } else {
+                    attachButton
                     TextField("Message", text: $draft, axis: .vertical)
                         .textFieldStyle(.roundedBorder)
                         // Three lines at rest rather than one: a dictated
@@ -320,9 +360,7 @@ public struct ConversationView: View {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.title3)
                     }
-                    .disabled(
-                        draft.trimmingCharacters(in: .whitespaces).isEmpty || !model.isOnline
-                    )
+                    .disabled(!canSend)
                     .accessibilityIdentifier("send")
                 }
             }
@@ -339,6 +377,94 @@ public struct ConversationView: View {
             draft = draft.isEmpty ? text : draft + text
             isDictating = false
             composerIsFocused = true
+        }
+    }
+
+    /// Either words or a file is enough to send — a photo on its own says
+    /// "look at this" — but a file still on its way is not: the message would
+    /// name a path the Mac has not finished writing.
+    private var canSend: Bool {
+        guard model.isOnline, attachments.isSettled else { return false }
+        return !draft.trimmingCharacters(in: .whitespaces).isEmpty
+            || !attachments.readyPaths.isEmpty
+    }
+
+    private var attachButton: some View {
+        Menu {
+            Button {
+                isPickingPhotos = true
+            } label: {
+                Label("Photo Library", systemImage: "photo.on.rectangle")
+            }
+            .accessibilityIdentifier("attach-from-photos")
+
+            Button {
+                if let uploadFixture {
+                    // The tap is still the reader's; only the picker process
+                    // is stood in for.
+                    Task { await attachments.attach(name: uploadFixture.name, data: uploadFixture.data) }
+                } else {
+                    isPickingFiles = true
+                }
+            } label: {
+                Label("Files", systemImage: "folder")
+            }
+            .accessibilityIdentifier("attach-from-files")
+        } label: {
+            Image(systemName: "paperclip").font(.title3)
+        }
+        .disabled(!model.isOnline)
+        .accessibilityIdentifier("attach-file")
+        .accessibilityLabel("Attach a file")
+        .photosPicker(
+            isPresented: $isPickingPhotos, selection: $photoSelection, maxSelectionCount: 5,
+            matching: .any(of: [.images, .videos])
+        )
+        .fileImporter(
+            isPresented: $isPickingFiles, allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            guard case let .success(urls) = result else { return }
+            Task { await attachPicked(urls) }
+        }
+        .onChange(of: photoSelection) { _, picked in
+            guard !picked.isEmpty else { return }
+            photoSelection = []
+            Task { await attachPicked(photos: picked) }
+        }
+    }
+
+    /// Read each picked document and stage it.
+    ///
+    /// The picker hands back a security-scoped URL, which is only readable
+    /// between the start and stop of its access — the bytes are taken here
+    /// and the upload works from those.
+    private func attachPicked(_ urls: [URL]) async {
+        for url in urls {
+            let accessed = url.startAccessingSecurityScopedResource()
+            defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+            guard let data = try? Data(contentsOf: url) else { continue }
+            await attachments.attach(name: url.lastPathComponent, data: data)
+        }
+    }
+
+    private func attachPicked(photos: [PhotosPickerItem]) async {
+        for photo in photos {
+            guard let data = try? await photo.loadTransferable(type: Data.self) else { continue }
+            let name =
+                photo.supportedContentTypes.first?.preferredFilenameExtension.map {
+                    AttachmentInbox.photoName(at: Date(), extension: $0)
+                } ?? AttachmentInbox.photoName(at: Date(), extension: "jpeg")
+            // The camera writes HEIC, which the CLIs' image readers do not
+            // accept. Re-encoding here means the reader is not told later
+            // that their photo was unreadable.
+            if let jpegName = AttachmentInbox.jpegName(for: name),
+                let jpeg = AttachmentInbox.jpegData(from: data)
+            {
+                await attachments.attach(name: jpegName, data: jpeg)
+            } else {
+                await attachments.attach(name: name, data: data)
+            }
         }
     }
 

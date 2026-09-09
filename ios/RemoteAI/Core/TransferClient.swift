@@ -101,6 +101,45 @@ public final class TransferCoordinator {
         await performUpload(localId: localId, request: request, payload: data)
     }
 
+    /// Upload one file that a message is about to name, and answer with the
+    /// path the Mac wrote.
+    ///
+    /// The file browser's upload may stop and ask which of two same-named
+    /// files to keep. This one may not: the reader is holding a composer
+    /// open, and a second photo called IMG_0001.jpg is not a question worth
+    /// asking — it keeps both, and the message names whichever path came
+    /// back.
+    public func upload(
+        name: String, data: Data, to directory: String,
+        progress: ((Double) -> Void)? = nil
+    ) async throws -> String {
+        guard isOnline else { throw AgentClientError.transport("offline") }
+        let request = TransferRequest(
+            direction: .upload,
+            name: name,
+            remoteDirectory: directory,
+            byteCount: Int64(data.count),
+            conflictPolicy: .keepBoth,
+            expectedSha256: TransferCoordinator.checksum(data)
+        )
+        let localId = "attachment-\(UUID().uuidString)"
+        transfers.append(
+            TransferState(
+                id: localId, name: name, direction: .upload,
+                destinationPath: "\(directory)/\(name)",
+                progress: TransferProgress(sent: 0, total: Int64(data.count)),
+                status: .running, sha256: nil
+            )
+        )
+        retryPayloads[localId] = (request, data)
+        let ticket = try await client.createTransfer(request)
+        try await sendChunks(localId: localId, ticket: ticket, payload: data, progress: progress)
+        guard let written = state(localId)?.destinationPath else {
+            throw AgentClientError.transport("the Mac did not say where the file landed")
+        }
+        return written
+    }
+
     private func performUpload(localId: String, request: TransferRequest, payload: Data) async {
         guard isOnline else {
             update(localId) { $0.status = .failed("offline") }
@@ -124,7 +163,10 @@ public final class TransferCoordinator {
         }
     }
 
-    private func sendChunks(localId: String, ticket: TransferTicket, payload: Data) async throws {
+    private func sendChunks(
+        localId: String, ticket: TransferTicket, payload: Data,
+        progress: ((Double) -> Void)? = nil
+    ) async throws {
         update(localId) {
             $0.destinationPath = ticket.destinationPath
             $0.status = .running
@@ -145,7 +187,9 @@ public final class TransferCoordinator {
             offset = end
             index += 1
             update(localId) { $0.progress.sent = Int64(offset) }
-            progressSamples.append(Double(offset) / Double(max(payload.count, 1)))
+            let fraction = Double(offset) / Double(max(payload.count, 1))
+            progressSamples.append(fraction)
+            progress?(fraction)
         }
         if payload.isEmpty {
             progressSamples.append(1)

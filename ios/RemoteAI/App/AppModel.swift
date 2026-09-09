@@ -57,6 +57,10 @@ public final class AppModel {
     /// Turns held-button speech into text, when this launch has one. The
     /// composer hides voice input entirely without it.
     public var transcriber: SpeechTranscriber?
+    /// Stands in for the document picker under UI test, so the composer's
+    /// attach flow is drivable without SpringBoard's picker process.
+    /// Production launches leave this nil.
+    public var uploadFixture: UploadFixture?
     private let preferences: PreferencesStore
     private let cache: CatalogCache
     private var sequencer = EventSequencer()

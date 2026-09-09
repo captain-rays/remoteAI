@@ -13,19 +13,25 @@ public struct MessageItem: Identifiable, Sendable, Hashable {
     public internal(set) var text: String
     public internal(set) var isStreaming: Bool
     public internal(set) var deliveryState: MessageDeliveryState?
+    /// Paths on the Mac this message referred to. Shown under the bubble, so
+    /// the reader can see afterwards what went with it rather than having to
+    /// remember.
+    public internal(set) var attachments: [String]
 
     public init(
         id: String,
         role: MessageRole,
         text: String,
         isStreaming: Bool,
-        deliveryState: MessageDeliveryState? = nil
+        deliveryState: MessageDeliveryState? = nil,
+        attachments: [String] = []
     ) {
         self.id = id
         self.role = role
         self.text = text
         self.isStreaming = isStreaming
         self.deliveryState = deliveryState
+        self.attachments = attachments
     }
 }
 
@@ -90,6 +96,10 @@ public final class ConversationViewModel {
     public private(set) var pendingApproval: ApprovalRequest?
     public private(set) var isRunning = false
     public private(set) var failedDraft: String?
+    /// The paths the failed message named. The files are already on the Mac,
+    /// so a retry must name them again — sending the words alone would ask
+    /// about nothing.
+    private var failedAttachments: [String] = []
     public private(set) var hasMoreHistory = false
     /// A history read is in flight. Opening a real conversation takes long
     /// enough that a blank screen reads as "empty" rather than "loading".
@@ -258,9 +268,13 @@ public final class ConversationViewModel {
         return syntheticRowCount
     }
 
-    public func send(_ text: String) async {
+    /// Send what the composer holds.
+    ///
+    /// An attached file with no words is a complete instruction — "look at
+    /// this" — so either one alone is enough to send. Nothing at all is not.
+    public func send(_ text: String, attachments: [String] = []) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty || !attachments.isEmpty else { return }
         let messageId = "\(Self.localMessagePrefix)\(UUID().uuidString)"
         items.append(
             .message(
@@ -269,32 +283,37 @@ public final class ConversationViewModel {
                     role: .user,
                     text: trimmed,
                     isStreaming: false,
-                    deliveryState: .sending
+                    deliveryState: .sending,
+                    attachments: attachments
                 )
             )
         )
-        await send(messageId: messageId, text: trimmed)
+        await send(messageId: messageId, text: trimmed, attachments: attachments)
     }
 
-    private func send(messageId: String, text: String) async {
+    private func send(messageId: String, text: String, attachments: [String] = []) async {
         guard isOnline else {
             markDelivery(messageId, as: .failed)
             failedMessageId = messageId
             failedDraft = text
+            failedAttachments = attachments
             appendError(code: "offline", message: "Mac is offline. The message was not sent.")
             return
         }
         do {
             try await client.send(
-                provider: conversation.provider, conversationId: conversation.id, text: text
+                provider: conversation.provider, conversationId: conversation.id, text: text,
+                attachments: attachments
             )
             markDelivery(messageId, as: .sent)
             failedMessageId = nil
             failedDraft = nil
+            failedAttachments = []
         } catch {
             markDelivery(messageId, as: .failed)
             failedMessageId = messageId
             failedDraft = text
+            failedAttachments = attachments
             appendError(code: Self.errorCode(for: error), message: Self.errorMessage(for: error))
         }
     }
@@ -322,7 +341,7 @@ public final class ConversationViewModel {
     public func retryFailedSend() async {
         guard let draft = failedDraft, let messageId = failedMessageId else { return }
         markDelivery(messageId, as: .sending)
-        await send(messageId: messageId, text: draft)
+        await send(messageId: messageId, text: draft, attachments: failedAttachments)
     }
 
     public func stop() async {

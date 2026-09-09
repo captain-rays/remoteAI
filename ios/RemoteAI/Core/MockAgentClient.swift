@@ -67,6 +67,9 @@ public actor MockAgentClient: AgentClient {
     /// zero while the app is merely browsing.
     public private(set) var transferRequestCount = 0
     public private(set) var lastCreatedTransferRequest: TransferRequest?
+    /// What the most recent send said it referred to, so a test can prove the
+    /// paths left the phone.
+    public private(set) var lastSentAttachments: [String] = []
 
     public init() {
 
@@ -517,7 +520,10 @@ public actor MockAgentClient: AgentClient {
         _ = try requireConversation(provider: provider, conversationId: conversationId)
     }
 
-    public func send(provider: ProviderId, conversationId: String, text: String) async throws {
+    public func send(
+        provider: ProviderId, conversationId: String, text: String, attachments: [String]
+    ) async throws {
+        lastSentAttachments = attachments
         let conversation = try requireConversation(
             provider: provider, conversationId: conversationId
         )
@@ -650,6 +656,13 @@ public actor MockAgentClient: AgentClient {
         let directory = try MockAgentClient.normalize(request.remoteDirectory)
         guard request.name.contains("/") == false, request.name != "..", request.name != "." else {
             throw AgentClientError.rejected("invalid_name")
+        }
+        // The agent creates the parents on the way to a destination, so an
+        // upload into a directory that does not exist yet is the ordinary
+        // case — a dated attachment inbox, or a project's uploads folder on
+        // the first file. A download still needs its file to be there.
+        if directories[directory] == nil, request.direction == .upload {
+            directories[directory] = []
         }
         guard let entries = directories[directory] else {
             throw AgentClientError.notFound("path:\(directory)")

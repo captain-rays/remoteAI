@@ -933,3 +933,91 @@ async fn a_mac_with_no_speech_configured_says_so_rather_than_failing_blankly() {
         "speech_not_configured"
     );
 }
+
+/// A file the phone uploaded, named in the send, must reach the provider as an
+/// attachment — that is the whole point of uploading it.
+#[tokio::test]
+async fn an_attachment_inside_the_file_root_reaches_the_provider() {
+    let root = tempfile::tempdir().unwrap();
+    let root_path = root.path().canonicalize().unwrap();
+    let attachment = root_path.join("photo.jpeg");
+    std::fs::write(&attachment, b"bytes").unwrap();
+
+    let state = state();
+    state.set_file_root(&root_path).await;
+    let adapter = Arc::new(MockAdapter::new(ProviderId::Claude));
+    state.set_provider_adapters(vec![adapter.clone()]).await;
+    let inbound = CryptoBox::new([11; 32], *b"IOS>");
+    let outbound = CryptoBox::new([11; 32], *b"MAC>");
+    let mut session =
+        GatewaySession::new(state, "phone-1", inbound.receiver(), outbound.clone()).await;
+    let conversation_id = adapter.start(ConversationKind::Daily, None).await.unwrap();
+
+    let frames = session
+        .handle_frame(&request_frame(
+            &inbound,
+            1,
+            "conversation.send",
+            json!({
+                "provider": "claude",
+                "conversationId": conversation_id,
+                "text": "what is in this picture",
+                "attachments": [attachment.to_str().unwrap()],
+            }),
+        ))
+        .await
+        .unwrap();
+
+    let carried = decode_frames(frames, &outbound)
+        .into_iter()
+        .find(|value| value["type"] == "tool.started")
+        .expect("the provider reported no attachment read");
+    assert_eq!(
+        carried["payload"]["attachments"],
+        json!([attachment.to_str().unwrap()]),
+        "the provider was handed the wrong attachment paths"
+    );
+}
+
+/// An attachment path is a filesystem path from a phone, so it is checked the
+/// same way a transfer destination is: inside the agent's root or refused.
+/// Otherwise a send could read out any file on the Mac.
+#[tokio::test]
+async fn an_attachment_outside_the_file_root_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state();
+    state.set_file_root(root.path()).await;
+    let adapter = Arc::new(MockAdapter::new(ProviderId::Claude));
+    state.set_provider_adapters(vec![adapter.clone()]).await;
+    let inbound = CryptoBox::new([12; 32], *b"IOS>");
+    let outbound = CryptoBox::new([12; 32], *b"MAC>");
+    let mut session =
+        GatewaySession::new(state, "phone-1", inbound.receiver(), outbound.clone()).await;
+    let conversation_id = adapter.start(ConversationKind::Daily, None).await.unwrap();
+
+    let frames = session
+        .handle_frame(&request_frame(
+            &inbound,
+            1,
+            "conversation.send",
+            json!({
+                "provider": "claude",
+                "conversationId": conversation_id,
+                "text": "read this",
+                "attachments": ["/etc/passwd"],
+            }),
+        ))
+        .await
+        .unwrap();
+
+    let values = decode_frames(frames, &outbound);
+    assert!(
+        values.iter().any(|value| value["type"] == "error"
+            && value["payload"]["code"] == "attachment_outside_root"),
+        "a path outside the root was not refused: {values:?}"
+    );
+    assert!(
+        !values.iter().any(|value| value["type"] == "tool.started"),
+        "the provider was asked to read a file outside the root"
+    );
+}

@@ -34,7 +34,8 @@ public struct DailyConversationListView: View {
                             client: model.client,
                             isOnline: model.isOnline,
                             cache: model.transcriptCache,
-                            transcriber: model.transcriber
+                            transcriber: model.transcriber,
+                            uploadFixture: model.uploadFixture
                         )
                     } label: {
                         ConversationRow(conversation: conversation)
