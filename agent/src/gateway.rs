@@ -1065,6 +1065,11 @@ impl GatewaySession {
             .get("provider")
             .and_then(Value::as_str)
             .and_then(parse_provider);
+        // The type only, never the payload: this log is read while debugging
+        // and must not become a place credentials or prompts turn up. Without
+        // it, the only way to tell which step a phone had reached was to ask
+        // the person holding it what the screen said.
+        eprintln!("ws request type={}", request.message_type);
         let operation: Result<(&str, Value), GatewayBusinessError> = async {
             // Speech belongs to no provider: the phone streams audio to the
             // speech service itself, and all it needs from here is a token
