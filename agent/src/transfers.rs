@@ -74,7 +74,7 @@ impl TransferManager {
         expected_sha256: Option<String>,
         policy: Option<ConflictPolicy>,
     ) -> Result<UploadTransfer, TransferError> {
-        let destination = self.resolve_destination(destination)?;
+        let destination = self.prepare_destination(destination)?;
         let destination = if destination.exists() {
             let existing_size = fs::metadata(&destination).map_err(io_error)?.len();
             match policy {
@@ -189,7 +189,13 @@ impl TransferManager {
         Ok(bytes[start..end.min(bytes.len())].to_vec())
     }
 
-    fn resolve_destination(&self, relative: &Path) -> Result<PathBuf, TransferError> {
+    /// Resolve an upload's destination, creating the directories it needs.
+    ///
+    /// A phone attaching a file names a directory that often does not exist
+    /// yet — a dated inbox, or a project's uploads folder on the first file.
+    /// Refusing those would mean asking the reader to go and make the folder
+    /// by hand before they can send a photo.
+    fn prepare_destination(&self, relative: &Path) -> Result<PathBuf, TransferError> {
         let candidate = if relative.is_absolute() {
             relative.to_owned()
         } else {
@@ -200,6 +206,23 @@ impl TransferManager {
             return Err(TransferError::PathOutsideRoot);
         }
         let parent = path.parent().ok_or(TransferError::PathOutsideRoot)?;
+        if !parent.is_dir() {
+            // Creating them must not become a way out of the root: the
+            // deepest directory that does exist has to be inside it, or a
+            // symlink could put new directories anywhere on the Mac.
+            let anchor = parent
+                .ancestors()
+                .find(|candidate| candidate.is_dir())
+                .ok_or(TransferError::PathOutsideRoot)?;
+            if !anchor
+                .canonicalize()
+                .map_err(io_error)?
+                .starts_with(&self.root)
+            {
+                return Err(TransferError::PathOutsideRoot);
+            }
+            fs::create_dir_all(parent).map_err(io_error)?;
+        }
         let canonical_parent = parent.canonicalize().map_err(io_error)?;
         if !canonical_parent.starts_with(&self.root) {
             return Err(TransferError::PathOutsideRoot);

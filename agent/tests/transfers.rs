@@ -127,3 +127,51 @@ async fn accepts_root_absolute_upload_and_rejects_symlink_escape() {
         Err(TransferError::PathOutsideRoot)
     ));
 }
+
+/// The phone attaches a photo to a message, and the directory it belongs in
+/// does not exist yet: a dated inbox, or a project's uploads folder on the
+/// first file. The parents are created on the way, the same as any tool that
+/// writes a path.
+#[tokio::test]
+async fn an_upload_creates_the_directories_it_needs() {
+    let root = tempdir().unwrap();
+    let manager = TransferManager::new(root.path());
+    let destination = root
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("Library/Application Support/RemoteAI/uploads/2026-09-09/photo.jpeg");
+
+    let transfer = manager
+        .create_upload(&destination, None, None)
+        .await
+        .unwrap();
+    manager.write_chunk(&transfer.id, 0, b"jpeg").await.unwrap();
+    manager.finish(&transfer.id).await.unwrap();
+
+    assert_eq!(fs::read(&destination).unwrap(), b"jpeg");
+}
+
+/// Creating the parents must not become a way out of the root: a symlink
+/// pointing outside is still refused, and nothing is created behind it.
+#[tokio::test]
+async fn creating_directories_cannot_escape_the_root() {
+    let parent = tempdir().unwrap();
+    let root = parent.path().join("root");
+    let sibling = parent.path().join("sibling");
+    fs::create_dir(&root).unwrap();
+    fs::create_dir(&sibling).unwrap();
+    std::os::unix::fs::symlink(&sibling, root.join("link")).unwrap();
+    let manager = TransferManager::new(&root);
+
+    assert!(matches!(
+        manager
+            .create_upload(Path::new("link/deep/escape.txt"), None, None)
+            .await,
+        Err(TransferError::PathOutsideRoot)
+    ));
+    assert!(
+        !sibling.join("deep").exists(),
+        "a refused upload created directories outside the root"
+    );
+}

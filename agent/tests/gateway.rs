@@ -406,6 +406,45 @@ async fn transfer_upload_decodes_base64_chunks_and_finishes_atomically() {
     assert_eq!(fs::read(root.path().join("payload.txt")).unwrap(), b"hello");
 }
 
+/// What a phone attaching a photo actually asks for: a destination whose
+/// directories do not exist yet. This is the request that failed on the
+/// device — the endpoint answered an error instead of creating the folder.
+#[tokio::test]
+async fn transfer_upload_creates_a_destination_directory_that_is_not_there_yet() {
+    let root = tempfile::tempdir().unwrap();
+    let state = paired_state();
+    state.set_file_root(root.path()).await;
+    let app = router(state);
+    let create = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/transfers/create")
+                .header("x-remoteai-device", "phone-1")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"path":"Library/Application Support/RemoteAI/uploads/2026-09-09/photo.jpeg"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        create.status(),
+        StatusCode::OK,
+        "the first attachment of the day was refused"
+    );
+    let body = to_bytes(create.into_body(), usize::MAX).await.unwrap();
+    let transfer: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        transfer["destination"]
+            .as_str()
+            .unwrap()
+            .ends_with("/uploads/2026-09-09/photo.jpeg"),
+        "the destination came back as {:?}",
+        transfer["destination"]
+    );
+}
+
 #[tokio::test]
 async fn transfer_download_requires_auth_and_honors_explicit_range() {
     let root = tempfile::tempdir().unwrap();
