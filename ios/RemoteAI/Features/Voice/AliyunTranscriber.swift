@@ -19,7 +19,16 @@ public actor AliyunTranscriber: SpeechTranscriber {
     /// packets are dropped and the socket waits indefinitely. Without a
     /// deadline the reader waits with it, and all the screen can say is that
     /// nothing answered.
-    private static let openWithin = Duration.seconds(4)
+    /// How long the service gets to acknowledge a session on a socket that is
+    /// already open. It answers in a fraction of a second, so silence this
+    /// long is a fault in what was sent, not slowness.
+    private static let acknowledgeWithin = Duration.seconds(4)
+
+    /// How long the socket itself gets to open. Longer, because this covers
+    /// DNS, TCP and TLS on whatever network the phone is on — and a host that
+    /// is blocked rather than absent reports nothing at all until its own
+    /// timeout, which is far longer than anyone will hold a button.
+    private static let connectWithin = Duration.seconds(10)
 
     private let client: AgentClient
     private var credentials: SpeechCredentials?
@@ -106,8 +115,16 @@ public actor AliyunTranscriber: SpeechTranscriber {
         // still holding the button, and a blocked host never errors on its
         // own.
         openDeadline = Task { [weak self] in
-            try? await Task.sleep(for: Self.openWithin)
+            try? await Task.sleep(for: Self.acknowledgeWithin)
             guard let self, !Task.isCancelled else { return }
+            // A socket that is open and silent is a different fault from one
+            // that never opened, and only the first is already conclusive.
+            if await self.socketDidOpen {
+                await self.reportUnopened()
+                return
+            }
+            try? await Task.sleep(for: Self.connectWithin - Self.acknowledgeWithin)
+            guard !Task.isCancelled else { return }
             await self.reportUnopened()
         }
         try startCapturing()
@@ -183,11 +200,18 @@ public actor AliyunTranscriber: SpeechTranscriber {
         continuation = nil
     }
 
+    var socketDidOpen: Bool { monitor.opened }
+
     /// The deadline passed with no acknowledgement: end the session with the
-    /// system's own reason, which is more use than silence.
+    /// most specific reason available, which is more use than silence.
     private func reportUnopened() {
         guard !sessionOpened else { return }
-        let reason = monitor.failure ?? "no answer within \(Self.openWithin)"
+        let reason =
+            monitor.failure
+            ?? (monitor.opened
+                ? "connected, but the service did not start the session — "
+                    + "the app may be out of date"
+                : "could not connect within \(Self.connectWithin)")
         report.connectionError = reason
         continuation?.yield(.failed("Could not reach the speech service: \(reason)"))
         continuation?.finish()
@@ -291,6 +315,7 @@ public actor AliyunTranscriber: SpeechTranscriber {
 private final class SocketMonitor: NSObject, URLSessionWebSocketDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private var recorded: String?
+    private var didOpen = false
 
     var failure: String? {
         lock.lock()
@@ -298,9 +323,28 @@ private final class SocketMonitor: NSObject, URLSessionWebSocketDelegate, @unche
         return recorded
     }
 
+    /// Whether the WebSocket handshake completed. The difference between a
+    /// network that cannot reach the service and a service that would not
+    /// start the session — which read identically until this was recorded.
+    var opened: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return didOpen
+    }
+
     func reset() {
         lock.lock()
         recorded = nil
+        didOpen = false
+        lock.unlock()
+    }
+
+    func urlSession(
+        _ session: URLSession, webSocketTask: URLSessionWebSocketTask,
+        didOpenWithProtocol protocol: String?
+    ) {
+        lock.lock()
+        didOpen = true
         lock.unlock()
     }
 

@@ -367,6 +367,34 @@ public enum DictationDiagnosisSuite {
                 )
             },
 
+            TestCase("a socket that opened and then said nothing reads differently") {
+                // These two were indistinguishable on screen — both said the
+                // service did not answer — while meaning opposite things: one
+                // is the network, the other is what the app sent.
+                try expectEqual(
+                    VoiceDictation.explain(
+                        DictationDiagnosis(
+                            audioFramesSent: 0,
+                            connectionError: "connected, but the service did not start "
+                                + "the session — the app may be out of date"
+                        ),
+                        sessionOpened: false, fallback: "Nothing was heard."
+                    ),
+                    "Could not reach the speech service: connected, but the service did "
+                        + "not start the session — the app may be out of date"
+                )
+                try expectEqual(
+                    VoiceDictation.explain(
+                        DictationDiagnosis(
+                            audioFramesSent: 0,
+                            connectionError: "could not connect within 10 seconds"
+                        ),
+                        sessionOpened: false, fallback: "Nothing was heard."
+                    ),
+                    "Could not reach the speech service: could not connect within 10 seconds"
+                )
+            },
+
             TestCase("an audio error still wins over a connection error") {
                 // If audio was flowing and then stopped, that is the more
                 // specific fault and the one worth naming.
