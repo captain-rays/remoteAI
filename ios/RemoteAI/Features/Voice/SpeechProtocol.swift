@@ -142,9 +142,42 @@ public enum SpeechProtocol {
     /// `SentenceEnd`, so a screen that showed the partial alone would drop
     /// everything said before it.
     public static func transcript(sentences: [String], partial: String) -> String {
-        (sentences + [partial])
+        let pieces =
+            (sentences + [partial])
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
-            .joined()
+        return pieces.reduce(into: "") { text, piece in
+            if let left = text.last, let right = piece.first,
+                !isWrittenWithoutSpaces(left), !isWrittenWithoutSpaces(right)
+            {
+                text += " "
+            }
+            text += piece
+        }
+    }
+
+    /// Whether this character belongs to a script that is written without
+    /// spaces between words.
+    ///
+    /// Chinese and Japanese are, and the service's own full-width punctuation
+    /// already separates the sentences there — a space would read as a gap.
+    /// Latin script is not, and sentences joined bare run together into one
+    /// unreadable word. The decision is per boundary, not per session,
+    /// because one dictation can contain both.
+    private static func isWrittenWithoutSpaces(_ character: Character) -> Bool {
+        character.unicodeScalars.contains { scalar in
+            switch scalar.value {
+            case 0x3000...0x303F,  // CJK punctuation, 。and 、among it
+                0x3040...0x30FF,  // Hiragana and Katakana
+                0x3400...0x4DBF,  // CJK ideographs, extension A
+                0x4E00...0x9FFF,  // CJK unified ideographs
+                0xAC00...0xD7AF,  // Hangul syllables
+                0xF900...0xFAFF,  // CJK compatibility ideographs
+                0xFF00...0xFF60:  // full-width forms
+                return true
+            default:
+                return false
+            }
+        }
     }
 }

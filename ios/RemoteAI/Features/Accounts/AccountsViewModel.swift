@@ -156,13 +156,25 @@ public final class AccountsViewModel {
             while !Task.isCancelled {
                 try? await Task.sleep(for: self.pollEvery)
                 if Task.isCancelled { return }
-                guard let running = try? await self.client.loginProgress(provider: self.provider)
-                else {
-                    // Either it ended or the Mac could not be reached. The
-                    // accounts read that follows distinguishes the two.
+                let progress: LoginProgress?
+                do {
+                    progress = try await self.client.loginProgress(provider: self.provider)
+                } catch {
+                    // A poll that could not reach the Mac says nothing about
+                    // the sign-in, which is running there and not here. Keep
+                    // the screen — and the reply field — and ask again on the
+                    // next tick.
+                    self.errorMessage = Self.message(for: error)
+                    continue
+                }
+                guard let running = progress else {
+                    // The Mac has no session any more, so it ended. Whether
+                    // that counted as signing in is what the accounts read
+                    // inside `finishSignIn` answers.
                     await self.finishSignIn()
                     return
                 }
+                self.errorMessage = nil
                 self.signIn = running
             }
         }

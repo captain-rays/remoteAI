@@ -26,6 +26,10 @@ public struct DictationDiagnosis: Sendable, Equatable {
     public var audioFramesSent: Int?
     /// The last error from sending audio, if any.
     public var lastAudioError: String?
+    /// Converted buffers the connection could not keep up with. Recorded so
+    /// a session that produced nothing can say audio was lost rather than
+    /// blame a microphone that was working.
+    public var droppedAudioFrames = 0
     /// Why the connection to the service never opened, in the system's own
     /// words. A blocked host does not produce an error at all — the packets
     /// are dropped and the socket simply waits — so "it did not answer" was
@@ -34,11 +38,12 @@ public struct DictationDiagnosis: Sendable, Equatable {
 
     public init(
         audioFramesSent: Int? = nil, lastAudioError: String? = nil,
-        connectionError: String? = nil
+        connectionError: String? = nil, droppedAudioFrames: Int = 0
     ) {
         self.audioFramesSent = audioFramesSent
         self.lastAudioError = lastAudioError
         self.connectionError = connectionError
+        self.droppedAudioFrames = droppedAudioFrames
     }
 }
 
@@ -288,6 +293,10 @@ public final class VoiceDictation {
                 return "The speech service did not answer."
             }
             return "Could not reach the speech service: \(error)"
+        }
+        if diagnosis.droppedAudioFrames > 0 {
+            return "The connection could not keep up: "
+                + "\(diagnosis.droppedAudioFrames) frames of audio were dropped."
         }
         switch diagnosis.audioFramesSent {
         case 0:

@@ -167,6 +167,23 @@ public enum SpeechProtocolSuite {
                 )
             },
 
+            TestCase("sentences are joined the way their script is written") {
+                // Chinese carries its own separators; English does not, and
+                // joining it bare would hand the composer one long word.
+                try expectEqual(
+                    SpeechProtocol.transcript(
+                        sentences: ["Run the tests first."], partial: "If they pass"
+                    ),
+                    "Run the tests first. If they pass"
+                )
+                try expectEqual(
+                    SpeechProtocol.transcript(
+                        sentences: ["先跑测试。", "Then push."], partial: ""
+                    ),
+                    "先跑测试。Then push."
+                )
+            },
+
             TestCase("one audio frame is a tenth of a second of 16-bit mono") {
                 // Wrong framing is the difference between a live transcript and
                 // an idle-timeout error.

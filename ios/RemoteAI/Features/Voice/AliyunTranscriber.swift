@@ -30,6 +30,11 @@ public actor AliyunTranscriber: SpeechTranscriber {
     /// timeout, which is far longer than anyone will hold a button.
     private static let connectWithin = Duration.seconds(10)
 
+    /// How many converted buffers may wait for the socket — ten seconds of
+    /// speech. Beyond that the connection is not keeping up and dropping is
+    /// the only option left.
+    private static let queuedFrameLimit = 100
+
     private let client: AgentClient
     private var credentials: SpeechCredentials?
     private let monitor = SocketMonitor()
@@ -45,6 +50,14 @@ public actor AliyunTranscriber: SpeechTranscriber {
     /// or audio the service made nothing of.
     private var report = DictationDiagnosis()
     private var isCapturing = false
+    /// Captured audio on its way to the socket.
+    ///
+    /// One ordered queue rather than a task per buffer: independently created
+    /// tasks entering an actor have no guaranteed order, so frames could
+    /// reach the service reversed and it would transcribe scrambled audio —
+    /// with nothing anywhere reporting an error.
+    private var audio: AsyncStream<Data>.Continuation?
+    private var audioPump: Task<Void, Never>?
 
     #if os(iOS)
         private let engine = AVAudioEngine()
@@ -111,6 +124,22 @@ public actor AliyunTranscriber: SpeechTranscriber {
             )
         )
         pump = Task { await self.readEvents() }
+
+        // The tap yields into this stream, in order, and one consumer sends
+        // them one at a time. Bounded, because a socket that stalls must not
+        // grow the queue without limit; a drop is recorded so a session that
+        // produced nothing can say audio was lost rather than blame the
+        // microphone.
+        let (frames, audio) = AsyncStream<Data>.makeStream(
+            bufferingPolicy: .bufferingOldest(Self.queuedFrameLimit)
+        )
+        self.audio = audio
+        audioPump = Task { [weak self] in
+            for await pcm in frames {
+                guard let self else { return }
+                await self.sendAudio(pcm)
+            }
+        }
         // Say why rather than waiting for the hold to end: the reader is
         // still holding the button, and a blocked host never errors on its
         // own.
@@ -127,12 +156,19 @@ public actor AliyunTranscriber: SpeechTranscriber {
             guard !Task.isCancelled else { return }
             await self.reportUnopened()
         }
-        try startCapturing()
+
+        try startCapturing(into: audio)
         return stream
     }
 
     public func finish() async {
         stopCapturing()
+        // Let the frames already queued go out before the service is told the
+        // audio has ended; dropping them here would clip the last word.
+        audio?.finish()
+        audio = nil
+        await audioPump?.value
+        audioPump = nil
         guard let credentials else { return }
         // The service only produces the final sentence once it is told the
         // audio has ended.
@@ -145,6 +181,10 @@ public actor AliyunTranscriber: SpeechTranscriber {
 
     public func cancel() async {
         stopCapturing()
+        audio?.finish()
+        audio = nil
+        audioPump?.cancel()
+        audioPump = nil
         openDeadline?.cancel()
         openDeadline = nil
         pump?.cancel()
@@ -240,7 +280,11 @@ public actor AliyunTranscriber: SpeechTranscriber {
         #endif
     }
 
-    private func startCapturing() throws {
+    /// The queue is passed in rather than read back off the actor: the tap
+    /// runs on the audio thread, and waiting for an actor there would be the
+    /// wrong thing to do. A continuation is safe to use from any thread and
+    /// keeps the order the buffers arrived in.
+    private func startCapturing(into queue: AsyncStream<Data>.Continuation) throws {
         #if os(iOS)
             let session = AVAudioSession.sharedInstance()
             do {
@@ -264,7 +308,9 @@ public actor AliyunTranscriber: SpeechTranscriber {
             input.installTap(onBus: 0, bufferSize: 4_096, format: hardware) {
                 [weak self] buffer, _ in
                 guard let self, let pcm = resampler.resample(buffer) else { return }
-                Task { await self.sendAudio(pcm) }
+                if case .dropped = queue.yield(pcm) {
+                    Task { await self.noteDroppedAudio() }
+                }
             }
             engine.prepare()
             do {
@@ -290,6 +336,10 @@ public actor AliyunTranscriber: SpeechTranscriber {
             engine.inputNode.removeTap(onBus: 0)
             try? AVAudioSession.sharedInstance().setActive(false)
         #endif
+    }
+
+    private func noteDroppedAudio() {
+        report.droppedAudioFrames += 1
     }
 
     private func sendAudio(_ pcm: Data) async {
